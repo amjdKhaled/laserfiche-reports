@@ -3,7 +3,7 @@ namespace LaserficheReports.Application.DTOs;
 /// <summary>
 /// Represents the entry distribution for a single top-level Laserfiche folder (department).
 /// Counts are approximated by sampling the most recently modified entries — full traversal
-/// is deliberately avoided to keep dashboard load times acceptable.
+/// is deliberately avoided to keep report load times acceptable.
 /// </summary>
 public sealed record DepartmentStatDto
 {
@@ -18,7 +18,7 @@ public sealed record DepartmentStatDto
 
     /// <summary>
     /// Approximate number of entries belonging to this department,
-    /// counted from the recent-entry sample returned by the dashboard search.
+    /// counted from the recent-entry sample returned by the repository search.
     /// </summary>
     public int DocumentCount { get; init; }
 }

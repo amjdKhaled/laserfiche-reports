@@ -3,7 +3,7 @@ namespace LaserficheReports.Infrastructure.OAuth;
 /// <summary>
 /// LFDS OAuth2 / Authorization Code configuration for SSO.
 /// Nested under <c>Laserfiche:Sso</c> in <c>appsettings.json</c> or the installer
-/// config file (<c>%ProgramData%\Dashboard\laserfiche.config.json</c>).
+/// config file (<c>%ProgramData%\LaserficheReports\laserfiche.config.json</c>).
 /// </summary>
 /// <remarks>
 /// <para>
@@ -13,7 +13,7 @@ namespace LaserficheReports.Infrastructure.OAuth;
 /// <para>
 /// The Laserfiche API Server must be configured with
 /// <c>LFDSSTSBaseUrl</c> pointing to the same LFDS instance, and
-/// <c>WhitelistedRedirectUris</c> must include the Dashboard callback URL:
+/// <c>WhitelistedRedirectUris</c> must include the Reports application callback URL:
 /// <c>{scheme}://{host}/Login/Callback</c>.
 /// </para>
 /// </remarks>
@@ -27,11 +27,11 @@ public sealed class LaserficheOAuthOptions
     public string LfdsBaseUrl { get; set; } = string.Empty;
 
     /// <summary>
-    /// OAuth2 client ID registered in LFDS for this Dashboard application.
+    /// OAuth2 client ID registered in LFDS for this Reports application.
     /// Must match the value registered on the Laserfiche API Server.
-    /// Defaults to <c>LFDashboard</c>.
+    /// Defaults to <c>LaserficheReports</c>.
     /// </summary>
-    public string ClientId { get; set; } = "LFDashboard";
+    public string ClientId { get; set; } = "LaserficheReports";
 
     /// <summary>
     /// Optional fixed OAuth redirect URI.

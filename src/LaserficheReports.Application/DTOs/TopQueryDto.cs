@@ -3,7 +3,7 @@ namespace LaserficheReports.Application.DTOs;
 /// <summary>
 /// A frequently-searched query term along with its search count,
 /// sourced from the portal's in-memory search audit log.
-/// Used to populate the "Top Searched Queries" panel on the dashboard.
+/// Used to populate the "Top Searched Queries" report.
 /// </summary>
 public sealed record TopQueryDto
 {

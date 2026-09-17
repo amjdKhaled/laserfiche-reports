@@ -9,27 +9,27 @@ using Microsoft.Extensions.Logging;
 namespace LaserficheReports.Infrastructure.Services;
 
 /// <summary>
-/// Keeps a compact, permission-scoped dashboard snapshot. Repeated page opens do not
+/// Keeps a compact, permission-scoped repository snapshot. Repeated page opens do not
 /// recursively enumerate the repository again, and large entry arrays are not retained.
 /// </summary>
-internal sealed class CachedLaserficheDashboardService : ILaserficheDashboardService, IDashboardCacheControl
+internal sealed class CachedLaserficheAnalyticsService : ILaserficheAnalyticsService, IAnalyticsCacheControl
 {
     private static readonly TimeSpan SnapshotLifetime = TimeSpan.FromMinutes(15);
     private static readonly ConcurrentDictionary<string, SemaphoreSlim> Gates = new(StringComparer.Ordinal);
-    private const int DashboardRowLimit = 100;
+    private const int AnalyticsRowLimit = 100;
 
-    private readonly LaserficheDashboardService _inner;
+    private readonly LaserficheAnalyticsService _inner;
     private readonly IRepositoryContext _repositoryContext;
     private readonly IHttpContextAccessor _httpContextAccessor;
     private readonly IMemoryCache _cache;
-    private readonly ILogger<CachedLaserficheDashboardService> _logger;
+    private readonly ILogger<CachedLaserficheAnalyticsService> _logger;
 
-    public CachedLaserficheDashboardService(
-        LaserficheDashboardService inner,
+    public CachedLaserficheAnalyticsService(
+        LaserficheAnalyticsService inner,
         IRepositoryContext repositoryContext,
         IHttpContextAccessor httpContextAccessor,
         IMemoryCache cache,
-        ILogger<CachedLaserficheDashboardService> logger)
+        ILogger<CachedLaserficheAnalyticsService> logger)
     {
         _inner = inner;
         _repositoryContext = repositoryContext;
@@ -38,12 +38,12 @@ internal sealed class CachedLaserficheDashboardService : ILaserficheDashboardSer
         _logger = logger;
     }
 
-    public async Task<DashboardStatsDto> GetDashboardStatsAsync(CancellationToken cancellationToken = default)
+    public async Task<RepositoryStatsDto> GetRepositoryStatsAsync(CancellationToken cancellationToken = default)
     {
         var key = await GetCacheKeyAsync(cancellationToken).ConfigureAwait(false);
-        if (_cache.TryGetValue(key, out DashboardStatsDto? cached) && cached is not null)
+        if (_cache.TryGetValue(key, out RepositoryStatsDto? cached) && cached is not null)
         {
-            _logger.LogInformation("Dashboard snapshot cache hit for {CacheKey}.", key);
+            _logger.LogInformation("Repository snapshot cache hit for {CacheKey}.", key);
             return cached;
         }
 
@@ -54,7 +54,7 @@ internal sealed class CachedLaserficheDashboardService : ILaserficheDashboardSer
             if (_cache.TryGetValue(key, out cached) && cached is not null)
                 return cached;
 
-            var live = await _inner.GetDashboardStatsAsync(cancellationToken).ConfigureAwait(false);
+            var live = await _inner.GetRepositoryStatsAsync(cancellationToken).ConfigureAwait(false);
             if (!live.IsConnected)
                 return live;
 
@@ -79,13 +79,13 @@ internal sealed class CachedLaserficheDashboardService : ILaserficheDashboardSer
             ?? principal?.Identity?.Name
             ?? "fallback";
         var auth = principal?.FindFirst(ClaimTypes.AuthenticationMethod)?.Value ?? "fallback";
-        return $"dashboard:v2:{repository.ServerUrl}:{repository.RepositoryId}:{auth}:{user}";
+        return $"reports:v1:{repository.ServerUrl}:{repository.RepositoryId}:{auth}:{user}";
     }
 
-    internal static DashboardStatsDto Compact(DashboardStatsDto source)
+    internal static RepositoryStatsDto Compact(RepositoryStatsDto source)
     {
-        var recent = source.RecentDocs.Take(DashboardRowLimit).ToList().AsReadOnly();
-        var modified = source.ModifiedDocs.Take(DashboardRowLimit).ToList().AsReadOnly();
+        var recent = source.RecentDocs.Take(AnalyticsRowLimit).ToList().AsReadOnly();
+        var modified = source.ModifiedDocs.Take(AnalyticsRowLimit).ToList().AsReadOnly();
         var rootFolders = source.RootFolders.Select(item => item with { DocumentIds = [] }).ToList().AsReadOnly();
         return source with
         {

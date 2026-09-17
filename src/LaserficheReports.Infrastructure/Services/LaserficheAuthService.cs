@@ -29,7 +29,7 @@ namespace LaserficheReports.Infrastructure.Services;
 /// and N requests arrive simultaneously for the same key, exactly ONE token
 /// POST is sent to the Laserfiche API.  All other concurrent callers wait for
 /// the in-flight request and share its result.  This prevents the "token storm"
-/// that causes HTTP 429 when many parallel dashboard API calls all experience a
+/// that causes HTTP 429 when many parallel repository API calls all experience a
 /// cache miss at the same time.
 /// </para>
 /// <para>
@@ -236,7 +236,7 @@ internal sealed class LaserficheAuthService : ILaserficheAuthService
             // through to the machine/service-account credential provider: doing so could
             // silently change the Laserfiche user behind an already authenticated browser.
             // Force the interactive session to authenticate again instead.
-            if (IsInteractiveDashboardPrincipal())
+            if (IsInteractiveReportsPrincipal())
             {
                 var method = _httpContextAccessor.HttpContext?.User
                     .FindFirst(ClaimTypes.AuthenticationMethod)?.Value ?? "interactive";
@@ -296,7 +296,7 @@ internal sealed class LaserficheAuthService : ILaserficheAuthService
         }
     }
 
-    private bool IsInteractiveDashboardPrincipal()
+    private bool IsInteractiveReportsPrincipal()
     {
         try
         {

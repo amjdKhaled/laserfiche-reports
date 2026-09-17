@@ -20,7 +20,7 @@ namespace LaserficheReports.Infrastructure.Credentials;
 /// enters them in the portal UI.
 /// </para>
 /// <para>
-/// Encrypted blobs are written to <c>%ProgramData%\Dashboard\credentials\</c>.
+/// Encrypted blobs are written to <c>%ProgramData%\LaserficheReports\credentials\</c>.
 /// One file per repository key. File names are SHA-256 hashes of the repository key
 /// to avoid exposing key names in the filesystem.
 /// </para>
@@ -28,7 +28,7 @@ namespace LaserficheReports.Infrastructure.Credentials;
 /// Backward-compatibility: when reading, the provider also checks the legacy
 /// <c>%ProgramData%\LaserficheReports\credentials\</c> path so that credentials saved by
 /// older installations continue to work without re-entry.  Writes always go to
-/// the new <c>Dashboard</c> path.
+/// the new <c>LaserficheReports</c> path.
 /// </para>
 /// <para>
 /// Not supported on non-Windows platforms. The DI registration in
@@ -46,7 +46,7 @@ internal sealed class DpapiCredentialProvider : ICredentialProvider
 
     /// <summary>Primary credential directory (current product name).</summary>
     private static readonly string CredentialDirectory =
-        Path.Combine(ProgramData, "Dashboard", "credentials");
+        Path.Combine(ProgramData, "LaserficheReports", "credentials");
 
     /// <summary>
     /// Legacy credential directory kept for backward-compatibility.
@@ -150,7 +150,7 @@ internal sealed class DpapiCredentialProvider : ICredentialProvider
     }
 
     /// <summary>
-    /// Returns the primary (Dashboard) filesystem path for the specified repository key.
+    /// Returns the primary Laserfiche Reports filesystem path for the specified repository key.
     /// The filename is the lowercase hex-encoded SHA-256 hash of the key.
     /// </summary>
     private static string GetCredentialFilePath(string repositoryKey)

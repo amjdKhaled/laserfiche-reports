@@ -18,7 +18,7 @@ namespace LaserficheReports.Infrastructure.Services;
 /// <para>
 /// REPOSITORY ISOLATION: every entry carries the repository it was recorded for,
 /// and every query filters to a single repository. This prevents search terms
-/// typed by users of repository A from appearing in the dashboard statistics of
+/// typed by users of repository A from appearing in the repository statistics of
 /// repository B on a multi-repository server.
 /// </para>
 /// </remarks>

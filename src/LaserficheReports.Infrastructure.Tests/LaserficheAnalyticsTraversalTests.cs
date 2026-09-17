@@ -12,7 +12,7 @@ using Xunit;
 
 namespace LaserficheReports.Infrastructure.Tests;
 
-public sealed class LaserficheDashboardTraversalTests
+public sealed class LaserficheAnalyticsTraversalTests
 {
     private static CompleteLaserficheEntryService Complete(QueueHandler handler)
     {
@@ -71,7 +71,7 @@ public sealed class LaserficheDashboardTraversalTests
         var active = 0;
         var peak = 0;
         var roots = Enumerable.Range(1, 20).Select(i => Folder(i, i.ToString()));
-        await LaserficheDashboardService.ScanRootFoldersAsync(roots, async (id, ct) =>
+        await LaserficheAnalyticsService.ScanRootFoldersAsync(roots, async (id, ct) =>
         {
             var count = Interlocked.Increment(ref active);
             lock (this) { peak = Math.Max(peak, count); }
@@ -95,7 +95,7 @@ public sealed class LaserficheDashboardTraversalTests
             [30] = [Document(301, "last")]
         };
 
-        var result = await LaserficheDashboardService.ScanRootFoldersAsync(
+        var result = await LaserficheAnalyticsService.ScanRootFoldersAsync(
             roots,
             (id, _) => Task.FromResult(children.GetValueOrDefault(id, Array.Empty<LFEntry>())),
             NullLogger.Instance,

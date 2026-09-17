@@ -10,7 +10,7 @@ namespace LaserficheReports.Application.Interfaces;
 /// </summary>
 /// <remarks>
 /// <para>
-/// This provides the data behind the dashboard's "Search Activity" line chart
+/// This provides repository search activity data
 /// and "Top Searched Queries" panel — the same source used by the original
 /// GovSearch AI implementation. Laserfiche Repository API v1 does not expose
 /// search history, so the portal maintains its own.

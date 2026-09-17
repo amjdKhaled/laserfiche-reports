@@ -19,7 +19,7 @@ public sealed class OAuthStateStoreTests
 
     private static OAuthStateEntry MakeEntry(
         string repositoryId = "TestRepo",
-        string returnUrl    = "/Dashboard",
+        string returnUrl    = "/Chat",
         DateTimeOffset? expiresAt = null) =>
         new()
         {
@@ -45,7 +45,7 @@ public sealed class OAuthStateStoreTests
 
         Assert.NotNull(result);
         Assert.Equal("TestRepo",       result.RepositoryId);
-        Assert.Equal("/Dashboard",     result.ReturnUrl);
+        Assert.Equal("/Chat",     result.ReturnUrl);
         Assert.Equal("test-verifier",  result.CodeVerifier);
     }
 

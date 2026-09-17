@@ -19,6 +19,6 @@ public static class LaserficheReportsVersion
     /// <summary>Full semantic version string, e.g. <c>1.0.0</c>.</summary>
     public static string Full => $"{Major}.{Minor}.{Patch}";
 
-    /// <summary>Display string including the product name, e.g. <c>Dashboard v1.0.0</c>.</summary>
-    public static string Display => $"Dashboard v{Full}";
+    /// <summary>Display string including the product name, e.g. <c>Laserfiche Reports v1.0.0</c>.</summary>
+    public static string Display => $"Laserfiche Reports v{Full}";
 }

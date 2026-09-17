@@ -26,6 +26,8 @@ Fully local, on-premise AI reporting and chat for Laserfiche.
 - `src/LaserficheReports.Infrastructure` — Repository API authentication, HTTP clients, search, entries, metadata, documents, and repository discovery.
 - `src/LaserficheReports.Web` — local ASP.NET Core host and API endpoints.
 - `src/LaserficheReports.Infrastructure.Tests` — regression tests carried over for API versions, authentication, repository parsing, paging, URL construction, document preview, and traversal.
+- `database/migrations` — local Supabase/PostgreSQL schema and pgvector search function.
+- `scripts/apply-database.ps1` — applies and verifies the local database schema.
 - `docs` — architecture and phased implementation notes.
 
 ## Local configuration
@@ -43,3 +45,17 @@ never committed.
 5. Vector retrieval and local LLM answering.
 6. Single-chat UI.
 7. n8n automation and incremental synchronization.
+
+The detailed implementation sequence is documented in `docs/ROADMAP.md`.
+
+## Prepare the local Supabase database
+
+With the local Supabase Docker stack running:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\apply-database.ps1
+```
+
+This creates `documents`, `document_metadata`, `document_chunks`, and the
+`match_document_chunks` vector-search function. Original documents remain in
+Laserfiche and are not copied into PostgreSQL.

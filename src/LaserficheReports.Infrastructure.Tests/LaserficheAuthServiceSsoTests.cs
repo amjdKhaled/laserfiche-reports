@@ -71,7 +71,7 @@ public sealed class LaserficheAuthServiceSsoTests
         });
 
         await svc.ExchangeAuthorizationCodeAsync(
-            MakeRepo("Docs"), "auth-code", "verifier", "https://host/Login/Callback", "LFDashboard");
+            MakeRepo("Docs"), "auth-code", "verifier", "https://host/Login/Callback", "LaserficheReports");
 
         // Token exchange MUST use v2, even though resource API uses v1.
         Assert.Equal(
@@ -91,7 +91,7 @@ public sealed class LaserficheAuthServiceSsoTests
         });
 
         await svc.ExchangeAuthorizationCodeAsync(
-            MakeRepo("Archive"), "auth-code", "verifier", "https://host/Login/Callback", "LFDashboard");
+            MakeRepo("Archive"), "auth-code", "verifier", "https://host/Login/Callback", "LaserficheReports");
 
         Assert.Equal(
             "http://lf-server.test/LFRepositoryAPI/v2/Repositories/Archive/Token",
@@ -110,7 +110,7 @@ public sealed class LaserficheAuthServiceSsoTests
         });
 
         await svc.ExchangeAuthorizationCodeAsync(
-            MakeRepo("My Repository"), "code", "verifier", "https://host/Login/Callback", "LFDashboard");
+            MakeRepo("My Repository"), "code", "verifier", "https://host/Login/Callback", "LaserficheReports");
 
         var uri = handler.LastRequestUri?.ToString();
         Assert.NotNull(uri);
@@ -128,7 +128,7 @@ public sealed class LaserficheAuthServiceSsoTests
         var svc = CreateService(handler);
 
         await svc.ExchangeAuthorizationCodeAsync(
-            MakeRepo(), "the-code", "the-verifier", "https://host/Login/Callback", "LFDashboard");
+            MakeRepo(), "the-code", "the-verifier", "https://host/Login/Callback", "LaserficheReports");
 
         Assert.NotNull(handler.LastRequestBody);
         Assert.Contains("grant_type=authorization_code", handler.LastRequestBody!);
@@ -160,7 +160,7 @@ public sealed class LaserficheAuthServiceSsoTests
         var svc = CreateService(handler);
 
         await svc.ExchangeAuthorizationCodeAsync(
-            MakeRepo(), "code", "verifier", "https://host/Login/Callback", "LFDashboard");
+            MakeRepo(), "code", "verifier", "https://host/Login/Callback", "LaserficheReports");
 
         Assert.Equal(
             "application/x-www-form-urlencoded",
@@ -188,7 +188,7 @@ public sealed class LaserficheAuthServiceSsoTests
     {
         var svc = CreateService(SuccessHandler());
         var result = await svc.ExchangeAuthorizationCodeAsync(
-            MakeRepo(), "code", "verifier", "https://host/Login/Callback", "LFDashboard");
+            MakeRepo(), "code", "verifier", "https://host/Login/Callback", "LaserficheReports");
         Assert.True(result);
     }
 
@@ -197,7 +197,7 @@ public sealed class LaserficheAuthServiceSsoTests
     {
         var svc = CreateService(StatusHandler(HttpStatusCode.BadRequest));
         var ex = await Assert.ThrowsAsync<LaserficheException>(() => svc.ExchangeAuthorizationCodeAsync(
-            MakeRepo(), "code", "verifier", "https://host/Login/Callback", "LFDashboard"));
+            MakeRepo(), "code", "verifier", "https://host/Login/Callback", "LaserficheReports"));
         Assert.Equal(400, ex.StatusCode);
     }
 
@@ -207,7 +207,7 @@ public sealed class LaserficheAuthServiceSsoTests
         // 401 = code already used or expired
         var svc = CreateService(StatusHandler(HttpStatusCode.Unauthorized));
         var ex = await Assert.ThrowsAsync<LaserficheException>(() => svc.ExchangeAuthorizationCodeAsync(
-            MakeRepo(), "code", "verifier", "https://host/Login/Callback", "LFDashboard"));
+            MakeRepo(), "code", "verifier", "https://host/Login/Callback", "LaserficheReports"));
         Assert.Equal(401, ex.StatusCode);
     }
 
@@ -218,7 +218,7 @@ public sealed class LaserficheAuthServiceSsoTests
             HttpStatusCode.Forbidden,
             "Received an invalid or untrusted SAML token. [9530]"));
         var ex = await Assert.ThrowsAsync<LaserficheException>(() => svc.ExchangeAuthorizationCodeAsync(
-            MakeRepo(), "code", "verifier", "https://host/Login/Callback", "LFDashboard"));
+            MakeRepo(), "code", "verifier", "https://host/Login/Callback", "LaserficheReports"));
         Assert.Equal(403, ex.StatusCode);
         Assert.Contains("invalid or untrusted SAML token", ex.ResponseBody, StringComparison.OrdinalIgnoreCase);
     }
@@ -230,7 +230,7 @@ public sealed class LaserficheAuthServiceSsoTests
 
         var ex = await Assert.ThrowsAsync<LaserficheException>(
             () => svc.ExchangeAuthorizationCodeAsync(
-                MakeRepo(), "code", "verifier", "https://host/Login/Callback", "LFDashboard"));
+                MakeRepo(), "code", "verifier", "https://host/Login/Callback", "LaserficheReports"));
 
         Assert.Equal(500, ex.StatusCode);
         Assert.NotNull(ex.DiagnosticId);
@@ -247,7 +247,7 @@ public sealed class LaserficheAuthServiceSsoTests
 
         await Assert.ThrowsAsync<HttpRequestException>(
             () => svc.ExchangeAuthorizationCodeAsync(
-                MakeRepo(), "code", "verifier", "https://host/Login/Callback", "LFDashboard"));
+                MakeRepo(), "code", "verifier", "https://host/Login/Callback", "LaserficheReports"));
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -302,7 +302,7 @@ public sealed class LaserficheAuthServiceSsoTests
 
         // Exchange stores token in cache.
         await svc.ExchangeAuthorizationCodeAsync(repo, "code", "verifier",
-            "https://host/Login/Callback", "LFDashboard");
+            "https://host/Login/Callback", "LaserficheReports");
 
         // GetTokenAsync should find the cached token — no second HTTP call.
         var token = await svc.GetTokenAsync(repo);
@@ -327,7 +327,7 @@ public sealed class LaserficheAuthServiceSsoTests
         {
             User = new ClaimsPrincipal(new ClaimsIdentity(
                 [new Claim(ClaimTypes.AuthenticationMethod, authenticationMethod)],
-                "Dashboard.Cookie")),
+                "LaserficheReports.Cookie")),
         };
         var accessor = new HttpContextAccessor { HttpContext = context };
         var credentials = new ThrowingCredentialProvider();
@@ -383,7 +383,7 @@ public sealed class LaserficheAuthServiceSsoTests
             User = new ClaimsPrincipal(new ClaimsIdentity([
                 new Claim(ClaimTypes.Name, username),
                 new Claim(ClaimTypes.AuthenticationMethod, "RepositoryPassword")
-            ], "Dashboard.Cookie"))
+            ], "LaserficheReports.Cookie"))
         };
         var session = new TestSession(sessionId);
         session.Set("AuthenticatedRepositoryId", [1]);
@@ -405,7 +405,7 @@ public sealed class LaserficheAuthServiceSsoTests
         var svc     = CreateService(SuccessHandler(), logger: logger);
 
         await svc.ExchangeAuthorizationCodeAsync(
-            MakeRepo(), secretCode, "verifier", "https://host/Login/Callback", "LFDashboard");
+            MakeRepo(), secretCode, "verifier", "https://host/Login/Callback", "LaserficheReports");
 
         foreach (var entry in logger.Entries)
             Assert.DoesNotContain(secretCode, entry);
@@ -420,7 +420,7 @@ public sealed class LaserficheAuthServiceSsoTests
 
         await svc.ExchangeAuthorizationCodeAsync(
             MakeRepo(), "some-code", secretVerifier,
-            "https://host/Login/Callback", "LFDashboard");
+            "https://host/Login/Callback", "LaserficheReports");
 
         foreach (var entry in logger.Entries)
             Assert.DoesNotContain(secretVerifier, entry);
@@ -434,7 +434,7 @@ public sealed class LaserficheAuthServiceSsoTests
         var svc     = CreateService(SuccessHandler(tokenValue), logger: logger);
 
         await svc.ExchangeAuthorizationCodeAsync(
-            MakeRepo(), "code", "verifier", "https://host/Login/Callback", "LFDashboard");
+            MakeRepo(), "code", "verifier", "https://host/Login/Callback", "LaserficheReports");
 
         // The token value must never appear in any log message.
         foreach (var entry in logger.Entries)
@@ -453,7 +453,7 @@ public sealed class LaserficheAuthServiceSsoTests
         try
         {
             await svc.ExchangeAuthorizationCodeAsync(
-                MakeRepo(), "code", "verifier", "https://host/Login/Callback", "LFDashboard");
+                MakeRepo(), "code", "verifier", "https://host/Login/Callback", "LaserficheReports");
         }
         catch (LaserficheException) { /* expected */ }
 

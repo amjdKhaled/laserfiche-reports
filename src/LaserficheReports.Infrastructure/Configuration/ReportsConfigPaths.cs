@@ -1,12 +1,12 @@
 namespace LaserficheReports.Infrastructure.Configuration;
 
 /// <summary>
-/// Central definition of the Dashboard's writable configuration home.
+/// Central definition of the Reports application's writable configuration home.
 /// </summary>
 /// <remarks>
 /// <para>
 /// Phase-1 configuration architecture: there is exactly ONE writable configuration
-/// location — <c>%ProgramData%\Dashboard\</c> (resolved dynamically via
+/// location — <c>%ProgramData%\LaserficheReports\</c> (resolved dynamically via
 /// <see cref="Environment.SpecialFolder.CommonApplicationData"/>, never hardcoded
 /// to a drive or machine-specific path).  Configuration is layered in this order,
 /// last-wins:
@@ -15,11 +15,11 @@ namespace LaserficheReports.Infrastructure.Configuration;
 ///   <item><c>appsettings.json</c> — structural defaults only, read-only, ships with the app.</item>
 ///   <item><c>&lt;ContentRoot&gt;\config\laserfiche.json</c> — LEGACY writable file from
 ///         pre-Phase-1 installations; still read for backward compatibility, never written.</item>
-///   <item><c>%ProgramData%\Dashboard\laserfiche.config.json</c> — written by the installer
+///   <item><c>%ProgramData%\LaserficheReports\laserfiche.config.json</c> — written by the installer
 ///         wizard (WriteConfigAction).  Infrastructure settings only (ServerUrl, ApiBasePath,
 ///         ApiVersion, TimeoutSeconds, CredentialProvider).  NEVER contains repository
 ///         identifiers — repository selection is runtime session context.</item>
-///   <item><c>%ProgramData%\Dashboard\laserfiche.runtime.json</c> — written by the runtime
+///   <item><c>%ProgramData%\LaserficheReports\laserfiche.runtime.json</c> — written by the runtime
 ///         Settings page.  Administrator overrides entered after installation.  The installer
 ///         never creates, modifies, or removes this file, so admin-entered settings survive
 ///         repair, upgrade, and reinstall.</item>
@@ -32,10 +32,10 @@ namespace LaserficheReports.Infrastructure.Configuration;
 /// writable in development scenarios by definition.
 /// </para>
 /// </remarks>
-public static class DashboardConfigPaths
+public static class ReportsConfigPaths
 {
     /// <summary>Product configuration folder name under ProgramData.</summary>
-    public const string ProductFolderName = "Dashboard";
+    public const string ProductFolderName = "LaserficheReports";
 
     /// <summary>Installer-written connection configuration file name.</summary>
     public const string InstallerConfigFileName = "laserfiche.config.json";
@@ -47,8 +47,8 @@ public static class DashboardConfigPaths
     public const string LegacyRuntimeConfigFileName = "laserfiche.json";
 
     /// <summary>
-    /// The machine-wide Dashboard configuration directory:
-    /// <c>%ProgramData%\Dashboard</c> (or the platform equivalent of CommonApplicationData).
+    /// The machine-wide Laserfiche Reports configuration directory:
+    /// <c>%ProgramData%\LaserficheReports</c> (or the platform equivalent of CommonApplicationData).
     /// </summary>
     public static string ProgramDataDirectory =>
         Path.Combine(

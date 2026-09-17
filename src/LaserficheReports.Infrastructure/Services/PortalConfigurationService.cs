@@ -36,7 +36,7 @@ internal sealed class PortalConfigurationService : IPortalConfigurationService
 
     /// <summary>Initialises the service and resolves the writable configuration file.</summary>
     /// <remarks>
-    /// The Settings page writes to <c>%ProgramData%\Dashboard\laserfiche.runtime.json</c>
+    /// The Settings page writes to <c>%ProgramData%\LaserficheReports\laserfiche.runtime.json</c>
     /// (resolved dynamically — never a hardcoded path).  The application never requires
     /// write access inside its install directory; when the ProgramData directory is not
     /// writable (non-Windows development hosts), the legacy content-root file is used.
@@ -45,7 +45,7 @@ internal sealed class PortalConfigurationService : IPortalConfigurationService
         IHostEnvironment hostEnvironment,
         ILogger<PortalConfigurationService> logger)
     {
-        _configFilePath = DashboardConfigPaths
+        _configFilePath = ReportsConfigPaths
             .ResolveWritableRuntimeConfigPath(hostEnvironment.ContentRootPath);
         _dpRotCredentialDirectory = Path.Combine(
             hostEnvironment.ContentRootPath, "config", "credentials");
@@ -197,7 +197,7 @@ internal sealed class PortalConfigurationService : IPortalConfigurationService
         // Windows: DPAPI encrypted file — checked FIRST so a stale non-Windows
         // Data Protection file left in the content root cannot mask the absence
         // of real DPAPI credentials on a production Windows host.
-        // Primary location is %ProgramData%\Dashboard\credentials (matches
+        // Primary location is %ProgramData%\LaserficheReports\credentials (matches
         // DpapiCredentialProvider and the installer-prepared ACL'd directory);
         // the legacy %ProgramData%\LaserficheReports\credentials path is checked for
         // credentials saved by pre-rename installations.
@@ -208,7 +208,7 @@ internal sealed class PortalConfigurationService : IPortalConfigurationService
             var fileName = $"{hash}{DpapiFileExtension}";
 
             if (File.Exists(Path.Combine(
-                    DashboardConfigPaths.ProgramDataDirectory, "credentials", fileName)))
+                    ReportsConfigPaths.ProgramDataDirectory, "credentials", fileName)))
                 return true;
 
             if (File.Exists(Path.Combine(programData, "LaserficheReports", "credentials", fileName)))

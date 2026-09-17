@@ -13,7 +13,7 @@ namespace LaserficheReports.Application.Interfaces;
 /// are not held in memory beyond the HTTP request that uses them.
 /// </para>
 /// <para>
-/// Interactive token cache entries are scoped by repository and Dashboard session,
+/// Interactive token cache entries are scoped by repository and Reports session,
 /// so different users of the same repository never share a token lifecycle.
 /// </para>
 /// </remarks>

@@ -3,7 +3,7 @@ namespace LaserficheReports.Application.DTOs;
 /// <summary>
 /// Number of searches recorded by the portal's in-memory audit log on a
 /// specific calendar date. Provides the data points for the 7-day Search
-/// Activity line chart on the dashboard.
+/// Daily repository search activity used by reporting and administration views.
 /// </summary>
 public sealed record SearchActivityDayDto
 {

@@ -52,8 +52,8 @@ public sealed class LaserficheOptions
     public LaserficheAuthenticationMode AuthenticationMode { get; set; } =
         LaserficheAuthenticationMode.RepositoryPassword;
 
-    /// <summary>Public browser origin of the Dashboard, used for every OAuth callback.</summary>
-    public string DashboardPublicBaseUrl { get; set; } = string.Empty;
+    /// <summary>Public browser origin of the Reports application, used for every OAuth callback.</summary>
+    public string ApplicationBaseUrl { get; set; } = string.Empty;
 
     /// <summary>
     /// Optional fallback repository identifier. Per-session repository selection wins.
@@ -138,9 +138,9 @@ public sealed class LaserficheOptions
         }
     }
 
-    public string SsoCallbackUrl => string.IsNullOrWhiteSpace(DashboardPublicBaseUrl)
+    public string SsoCallbackUrl => string.IsNullOrWhiteSpace(ApplicationBaseUrl)
         ? string.Empty
-        : $"{DashboardPublicBaseUrl.TrimEnd('/')}/login/Callback";
+        : $"{ApplicationBaseUrl.TrimEnd('/')}/login/Callback";
 
     public string GetSsoTokenEndpoint(string repositoryId)
     {
@@ -158,7 +158,7 @@ public sealed class LaserficheOptions
         var invalid = new List<string>();
         if (Invalid(ServerUrl)) invalid.Add("Laserfiche:ServerUrl");
         if (Invalid(ApiBasePath)) invalid.Add("Laserfiche:ApiBasePath");
-        if (Invalid(DashboardPublicBaseUrl)) invalid.Add("Laserfiche:DashboardPublicBaseUrl");
+        if (Invalid(ApplicationBaseUrl)) invalid.Add("Laserfiche:ApplicationBaseUrl");
         if (Invalid(Sso.LfdsBaseUrl)) invalid.Add("Laserfiche:Sso:LfdsBaseUrl");
         if (Invalid(Sso.RedirectUri)) invalid.Add("Laserfiche:Sso:RedirectUri");
         return invalid;

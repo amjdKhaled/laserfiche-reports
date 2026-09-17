@@ -5,7 +5,7 @@ using Xunit;
 
 namespace LaserficheReports.Infrastructure.Tests;
 
-public sealed class CachedLaserficheDashboardServiceTests
+public sealed class CachedLaserficheAnalyticsServiceTests
 {
     [Fact]
     public void Compact_ReleasesLargeEntryCollectionsButPreservesExactSummaries()
@@ -32,7 +32,7 @@ public sealed class CachedLaserficheDashboardServiceTests
             .Select(id => new LFEntry { Id = id, Name = $"Document {id}", EntryType = LFEntryType.Document })
             .ToList();
 
-        var compact = CachedLaserficheDashboardService.Compact(new DashboardStatsDto
+        var compact = CachedLaserficheAnalyticsService.Compact(new RepositoryStatsDto
         {
             IsConnected = true,
             TotalDocuments = 1_250,

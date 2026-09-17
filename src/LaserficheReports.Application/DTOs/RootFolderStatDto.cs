@@ -2,7 +2,7 @@ namespace LaserficheReports.Application.DTOs;
 
 /// <summary>
 /// Document and sub-folder counts for a single root-level (top-level) Laserfiche folder.
-/// Populated by the recursive folder scan performed during every dashboard refresh.
+/// Populated by the recursive folder scan performed during every analytics refresh.
 /// Used as data for the "Documents by Folder" bar chart.
 /// </summary>
 public sealed record RootFolderStatDto

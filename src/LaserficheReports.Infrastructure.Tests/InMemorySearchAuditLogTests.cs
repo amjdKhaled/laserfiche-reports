@@ -6,7 +6,7 @@ namespace LaserficheReports.Infrastructure.Tests;
 /// <summary>
 /// Repository-isolation tests for the in-memory search audit log.
 /// On a multi-repository server, search activity recorded for one repository
-/// must never appear in another repository's dashboard statistics.
+/// must never appear in another repository's repository statistics.
 /// </summary>
 public sealed class InMemorySearchAuditLogTests
 {

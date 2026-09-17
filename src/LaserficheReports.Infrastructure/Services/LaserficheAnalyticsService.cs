@@ -10,7 +10,7 @@ using Microsoft.Extensions.Logging;
 namespace LaserficheReports.Infrastructure.Services;
 
 /// <summary>
-/// Aggregates live Laserfiche repository statistics into a <see cref="DashboardStatsDto"/>
+/// Aggregates live Laserfiche repository statistics into a <see cref="RepositoryStatsDto"/>
 /// by performing a recursive folder-tree scan.
 ///
 /// Data sources:
@@ -18,7 +18,7 @@ namespace LaserficheReports.Infrastructure.Services;
 ///     repository identity, and template definitions.
 ///   • Portal in-memory audit log — portal search activity only.
 /// </summary>
-internal sealed class LaserficheDashboardService : ILaserficheDashboardService
+internal sealed class LaserficheAnalyticsService : ILaserficheAnalyticsService
 {
     private const int SearchActivityDays = 7;
     private const int TopSearchQueryLimit = 5;
@@ -30,9 +30,9 @@ internal sealed class LaserficheDashboardService : ILaserficheDashboardService
     private readonly ICredentialProvider             _credentialProvider;
     private readonly IRepositoryContext              _repositoryContext;
     private readonly IHttpContextAccessor            _httpContextAccessor;
-    private readonly ILogger<LaserficheDashboardService> _logger;
+    private readonly ILogger<LaserficheAnalyticsService> _logger;
 
-    public LaserficheDashboardService(
+    public LaserficheAnalyticsService(
         ILaserficheRepositoryService   repositoryService,
         ILaserficheEntryService         entryService,
         ILaserficheTemplateService      templateService,
@@ -40,7 +40,7 @@ internal sealed class LaserficheDashboardService : ILaserficheDashboardService
         ICredentialProvider             credentialProvider,
         IRepositoryContext              repositoryContext,
         IHttpContextAccessor            httpContextAccessor,
-        ILogger<LaserficheDashboardService> logger)
+        ILogger<LaserficheAnalyticsService> logger)
     {
         _repositoryService   = repositoryService;
         _entryService        = entryService;
@@ -53,7 +53,7 @@ internal sealed class LaserficheDashboardService : ILaserficheDashboardService
     }
 
     /// <inheritdoc />
-    public async Task<DashboardStatsDto> GetDashboardStatsAsync(
+    public async Task<RepositoryStatsDto> GetRepositoryStatsAsync(
         CancellationToken cancellationToken = default)
     {
         var totalStart = Stopwatch.GetTimestamp();
@@ -66,7 +66,7 @@ internal sealed class LaserficheDashboardService : ILaserficheDashboardService
 
             if (!status.IsConnected)
             {
-                return new DashboardStatsDto
+                return new RepositoryStatsDto
                 {
                     IsConnected   = false,
                     ErrorMessage  = status.ErrorMessage,
@@ -113,10 +113,10 @@ internal sealed class LaserficheDashboardService : ILaserficheDashboardService
                 .ConfigureAwait(false);
 
             _logger.LogInformation(
-                "Dashboard scan starting. RepositoryId={RepositoryId}; AuthenticationMode={AuthenticationMode}; RootChildrenCount={RootChildrenCount}.",
+                "Repository analytics scan starting. RepositoryId={RepositoryId}; AuthenticationMode={AuthenticationMode}; RootChildrenCount={RootChildrenCount}.",
                 status.RepositoryId, authenticationMode, rootChildren.Count);
             _logger.LogInformation(
-                "Dashboard statistics loaded for Username={Username}; RepositoryId={RepositoryId}.",
+                "Repository statistics loaded for Username={Username}; RepositoryId={RepositoryId}.",
                 connectedUser ?? "(not exposed by token)", status.RepositoryId);
 
             var rootFetchDurationMs = Stopwatch.GetElapsedTime(rootFetchStart).TotalMilliseconds;
@@ -211,7 +211,7 @@ internal sealed class LaserficheDashboardService : ILaserficheDashboardService
                 .AsReadOnly();
 
             // No arbitrary document cap: the scan already retrieved these entries, so
-            // silently dropping rows would make dashboard badges/tables disagree with totals.
+            // silently dropping rows would make reporting results disagree with totals.
             var allRecentDocs = allDocs
                 .OrderByDescending(d => d.CreationTime ?? DateTimeOffset.MinValue)
                 .ToList()
@@ -281,7 +281,7 @@ internal sealed class LaserficheDashboardService : ILaserficheDashboardService
                 templateDefs.Count,
                 authenticationMode);
 
-            return new DashboardStatsDto
+            return new RepositoryStatsDto
             {
                 IsConnected              = true,
                 RepositoryId             = status.RepositoryId,
@@ -324,11 +324,11 @@ internal sealed class LaserficheDashboardService : ILaserficheDashboardService
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Dashboard statistics aggregation failed.");
-            return new DashboardStatsDto
+            _logger.LogError(ex, "Repository statistics aggregation failed.");
+            return new RepositoryStatsDto
             {
                 IsConnected   = false,
-                ErrorMessage  = $"Failed to retrieve dashboard data: {ex.Message}",
+                ErrorMessage  = $"Failed to retrieve repository data: {ex.Message}",
                 LastCheckedAt = DateTimeOffset.UtcNow
             };
         }
@@ -414,7 +414,7 @@ internal sealed class LaserficheDashboardService : ILaserficheDashboardService
             catch (Exception ex)
             {
                 // Do not silently convert a failed subtree into zero documents: that would
-                // make the dashboard look valid while reporting incomplete data.
+                // make the reports look valid while reporting incomplete data.
                 logger.LogError(ex,
                     "Root folder scan failed for folder {FolderId} '{Name}'.",
                     folder.Id, folder.Name);
@@ -459,7 +459,7 @@ internal sealed class LaserficheDashboardService : ILaserficheDashboardService
             // Missing one folder means all repository totals would be incomplete. Surface
             // the error instead of pretending the inaccessible folder contains zero items.
             logger.LogError(ex,
-                "Cannot list children of folder {FolderId} '{Name}'. Dashboard scan is incomplete.",
+                "Cannot list children of folder {FolderId} '{Name}'. Repository analytics scan is incomplete.",
                 folderId, folderName);
             throw;
         }
@@ -467,7 +467,7 @@ internal sealed class LaserficheDashboardService : ILaserficheDashboardService
         var docEntries       = children.Where(e => e.EntryType == LFEntryType.Document).ToList();
         var subFolderEntries = children.Where(e => e.EntryType == LFEntryType.Folder).ToList();
 
-        // Keep template counts in ScanResult for compatibility/tests. Dashboard-level
+        // Keep template counts in ScanResult for compatibility/tests. Analytics-level
         // template KPIs are calculated from the authoritative de-duplicated document list.
         var localTmpl = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         foreach (var doc in docEntries.Where(HasTemplate))
@@ -477,7 +477,7 @@ internal sealed class LaserficheDashboardService : ILaserficheDashboardService
         }
 
         logger.LogInformation(
-            "Dashboard folder scanned. FolderId={FolderId}; FolderName={FolderName}; DirectDocuments={Documents}; DirectFolders={Folders}.",
+            "Repository folder scanned. FolderId={FolderId}; FolderName={FolderName}; DirectDocuments={Documents}; DirectFolders={Folders}.",
             folderId, folderName, docEntries.Count, subFolderEntries.Count);
 
         var subTasks = subFolderEntries.Select(f =>

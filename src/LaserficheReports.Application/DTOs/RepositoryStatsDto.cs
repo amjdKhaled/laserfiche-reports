@@ -3,11 +3,11 @@ using LaserficheReports.Domain.Entities;
 namespace LaserficheReports.Application.DTOs;
 
 /// <summary>
-/// Aggregated live statistics returned by <see cref="Interfaces.ILaserficheDashboardService"/>.
+/// Aggregated live statistics returned by <see cref="Interfaces.ILaserficheAnalyticsService"/>.
 /// Repository facts come from the active Laserfiche Repository API session; portal search
 /// metrics come from the portal's own in-memory search audit log.
 /// </summary>
-public sealed record DashboardStatsDto
+public sealed record RepositoryStatsDto
 {
     // ── Connectivity ───────────────────────────────────────────────────────
     public bool IsConnected { get; init; }
