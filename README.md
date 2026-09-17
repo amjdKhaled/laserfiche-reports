@@ -96,3 +96,16 @@ This first experiment saves only the document identity and metadata. It sets
 `embedding` to `NULL`; OCR, chunking, and local embeddings are the next phase.
 Running the request again refreshes the same project-owned row instead of
 creating another one.
+
+To verify that the application can retrieve document content as well as
+metadata, stream page 1 to a local file:
+
+```powershell
+Invoke-WebRequest `
+  -Uri "http://127.0.0.1:5187/api/laserfiche/documents/608/pages/1/image" `
+  -OutFile ".\laserfiche-608-page-1.bin"
+```
+
+The response is streamed from Laserfiche and is not stored on the application
+server. The temporary output above exists only because the test caller requests
+an output file.

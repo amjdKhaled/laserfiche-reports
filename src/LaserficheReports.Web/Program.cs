@@ -64,6 +64,37 @@ app.MapGet("/api/laserfiche/repository", async (
     return Results.Ok(repository);
 });
 
+app.MapGet("/api/laserfiche/documents/{entryId:int}/pages/{pageNumber:int}/image", async (
+    int entryId,
+    int pageNumber,
+    ILaserficheDocumentService documents,
+    HttpContext httpContext,
+    CancellationToken cancellationToken) =>
+{
+    if (entryId <= 0 || pageNumber <= 0)
+    {
+        return Results.BadRequest(new { error = "Entry ID and page number must be positive." });
+    }
+
+    var page = await documents
+        .GetPageImageAsync(entryId, pageNumber, cancellationToken);
+
+    // The upstream Laserfiche response must stay alive until ASP.NET finishes
+    // copying the streamed page to the caller.
+    httpContext.Response.RegisterForDispose(page);
+
+    var extension = string.IsNullOrWhiteSpace(page.Extension) ? ".bin" : page.Extension;
+    var fileName = string.IsNullOrWhiteSpace(page.FileName)
+        ? $"laserfiche-{entryId}-page-{pageNumber}{extension}"
+        : page.FileName;
+
+    return Results.Stream(
+        page.Content,
+        contentType: page.ContentType,
+        fileDownloadName: fileName,
+        enableRangeProcessing: false);
+});
+
 app.MapPost("/api/ingestion/laserfiche/{entryId:int}", async (
     int entryId,
     ILaserficheDocumentIngestionService ingestion,
