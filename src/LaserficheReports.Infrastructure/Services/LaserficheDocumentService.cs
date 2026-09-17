@@ -1,4 +1,6 @@
 using System.Net.Http.Headers;
+using System.Drawing.Imaging;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -332,31 +334,95 @@ internal sealed class LaserficheDocumentService : ILaserficheDocumentService
                 statusCode);
         }
 
+        var contentDisposition = downloadResponse.Content.Headers.ContentDisposition?.ToString();
+        var upstreamFileName = GetFileName(downloadResponse.Content.Headers.ContentDisposition);
+        var upstreamContentType = NormalizeContentType(
+            downloadResponse.Content.Headers.ContentType?.MediaType,
+            upstreamFileName);
+
+        byte[] bytes;
         try
         {
-            var stream = await downloadResponse.Content
-                .ReadAsStreamAsync(cancellationToken)
+            bytes = await downloadResponse.Content
+                .ReadAsByteArrayAsync(cancellationToken)
                 .ConfigureAwait(false);
-            var fileName = GetFileName(downloadResponse.Content.Headers.ContentDisposition)
-                ?? $"page-{pageNumber}.png";
-            var contentType = NormalizeContentType(
-                downloadResponse.Content.Headers.ContentType?.MediaType,
-                fileName);
-
-            return new LaserficheEdocStream(
-                stream,
-                contentType == "application/octet-stream" ? "image/png" : contentType,
-                downloadResponse.Content.Headers.ContentDisposition?.ToString(),
-                fileName,
-                ".png",
-                downloadResponse.Content.Headers.ContentLength,
-                downloadResponse);
         }
-        catch
+        finally
         {
             downloadResponse.Dispose();
-            throw;
         }
+
+        var detectedContentType = DetectImageContentType(bytes);
+        if (detectedContentType == "image/tiff")
+        {
+            try
+            {
+                using var source = new MemoryStream(bytes, writable: false);
+                using var image = System.Drawing.Image.FromStream(
+                    source,
+                    useEmbeddedColorManagement: false,
+                    validateImageData: true);
+                var png = new MemoryStream();
+                image.Save(png, ImageFormat.Png);
+                png.Position = 0;
+
+                return new LaserficheEdocStream(
+                    png,
+                    "image/png",
+                    contentDisposition: null,
+                    fileName: $"laserfiche-{entryId}-page-{pageNumber}.png",
+                    extension: ".png",
+                    contentLength: png.Length,
+                    owner: png);
+            }
+            catch (Exception ex) when (ex is ArgumentException or ExternalException)
+            {
+                throw new LaserficheException(
+                    $"Laserfiche returned a TIFF page for entry {entryId} page {pageNumber}, " +
+                    "but local TIFF-to-PNG conversion failed.",
+                    500,
+                    ex);
+            }
+        }
+
+        var contentType = detectedContentType ?? upstreamContentType;
+        var extension = GetExtension(upstreamFileName, contentType)
+            ?? (contentType == "image/png" ? ".png" : ".bin");
+        var fileName = string.IsNullOrWhiteSpace(upstreamFileName)
+            ? $"laserfiche-{entryId}-page-{pageNumber}{extension}"
+            : upstreamFileName;
+        var content = new MemoryStream(bytes, writable: false);
+
+        return new LaserficheEdocStream(
+            content,
+            contentType,
+            contentDisposition,
+            fileName,
+            extension,
+            content.Length,
+            content);
+    }
+
+    internal static string? DetectImageContentType(ReadOnlySpan<byte> bytes)
+    {
+        if (bytes.Length >= 8 &&
+            bytes[0] == 0x89 && bytes[1] == 0x50 && bytes[2] == 0x4E && bytes[3] == 0x47 &&
+            bytes[4] == 0x0D && bytes[5] == 0x0A && bytes[6] == 0x1A && bytes[7] == 0x0A)
+        {
+            return "image/png";
+        }
+
+        if (bytes.Length >= 4 &&
+            ((bytes[0] == 0x49 && bytes[1] == 0x49 && bytes[2] == 0x2A && bytes[3] == 0x00) ||
+             (bytes[0] == 0x4D && bytes[1] == 0x4D && bytes[2] == 0x00 && bytes[3] == 0x2A)))
+        {
+            return "image/tiff";
+        }
+
+        if (bytes.Length >= 3 && bytes[0] == 0xFF && bytes[1] == 0xD8 && bytes[2] == 0xFF)
+            return "image/jpeg";
+
+        return null;
     }
 
     private async Task<LaserficheEdocStream> ExportElectronicDocumentAsync(

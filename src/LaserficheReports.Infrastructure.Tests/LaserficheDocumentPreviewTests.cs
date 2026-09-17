@@ -140,6 +140,17 @@ public sealed class LaserficheDocumentPreviewTests
     public void ExportLinkParser_AcceptsSupportedResponses(string body) =>
         Assert.Equal("https://lf.test/file", LaserficheDocumentService.ParseExportDownloadLink(body));
 
+    [Theory]
+    [InlineData("89504E470D0A1A0A", "image/png")]
+    [InlineData("49492A00", "image/tiff")]
+    [InlineData("4D4D002A", "image/tiff")]
+    [InlineData("FFD8FF", "image/jpeg")]
+    [InlineData("7B7D", null)]
+    public void ImageType_IsDetectedFromFileSignature(string hex, string? expected) =>
+        Assert.Equal(
+            expected,
+            LaserficheDocumentService.DetectImageContentType(Convert.FromHexString(hex)));
+
     private static LaserficheDocumentService CreateService(QueueHandler handler, string apiVersion = "v2")
     {
         var options = new LaserficheOptions

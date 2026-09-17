@@ -25,6 +25,9 @@
     <PackageReference Include="Serilog.Extensions.Hosting" Version="8.0.0" />
     <PackageReference Include="Serilog.Sinks.File" Version="6.0.0" />
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
+    <!-- The application is deployed on Windows. Used to transcode Laserfiche TIFF pages
+         to browser-safe PNG without sending document content to an external service. -->
+    <PackageReference Include="System.Drawing.Common" Version="8.0.11" />
   </ItemGroup>
 
   <PropertyGroup>
