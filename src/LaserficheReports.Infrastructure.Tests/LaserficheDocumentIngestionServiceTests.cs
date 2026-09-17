@@ -1,6 +1,7 @@
 using System.Text.Json;
 using LaserficheReports.Domain.Entities;
 using LaserficheReports.Infrastructure.Services;
+using Xunit;
 
 namespace LaserficheReports.Infrastructure.Tests;
 
