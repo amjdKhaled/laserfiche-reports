@@ -194,6 +194,22 @@ internal sealed class LaserficheDocumentService : ILaserficheDocumentService
             var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
             var statusCode = (int)response.StatusCode;
             response.Dispose();
+
+            // Some on-premises Repository API v1 installations do not expose
+            // /pages/{pageNumber}/image. Their supported read endpoint is the
+            // document edoc resource instead. Preserve the page-image route for
+            // servers that support it, then fall back only when v1 returns 404.
+            if (statusCode == (int)System.Net.HttpStatusCode.NotFound &&
+                _adapter.ApiVersion.Equals("v1", StringComparison.OrdinalIgnoreCase))
+            {
+                _logger.LogInformation(
+                    "Laserfiche v1 page image route was not found for entry {EntryId} page {PageNumber}; falling back to the edoc resource.",
+                    entryId,
+                    pageNumber);
+
+                return await StreamEdocAsync(entryId, cancellationToken).ConfigureAwait(false);
+            }
+
             throw new LaserficheException(
                 $"Page image not available for entry {entryId} page {pageNumber}: " +
                 $"HTTP {statusCode}. Body: {body}",

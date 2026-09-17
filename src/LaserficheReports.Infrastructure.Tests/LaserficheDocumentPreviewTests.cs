@@ -66,6 +66,37 @@ public sealed class LaserficheDocumentPreviewTests
         Assert.Equal("https://lf.test/download/page.png", handler.Requests[2].Url);
     }
 
+    [Fact]
+    public async Task MissingV1PageImage_FallsBackToDocumentEdoc()
+    {
+        var missingPage = new HttpResponseMessage(HttpStatusCode.NotFound)
+        {
+            Content = new StringContent("page image route is unavailable")
+        };
+        var pdf = new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new ByteArrayContent([0x25, 0x50, 0x44, 0x46])
+        };
+        pdf.Content.Headers.ContentType = new MediaTypeHeaderValue("application/pdf");
+        pdf.Content.Headers.ContentDisposition = new ContentDispositionHeaderValue("attachment")
+        {
+            FileName = "document.pdf"
+        };
+
+        var handler = new QueueHandler(missingPage, pdf);
+        var service = CreateService(handler, "v1");
+
+        using var result = await service.GetPageImageAsync(42, 1);
+
+        Assert.Equal("application/pdf", result.ContentType);
+        Assert.Equal(2, handler.Requests.Count);
+        Assert.EndsWith("/Entries/42/pages/1/image", handler.Requests[0].Url);
+        Assert.Equal(HttpMethod.Get, handler.Requests[1].Method);
+        Assert.EndsWith(
+            "/Entries/42/Laserfiche.Repository.Document/edoc",
+            handler.Requests[1].Url);
+    }
+
     [Theory]
     [InlineData("application/octet-stream", "scan.pdf", "application/pdf")]
     [InlineData(null, "scan.jpeg", "image/jpeg")]
@@ -82,13 +113,13 @@ public sealed class LaserficheDocumentPreviewTests
     public void ExportLinkParser_AcceptsSupportedResponses(string body) =>
         Assert.Equal("https://lf.test/file", LaserficheDocumentService.ParseExportDownloadLink(body));
 
-    private static LaserficheDocumentService CreateService(QueueHandler handler)
+    private static LaserficheDocumentService CreateService(QueueHandler handler, string apiVersion = "v2")
     {
         var options = new LaserficheOptions
         {
             ServerUrl = "https://lf.test",
             ApiBasePath = "/LFRepositoryAPI",
-            ApiVersion = "v2"
+            ApiVersion = apiVersion
         };
         var factory = new ClientFactory(handler);
         var adapter = new LaserficheApiAdapter(new StaticOptionsMonitor(options));
