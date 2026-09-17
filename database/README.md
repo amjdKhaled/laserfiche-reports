@@ -18,10 +18,11 @@ name.
 
 ## Stored data
 
-- `documents`: Laserfiche identity and indexing state. It does not store the original file.
-- `document_metadata`: searchable Laserfiche fields and values.
-- `document_chunks`: extracted text chunks and local embeddings.
-- `match_document_chunks`: cosine-similarity search with repository filtering.
+- `lf_reports_documents`: Laserfiche identity and indexing state. It does not store the original file.
+- `lf_reports_document_metadata`: searchable Laserfiche fields and values.
+- `lf_reports_document_chunks`: extracted text chunks and local embeddings.
+- `match_lf_reports_chunks`: cosine-similarity search with repository filtering.
 
-The vector dimension is 1024 for the local multilingual `bge-m3` embedding
-model. A model change that uses another dimension requires a database migration.
+The project reuses the existing local `nomic-embed-text-v2-moe` model and its
+768-dimensional pgvector type under the `extensions` schema. A later model
+change that uses another dimension requires a database migration.

@@ -56,6 +56,6 @@ With the local Supabase Docker stack running:
 powershell -ExecutionPolicy Bypass -File .\scripts\apply-database.ps1
 ```
 
-This creates `documents`, `document_metadata`, `document_chunks`, and the
-`match_document_chunks` vector-search function. Original documents remain in
+This creates isolated `lf_reports_*` tables and the
+`match_lf_reports_chunks` vector-search function. Original documents remain in
 Laserfiche and are not copied into PostgreSQL.

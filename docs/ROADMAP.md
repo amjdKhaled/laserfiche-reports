@@ -21,7 +21,7 @@
 ## 4. Chunking and embeddings
 
 - Split text with page and offset references.
-- Generate 1024-dimensional multilingual embeddings locally with `bge-m3`.
+- Generate 768-dimensional embeddings locally with the existing `nomic-embed-text-v2-moe` model.
 - Store chunks and embeddings in pgvector.
 
 ## 5. Retrieval
