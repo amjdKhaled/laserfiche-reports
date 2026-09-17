@@ -67,6 +67,33 @@ public sealed class LaserficheDocumentPreviewTests
     }
 
     [Fact]
+    public async Task MissingV2PageImage_IsExportedAsBrowserSafePng()
+    {
+        var missingPage = new HttpResponseMessage(HttpStatusCode.NotFound)
+        {
+            Content = new StringContent("page image route is unavailable")
+        };
+        var export = Json("{\"value\":\"https://lf.test/download/page.png\"}");
+        var png = new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new ByteArrayContent([0x89, 0x50, 0x4E, 0x47])
+        };
+        png.Content.Headers.ContentType = new MediaTypeHeaderValue("image/png");
+
+        var handler = new QueueHandler(missingPage, export, png);
+        var service = CreateService(handler);
+
+        using var result = await service.GetPageImageAsync(42, 1);
+
+        Assert.Equal("image/png", result.ContentType);
+        Assert.Equal(3, handler.Requests.Count);
+        Assert.EndsWith("/Entries/42/Document/Pages/1/Image", handler.Requests[0].Url);
+        Assert.Equal(HttpMethod.Post, handler.Requests[1].Method);
+        Assert.EndsWith("/Entries/42/Export?pageRange=1", handler.Requests[1].Url);
+        Assert.Equal("https://lf.test/download/page.png", handler.Requests[2].Url);
+    }
+
+    [Fact]
     public async Task MissingV1PageImage_FallsBackToDocumentEdoc()
     {
         var missingPage = new HttpResponseMessage(HttpStatusCode.NotFound)

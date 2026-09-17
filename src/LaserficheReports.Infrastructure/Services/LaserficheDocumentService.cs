@@ -195,6 +195,23 @@ internal sealed class LaserficheDocumentService : ILaserficheDocumentService
             var statusCode = (int)response.StatusCode;
             response.Dispose();
 
+            // Repository API v2 installations can support document export even
+            // when the per-page Image route is unavailable for a particular
+            // document/page. Exporting the requested page as PNG is the official
+            // browser-safe retrieval flow and preserves the source document.
+            if (statusCode == (int)System.Net.HttpStatusCode.NotFound &&
+                _adapter.ApiVersion.Equals("v2", StringComparison.OrdinalIgnoreCase))
+            {
+                _logger.LogInformation(
+                    "Laserfiche v2 page image route was not found for entry {EntryId} page {PageNumber}; exporting the page as PNG.",
+                    entryId,
+                    pageNumber);
+
+                return await ExportPageAsPngAsync(
+                        client, repo.RepositoryId, entryId, pageNumber, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
             // Some on-premises Repository API v1 installations do not expose
             // /pages/{pageNumber}/image. Their supported read endpoint is the
             // document edoc resource instead. Preserve the page-image route for
