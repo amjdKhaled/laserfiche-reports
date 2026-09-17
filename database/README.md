@@ -1,8 +1,8 @@
 # Local Supabase database
 
-This database is an application-owned, rebuildable search index. Laserfiche
-remains the source of truth and the application never writes to the Laserfiche
-Repository SQL database.
+Laserfiche Reports reuses the existing local `public.documents` RAG table.
+Laserfiche remains the source of truth and the application never writes to the
+Laserfiche Repository SQL database.
 
 ## Apply the schema on Windows
 
@@ -18,11 +18,15 @@ name.
 
 ## Stored data
 
-- `lf_reports_documents`: Laserfiche identity and indexing state. It does not store the original file.
-- `lf_reports_document_metadata`: searchable Laserfiche fields and values.
-- `lf_reports_document_chunks`: extracted text chunks and local embeddings.
-- `match_lf_reports_chunks`: cosine-similarity search with repository filtering.
+- Each Laserfiche text chunk is one row in `public.documents`.
+- `content` contains the extracted chunk text.
+- `embedding` contains its local Ollama embedding.
+- `metadata` stores `source`, `repository_id`, `entry_id`, document name, path,
+  page number, chunk index, and text source.
+- Laserfiche Reports always sets `metadata.source` to `laserfiche-reports`, so
+  it does not mix with old n8n/RAG rows.
+- `match_laserfiche_reports_documents` searches only those project rows.
 
-The project reuses the existing local `nomic-embed-text-v2-moe` model and its
-768-dimensional pgvector type under the `extensions` schema. A later model
-change that uses another dimension requires a database migration.
+The script verifies that the existing embeddings use the local
+`nomic-embed-text-v2-moe` 768-dimensional vector type in the `extensions`
+schema before it creates the project search function.
