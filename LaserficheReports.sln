@@ -1,0 +1,42 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LaserficheReports.Domain", "src\LaserficheReports.Domain\LaserficheReports.Domain.csproj", "{9DDFCF12-9BCE-4EE6-BA3A-7CBA39539B48}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LaserficheReports.Application", "src\LaserficheReports.Application\LaserficheReports.Application.csproj", "{9C7243C4-2BD9-4749-A681-8B3F344D449F}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LaserficheReports.Infrastructure", "src\LaserficheReports.Infrastructure\LaserficheReports.Infrastructure.csproj", "{9E6BE71F-E091-4915-A2D3-16254D703F7D}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LaserficheReports.Web", "src\LaserficheReports.Web\LaserficheReports.Web.csproj", "{AFA5318E-FB91-4E99-A2CF-9BE383384886}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LaserficheReports.Infrastructure.Tests", "src\LaserficheReports.Infrastructure.Tests\LaserficheReports.Infrastructure.Tests.csproj", "{34679E3D-8D94-4BC5-9A61-BEC1E89A6015}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{9DDFCF12-9BCE-4EE6-BA3A-7CBA39539B48}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{9DDFCF12-9BCE-4EE6-BA3A-7CBA39539B48}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{9DDFCF12-9BCE-4EE6-BA3A-7CBA39539B48}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{9DDFCF12-9BCE-4EE6-BA3A-7CBA39539B48}.Release|Any CPU.Build.0 = Release|Any CPU
+		{9C7243C4-2BD9-4749-A681-8B3F344D449F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{9C7243C4-2BD9-4749-A681-8B3F344D449F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{9C7243C4-2BD9-4749-A681-8B3F344D449F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{9C7243C4-2BD9-4749-A681-8B3F344D449F}.Release|Any CPU.Build.0 = Release|Any CPU
+		{9E6BE71F-E091-4915-A2D3-16254D703F7D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{9E6BE71F-E091-4915-A2D3-16254D703F7D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{9E6BE71F-E091-4915-A2D3-16254D703F7D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{9E6BE71F-E091-4915-A2D3-16254D703F7D}.Release|Any CPU.Build.0 = Release|Any CPU
+		{AFA5318E-FB91-4E99-A2CF-9BE383384886}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{AFA5318E-FB91-4E99-A2CF-9BE383384886}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{AFA5318E-FB91-4E99-A2CF-9BE383384886}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{AFA5318E-FB91-4E99-A2CF-9BE383384886}.Release|Any CPU.Build.0 = Release|Any CPU
+		{34679E3D-8D94-4BC5-9A61-BEC1E89A6015}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{34679E3D-8D94-4BC5-9A61-BEC1E89A6015}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{34679E3D-8D94-4BC5-9A61-BEC1E89A6015}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{34679E3D-8D94-4BC5-9A61-BEC1E89A6015}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal
