@@ -3,10 +3,19 @@ using LaserficheReports.Infrastructure.Extensions;
 
 var builder = WebApplication.CreateBuilder(args);
 
+var localSettingsPath = Path.Combine(
+    builder.Environment.ContentRootPath,
+    "appsettings.Local.json");
+
 builder.Configuration.AddJsonFile(
-    "appsettings.Local.json",
+    localSettingsPath,
     optional: true,
     reloadOnChange: true);
+
+// Environment variables are the final override. This also gives local Windows
+// development a reliable fallback when an editor or launch profile changes the
+// process working directory. Example: Laserfiche__ServerUrl=https://localhost.
+builder.Configuration.AddEnvironmentVariables();
 
 builder.Services.AddDataProtection();
 builder.Services.AddHttpContextAccessor();
@@ -21,6 +30,14 @@ builder.Services.AddSession(options =>
 builder.Services.AddLaserficheInfrastructure(builder.Configuration);
 
 var app = builder.Build();
+
+app.Logger.LogInformation(
+    "Local configuration: File={LocalSettingsPath}; Exists={LocalSettingsExists}; " +
+    "LaserficheServerConfigured={ServerConfigured}; RepositoryId={RepositoryId}",
+    localSettingsPath,
+    File.Exists(localSettingsPath),
+    !string.IsNullOrWhiteSpace(builder.Configuration["Laserfiche:ServerUrl"]),
+    builder.Configuration["Laserfiche:RepositoryId"] ?? "(missing)");
 
 app.UseSession();
 
