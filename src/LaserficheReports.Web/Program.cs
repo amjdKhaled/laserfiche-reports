@@ -1,7 +1,28 @@
 using LaserficheReports.Application.Interfaces;
+using LaserficheReports.Infrastructure.Configuration;
 using LaserficheReports.Infrastructure.Extensions;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// Configuration layering (last source wins): shipped defaults, legacy local
+// settings, installer settings, runtime-discovered/admin settings, developer
+// local settings, then environment variables. ApiVersionDetectionService writes
+// DetectedApiVersion to the runtime file, so this file must also be loaded with
+// reloadOnChange for the detected v2 API to take effect without another install.
+builder.Configuration.AddJsonFile(
+    ReportsConfigPaths.GetLegacyRuntimeConfigPath(builder.Environment.ContentRootPath),
+    optional: true,
+    reloadOnChange: true);
+
+builder.Configuration.AddJsonFile(
+    ReportsConfigPaths.InstallerConfigPath,
+    optional: true,
+    reloadOnChange: true);
+
+builder.Configuration.AddJsonFile(
+    ReportsConfigPaths.RuntimeConfigPath,
+    optional: true,
+    reloadOnChange: true);
 
 var localSettingsPath = Path.Combine(
     builder.Environment.ContentRootPath,
