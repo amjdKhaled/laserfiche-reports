@@ -47,7 +47,20 @@ app.MapGet("/api/laserfiche/repository", async (
     return Results.Ok(repository);
 });
 
+app.MapPost("/api/ingestion/laserfiche/{entryId:int}", async (
+    int entryId,
+    ILaserficheDocumentIngestionService ingestion,
+    CancellationToken cancellationToken) =>
+{
+    if (entryId <= 0)
+    {
+        return Results.BadRequest(new { error = "Entry ID must be positive." });
+    }
+
+    var result = await ingestion.IngestMetadataAsync(entryId, cancellationToken);
+    return Results.Ok(result);
+});
+
 app.MapHealthChecks("/health");
 
 app.Run();
-

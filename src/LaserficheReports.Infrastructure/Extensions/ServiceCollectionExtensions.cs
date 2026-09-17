@@ -40,6 +40,9 @@ public static class ServiceCollectionExtensions
             .ValidateDataAnnotations()
             .ValidateOnStart();
 
+        services.AddOptions<SupabaseOptions>()
+            .Bind(configuration.GetSection(SupabaseOptions.SectionName));
+
         // ── Memory cache (token cache) ────────────────────────────────────────
         services.AddMemoryCache();
 
@@ -84,6 +87,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ILaserficheFieldDefinitionService, LaserficheFieldDefinitionService>();
         services.AddScoped<ILaserficheSearchService, LaserficheSearchService>();
         services.AddScoped<ILaserficheDocumentService, LaserficheDocumentService>();
+        services.AddScoped<ILaserficheDocumentIngestionService, LaserficheDocumentIngestionService>();
         services.AddScoped<ILaserficheTemplateService, LaserficheTemplateService>();
         services.AddScoped<LaserficheAnalyticsService>();
         services.AddScoped<ILaserficheAnalyticsService, CachedLaserficheAnalyticsService>();

@@ -60,3 +60,39 @@ This validates and reuses the existing local `documents` table, then adds the
 `match_laserfiche_reports_documents` vector-search function. Every row created
 for this project is labelled in metadata, while original documents remain in
 Laserfiche and are not copied into PostgreSQL.
+
+## Test one-document ingestion
+
+Set the local repository and PostgreSQL connection in
+`src/LaserficheReports.Web/appsettings.Local.json` (do not commit this file):
+
+```json
+{
+  "Laserfiche": {
+    "ServerUrl": "https://localhost",
+    "RepositoryId": "testemployee"
+  },
+  "Supabase": {
+    "PostgresConnectionString": "Host=localhost;Port=5432;Database=postgres;Username=postgres;Password=YOUR_LOCAL_PASSWORD"
+  }
+}
+```
+
+Start the API with local Laserfiche credentials, then ingest Entry `608`:
+
+```powershell
+$env:LF_USERNAME = "YOUR_LASERFICHE_USERNAME"
+$env:LF_PASSWORD = "YOUR_LASERFICHE_PASSWORD"
+dotnet run --project .\src\LaserficheReports.Web
+```
+
+In a second PowerShell window, use the HTTPS address printed by `dotnet run`:
+
+```powershell
+Invoke-RestMethod -Method Post -Uri "https://localhost:PORT/api/ingestion/laserfiche/608" -SkipCertificateCheck
+```
+
+This first experiment saves only the document identity and metadata. It sets
+`embedding` to `NULL`; OCR, chunking, and local embeddings are the next phase.
+Running the request again refreshes the same project-owned row instead of
+creating another one.
