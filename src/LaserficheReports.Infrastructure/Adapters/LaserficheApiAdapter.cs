@@ -52,6 +52,9 @@ public sealed class LaserficheApiAdapter : ILaserficheApiAdapter
             ? $"{RepoBase(repositoryId)}/Entries/{entryId}/Document/Pages/{pageNumber}/Image"
             : $"{RepoBase(repositoryId)}/Entries/{entryId}/pages/{pageNumber}/image";
 
+    public string BuildPageTextUrl(string repositoryId, int entryId, int pageNumber) =>
+        $"{RepoBase(repositoryId)}/Entries/{entryId}/Document/Pages/{pageNumber}/Text";
+
     public string BuildDocumentExportUrl(string repositoryId, int entryId, string? pageRange = null)
     {
         var url = $"{RepoBase(repositoryId)}/Entries/{entryId}/Export";

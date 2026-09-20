@@ -54,4 +54,20 @@ public sealed class LaserficheDocumentIngestionServiceTests
         Assert.Contains("Department: HR", content);
         Assert.DoesNotContain("Empty:", content);
     }
+
+    [Fact]
+    public void BuildIndexedContent_AppendsLaserficheTextInPageOrder()
+    {
+        var entry = new LFEntry { Name = "Document A", FullPath = @"\HR\Document A" };
+        LFFieldValue[] fields = [new() { FieldName = "Department", Value = "HR" }];
+        (int PageNumber, string Text)[] pages = [(2, "Second page"), (1, "First page")];
+
+        var content = LaserficheDocumentIngestionService.BuildIndexedContent(entry, fields, pages);
+
+        Assert.Contains("Department: HR", content);
+        Assert.True(content.IndexOf("Page 1:", StringComparison.Ordinal) <
+                    content.IndexOf("Page 2:", StringComparison.Ordinal));
+        Assert.Contains("First page", content);
+        Assert.Contains("Second page", content);
+    }
 }

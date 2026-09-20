@@ -171,6 +171,9 @@ public sealed class LaserficheApiAdapterUrlTests
             "https://lf-server.corp.local/LFRepositoryAPI/v2/Repositories/Documents/Entries/42/Document/Pages/3/Image",
             adapter.BuildPageImageUrl("Documents", 42, 3));
         Assert.Equal(
+            "https://lf-server.corp.local/LFRepositoryAPI/v2/Repositories/Documents/Entries/42/Document/Pages/3/Text",
+            adapter.BuildPageTextUrl("Documents", 42, 3));
+        Assert.Equal(
             "https://lf-server.corp.local/LFRepositoryAPI/v2/Repositories/Documents/Entries/42/Export?pageRange=3",
             adapter.BuildDocumentExportUrl("Documents", 42, "3"));
         Assert.Equal(

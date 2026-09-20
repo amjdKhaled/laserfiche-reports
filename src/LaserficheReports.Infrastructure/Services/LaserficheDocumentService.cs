@@ -280,6 +280,73 @@ internal sealed class LaserficheDocumentService : ILaserficheDocumentService
         }
     }
 
+    public async Task<string?> GetPageTextAsync(
+        int entryId,
+        int pageNumber,
+        CancellationToken cancellationToken = default)
+    {
+        if (entryId <= 0)
+            throw new ArgumentOutOfRangeException(nameof(entryId), "Entry ID must be positive.");
+        if (pageNumber < 1)
+            throw new ArgumentOutOfRangeException(nameof(pageNumber), "Page number must be at least 1.");
+
+        // The documented per-page text resource is a Repository API V2 feature.
+        // V1 documents remain eligible for the later local-OCR fallback.
+        if (!_adapter.ApiVersion.Equals("v2", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        var repo = await _repositoryContext
+            .GetActiveRepositoryAsync(cancellationToken)
+            .ConfigureAwait(false);
+        var url = _adapter.BuildPageTextUrl(repo.RepositoryId, entryId, pageNumber);
+        var client = _httpClientFactory.CreateClient("LaserficheAuthenticated");
+
+        using var response = await client.GetAsync(url, cancellationToken).ConfigureAwait(false);
+        if (response.StatusCode is System.Net.HttpStatusCode.NotFound or System.Net.HttpStatusCode.NoContent)
+            return null;
+
+        var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new LaserficheException(
+                $"Page text request failed for entry {entryId} page {pageNumber}: " +
+                $"HTTP {(int)response.StatusCode}. Body: {body}",
+                (int)response.StatusCode);
+        }
+
+        var text = ParsePageText(body, response.Content.Headers.ContentType?.MediaType);
+        return string.IsNullOrWhiteSpace(text) ? null : text.Trim();
+    }
+
+    internal static string? ParsePageText(string body, string? mediaType)
+    {
+        if (string.IsNullOrWhiteSpace(body)) return null;
+        if (!string.IsNullOrWhiteSpace(mediaType) &&
+            !mediaType.Contains("json", StringComparison.OrdinalIgnoreCase))
+        {
+            return body;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(body);
+            if (document.RootElement.ValueKind == JsonValueKind.String)
+                return document.RootElement.GetString();
+
+            if (document.RootElement.ValueKind == JsonValueKind.Object &&
+                document.RootElement.TryGetProperty("text", out var text))
+                return text.ValueKind == JsonValueKind.String ? text.GetString() : text.ToString();
+        }
+        catch (JsonException)
+        {
+            // Some self-hosted installations return text/plain without a reliable
+            // Content-Type. Preserve the body rather than discarding usable text.
+            return body;
+        }
+
+        return null;
+    }
+
     public Task<LFEntry> GetDocumentMetadataAsync(
         int entryId,
         CancellationToken cancellationToken = default) =>

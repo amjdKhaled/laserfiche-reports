@@ -15,17 +15,20 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
     private const string RecordType = "document-metadata";
 
     private readonly ILaserficheEntryService _entries;
+    private readonly ILaserficheDocumentService _documents;
     private readonly IRepositoryContext _repositoryContext;
     private readonly SupabaseOptions _options;
     private readonly ILogger<LaserficheDocumentIngestionService> _logger;
 
     public LaserficheDocumentIngestionService(
         ILaserficheEntryService entries,
+        ILaserficheDocumentService documents,
         IRepositoryContext repositoryContext,
         IOptions<SupabaseOptions> options,
         ILogger<LaserficheDocumentIngestionService> logger)
     {
         _entries = entries;
+        _documents = documents;
         _repositoryContext = repositoryContext;
         _options = options.Value;
         _logger = logger;
@@ -60,8 +63,35 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
             .GetEntryFieldsAsync(entryId, cancellationToken)
             .ConfigureAwait(false);
 
-        var metadata = BuildMetadata(repository.RepositoryId, entry, fields);
-        var content = BuildMetadataContent(entry, fields);
+        var pageNumbers = entry.PageCount is > 0
+            ? Enumerable.Range(1, entry.PageCount.Value).ToArray()
+            : (await _documents.GetDocumentPagesAsync(entryId, cancellationToken).ConfigureAwait(false))
+                .Select(page => page.PageNumber)
+                .Distinct()
+                .OrderBy(pageNumber => pageNumber)
+                .ToArray();
+
+        var pageTexts = new List<(int PageNumber, string Text)>();
+        foreach (var pageNumber in pageNumbers)
+        {
+            var pageText = await _documents
+                .GetPageTextAsync(entryId, pageNumber, cancellationToken)
+                .ConfigureAwait(false);
+            if (!string.IsNullOrWhiteSpace(pageText))
+                pageTexts.Add((pageNumber, pageText));
+        }
+
+        var hasLaserficheText = pageTexts.Count > 0;
+        var ingestionStatus = hasLaserficheText ? "content-indexed" : "metadata-only";
+        var textSource = hasLaserficheText ? "laserfiche" : "none";
+        var metadata = BuildMetadata(
+            repository.RepositoryId,
+            entry,
+            fields,
+            ingestionStatus,
+            textSource,
+            pageTexts.Count);
+        var content = BuildIndexedContent(entry, fields, pageTexts);
 
         await using var connection = new NpgsqlConnection(_options.PostgresConnectionString);
         await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
@@ -97,13 +127,16 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
             entry.Name,
             fields.Count,
             wasInserted,
-            "metadata-only");
+            ingestionStatus);
     }
 
     internal static string BuildMetadata(
         string repositoryId,
         LFEntry entry,
-        IReadOnlyList<LFFieldValue> fields)
+        IReadOnlyList<LFFieldValue> fields,
+        string ingestionStatus = "metadata-only",
+        string textSource = "none",
+        int textPageCount = 0)
     {
         var payload = new
         {
@@ -121,8 +154,9 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
             creator = entry.Creator,
             creation_time = entry.CreationTime,
             last_modified_time = entry.LastModifiedTime,
-            ingestion_status = "metadata-only",
-            text_source = "none",
+            ingestion_status = ingestionStatus,
+            text_source = textSource,
+            text_page_count = textPageCount,
             indexed_at = DateTimeOffset.UtcNow,
             fields = fields.Select(field => new
             {
@@ -148,6 +182,20 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
         return string.Join(Environment.NewLine,
             new[] { $"Document: {entry.Name}", $"Path: {entry.FullPath}" }
                 .Concat(populatedFields));
+    }
+
+    internal static string BuildIndexedContent(
+        LFEntry entry,
+        IReadOnlyList<LFFieldValue> fields,
+        IReadOnlyList<(int PageNumber, string Text)> pageTexts)
+    {
+        var sections = new List<string> { BuildMetadataContent(entry, fields) };
+        sections.AddRange(pageTexts
+            .Where(page => !string.IsNullOrWhiteSpace(page.Text))
+            .OrderBy(page => page.PageNumber)
+            .Select(page => $"Page {page.PageNumber}:{Environment.NewLine}{page.Text.Trim()}"));
+
+        return string.Join(Environment.NewLine + Environment.NewLine, sections);
     }
 
     private const string Sql = """

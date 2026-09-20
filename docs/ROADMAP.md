@@ -5,7 +5,7 @@
 - Repository API connection, authentication, repository context, search,
   documents, folders, metadata, templates, paging, and API version handling.
 
-## 2. Local document index — current
+## 2. Local document index — complete
 
 - Reuse the existing Supabase/PostgreSQL `documents` table with source-labelled
   Laserfiche chunks.
@@ -13,9 +13,9 @@
 - Upsert its identity and metadata without storing the original file.
 - Save its available Laserfiche text and mark its ingestion state.
 
-## 3. Text extraction
+## 3. Local OCR fallback — current
 
-- Prefer text already available from Laserfiche.
+- Prefer text already available from Laserfiche. (complete)
 - Run local OCR only when usable text is missing.
 - Record whether text came from Laserfiche, OCR, or neither.
 

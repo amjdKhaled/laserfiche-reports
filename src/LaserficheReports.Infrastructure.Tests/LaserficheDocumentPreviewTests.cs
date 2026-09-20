@@ -124,6 +124,33 @@ public sealed class LaserficheDocumentPreviewTests
             handler.Requests[1].Url);
     }
 
+    [Fact]
+    public async Task PageText_V2ReadsDocumentedJsonTextProperty()
+    {
+        var handler = new QueueHandler(Json("{\"text\":\"Searchable page text\"}"));
+        var service = CreateService(handler);
+
+        var result = await service.GetPageTextAsync(42, 3);
+
+        Assert.Equal("Searchable page text", result);
+        Assert.Single(handler.Requests);
+        Assert.EndsWith("/Entries/42/Document/Pages/3/Text", handler.Requests[0].Url);
+    }
+
+    [Fact]
+    public async Task PageText_V2ReturnsNullWhenPageHasNoText()
+    {
+        var handler = new QueueHandler(new HttpResponseMessage(HttpStatusCode.NotFound)
+        {
+            Content = new StringContent("not found")
+        });
+        var service = CreateService(handler);
+
+        var result = await service.GetPageTextAsync(42, 1);
+
+        Assert.Null(result);
+    }
+
     [Theory]
     [InlineData("application/octet-stream", "scan.pdf", "application/pdf")]
     [InlineData(null, "scan.jpeg", "image/jpeg")]
@@ -139,6 +166,16 @@ public sealed class LaserficheDocumentPreviewTests
     [InlineData("\"https://lf.test/file\"")]
     public void ExportLinkParser_AcceptsSupportedResponses(string body) =>
         Assert.Equal("https://lf.test/file", LaserficheDocumentService.ParseExportDownloadLink(body));
+
+    [Theory]
+    [InlineData("{\"text\":\"hello\"}", "application/json", "hello")]
+    [InlineData("plain text", "text/plain", "plain text")]
+    [InlineData("\"json string\"", "application/json", "json string")]
+    public void PageTextParser_AcceptsSupportedResponses(
+        string body,
+        string mediaType,
+        string expected) =>
+        Assert.Equal(expected, LaserficheDocumentService.ParsePageText(body, mediaType));
 
     [Theory]
     [InlineData("89504E470D0A1A0A", "image/png")]

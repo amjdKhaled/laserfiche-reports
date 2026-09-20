@@ -46,6 +46,16 @@ public interface ILaserficheDocumentService
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Retrieves the searchable text stored for a single Laserfiche page.
+    /// Returns <c>null</c> when the page has no text or the active API version
+    /// does not expose the V2 page-text endpoint.
+    /// </summary>
+    Task<string?> GetPageTextAsync(
+        int entryId,
+        int pageNumber,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Retrieves the entry metadata for a document, including file size and page count.
     /// Equivalent to <see cref="ILaserficheEntryService.GetEntryAsync"/> but scoped
     /// to document-type entries for semantic clarity.

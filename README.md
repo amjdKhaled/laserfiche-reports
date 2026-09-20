@@ -92,10 +92,11 @@ In a second PowerShell window, use the HTTPS address printed by `dotnet run`:
 Invoke-RestMethod -Method Post -Uri "https://localhost:PORT/api/ingestion/laserfiche/608" -SkipCertificateCheck
 ```
 
-This first experiment saves only the document identity and metadata. It sets
-`embedding` to `NULL`; OCR, chunking, and local embeddings are the next phase.
-Running the request again refreshes the same project-owned row instead of
-creating another one.
+The ingestion request saves the document identity, metadata, and any searchable
+page text already available in Laserfiche. It sets `embedding` to `NULL`; local
+OCR for pages without text, chunking, and embeddings are the next phase. Running
+the request again refreshes the same project-owned row instead of creating
+another one.
 
 To verify that the application can retrieve document content as well as
 metadata, stream page 1 to a local file:
