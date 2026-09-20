@@ -1,3 +1,4 @@
+using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using LaserficheReports.Infrastructure.Options;
@@ -37,9 +38,34 @@ internal sealed class LaserficheRequestLoggingHandler : DelegatingHandler
             request.RequestUri);
 
         var response = await base.SendAsync(request, cancellationToken).ConfigureAwait(false);
-        var responseBody = await response.Content
-            .ReadAsStringAsync(cancellationToken)
+        var mediaType = response.Content.Headers.ContentType?.MediaType;
+
+        // Never decode image, PDF, or other file responses as text. Decoding a
+        // PNG changes its leading 0x89 byte to the UTF-8 replacement sequence
+        // EF-BF-BD and corrupts the download. Binary bodies pass through untouched.
+        if (!IsTextContentType(mediaType))
+        {
+            _logger.LogInformation(
+                "Laserfiche response: HTTP {StatusCode} {ReasonPhrase} for {Method} {RequestUrl}. " +
+                "Binary response: ContentType={ContentType}; ContentLength={ContentLength}",
+                (int)response.StatusCode,
+                response.ReasonPhrase,
+                request.Method,
+                request.RequestUri,
+                mediaType ?? "(missing)",
+                response.Content.Headers.ContentLength);
+
+            return response;
+        }
+
+        var originalHeaders = response.Content.Headers
+            .Select(header => new KeyValuePair<string, IEnumerable<string>>(header.Key, header.Value.ToArray()))
+            .ToArray();
+        var responseBytes = await response.Content
+            .ReadAsByteArrayAsync(cancellationToken)
             .ConfigureAwait(false);
+        var responseBody = GetTextEncoding(response.Content.Headers.ContentType)
+            .GetString(responseBytes);
 
         _logger.LogInformation(
             "Laserfiche response: HTTP {StatusCode} {ReasonPhrase} for {Method} {RequestUrl}. " +
@@ -50,15 +76,44 @@ internal sealed class LaserficheRequestLoggingHandler : DelegatingHandler
             request.RequestUri,
             RedactSensitiveJson(responseBody));
 
-        // Reading the content above consumes it. Replace it so the service layer
-        // receives the exact same response body after it has been logged.
-        var mediaType = response.Content.Headers.ContentType?.MediaType ?? "application/json";
-        response.Content = new StringContent(
-            responseBody,
-            Encoding.UTF8,
-            mediaType);
+        // Keep the original bytes and all content headers. Re-encoding the body
+        // could change it even for non-UTF-8 textual Laserfiche responses.
+        var replacement = new ByteArrayContent(responseBytes);
+        foreach (var header in originalHeaders)
+        {
+            replacement.Headers.TryAddWithoutValidation(header.Key, header.Value);
+        }
+
+        response.Content = replacement;
 
         return response;
+    }
+
+    private static bool IsTextContentType(string? mediaType)
+    {
+        if (string.IsNullOrWhiteSpace(mediaType)) return false;
+
+        return mediaType.StartsWith("text/", StringComparison.OrdinalIgnoreCase) ||
+               mediaType.Equals("application/json", StringComparison.OrdinalIgnoreCase) ||
+               mediaType.EndsWith("+json", StringComparison.OrdinalIgnoreCase) ||
+               mediaType.Equals("application/xml", StringComparison.OrdinalIgnoreCase) ||
+               mediaType.EndsWith("+xml", StringComparison.OrdinalIgnoreCase) ||
+               mediaType.Equals("application/x-www-form-urlencoded", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static Encoding GetTextEncoding(MediaTypeHeaderValue? contentType)
+    {
+        var charset = contentType?.CharSet?.Trim('"');
+        if (string.IsNullOrWhiteSpace(charset)) return Encoding.UTF8;
+
+        try
+        {
+            return Encoding.GetEncoding(charset);
+        }
+        catch (ArgumentException)
+        {
+            return Encoding.UTF8;
+        }
     }
 
     private static string RedactSensitiveJson(string body)
