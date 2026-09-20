@@ -78,7 +78,11 @@ Set the local repository and PostgreSQL connection in
   "Ocr": {
     "Enabled": true,
     "ExecutablePath": "C:\\Program Files\\Tesseract-OCR\\tesseract.exe",
-    "Languages": "ara+eng"
+    "Languages": "ara+eng",
+    "PageSegmentationMode": 4,
+    "FallbackPageSegmentationModes": [6],
+    "ImageScaleFactor": 2,
+    "Dpi": 300
   },
   "LocalAI": {
     "Provider": "Ollama",
@@ -97,6 +101,10 @@ used only when Laserfiche has no searchable text for a page. Images are streamed
 from Laserfiche into the local OCR process and are not saved in PostgreSQL or
 sent to an external service. If Tesseract is unavailable, ingestion continues
 with metadata and reports `metadata-only` rather than failing the document.
+Receipt and table pages are enlarged in memory and evaluated with table-aware
+and uniform-block page segmentation. Bidirectional formatting markers emitted
+by mixed Arabic/English OCR are removed before indexing. Prefer the official
+`tessdata_best` Arabic model when accuracy matters more than OCR speed.
 
 Start the API with local Laserfiche credentials, then ingest Entry `608`:
 
