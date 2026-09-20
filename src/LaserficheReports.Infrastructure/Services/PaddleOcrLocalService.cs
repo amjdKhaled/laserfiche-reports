@@ -141,12 +141,12 @@ internal sealed class PaddleOcrLocalService : ILocalOcrService
             if (string.IsNullOrWhiteSpace(line))
             {
                 if (result.Length > 0 && consecutiveBlankLines == 0)
-                    result.AppendLine();
+                    result.Append('\n');
                 consecutiveBlankLines++;
                 continue;
             }
 
-            if (result.Length > 0) result.AppendLine();
+            if (result.Length > 0) result.Append('\n');
             result.Append(line);
             consecutiveBlankLines = 0;
         }
