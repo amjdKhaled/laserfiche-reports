@@ -75,7 +75,7 @@ public sealed class PaddleOcrLocalServiceTests
         };
         return new PaddleOcrLocalService(
             new StubHttpClientFactory(client),
-            Options.Create(new PaddleOcrOptions()),
+            Microsoft.Extensions.Options.Options.Create(new PaddleOcrOptions()),
             NullLogger<PaddleOcrLocalService>.Instance);
     }
 
