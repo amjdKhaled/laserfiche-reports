@@ -6,8 +6,9 @@ namespace LaserficheReports.Application.Interfaces;
 public interface ILaserficheDocumentIngestionService
 {
     /// <summary>
-    /// Reads one document, its metadata, and any existing Laserfiche page text,
-    /// then creates or refreshes its row in the existing <c>public.documents</c> table.
+    /// Reads one document, its metadata, and page text; uses local OCR when needed;
+    /// then creates or refreshes its document and embedded chunk rows in the existing
+    /// <c>public.documents</c> table.
     /// </summary>
     Task<DocumentIngestionResult> IngestMetadataAsync(
         int entryId,

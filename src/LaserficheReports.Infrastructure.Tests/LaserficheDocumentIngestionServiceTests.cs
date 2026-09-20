@@ -118,4 +118,84 @@ public sealed class LaserficheDocumentIngestionServiceTests
         Assert.Equal(1, root.GetProperty("text_pages")[0].GetProperty("page_number").GetInt32());
         Assert.Equal("ocr", root.GetProperty("text_pages")[0].GetProperty("source").GetString());
     }
+
+    [Fact]
+    public void PageTextChunker_PreservesPageAndOffsetsWithOverlap()
+    {
+        var text = string.Join(' ', Enumerable.Repeat("Arabic English searchable text.", 20));
+        LaserficheDocumentIngestionService.IndexedPageText[] pages =
+        [
+            new(3, text, "ocr")
+        ];
+
+        var chunks = PageTextChunker.Split(pages, chunkSize: 200, overlap: 40);
+
+        Assert.True(chunks.Count > 1);
+        Assert.All(chunks, chunk =>
+        {
+            Assert.Equal(3, chunk.PageNumber);
+            Assert.Equal("ocr", chunk.Source);
+            Assert.False(string.IsNullOrWhiteSpace(chunk.Content));
+            Assert.True(chunk.EndOffset > chunk.StartOffset);
+        });
+        Assert.True(chunks[1].StartOffset < chunks[0].EndOffset);
+    }
+
+    [Fact]
+    public void BuildChunkMetadata_IncludesEvidenceReferences()
+    {
+        var entry = new LFEntry
+        {
+            Id = 608,
+            Name = "Purchase order",
+            FullPath = @"\Purchasing\Purchase order"
+        };
+        var chunk = new PageTextChunker.TextChunk(2, 1, 100, 240, "ocr", "chunk text");
+
+        var json = LaserficheDocumentIngestionService.BuildChunkMetadata(
+            "testemployee", entry, 607, chunk, 4, "nomic-embed-text-v2-moe", 768);
+
+        using var document = JsonDocument.Parse(json);
+        var root = document.RootElement;
+        Assert.Equal("document-chunk", root.GetProperty("record_type").GetString());
+        Assert.Equal(608, root.GetProperty("entry_id").GetInt32());
+        Assert.Equal(607, root.GetProperty("parent_document_id").GetInt64());
+        Assert.Equal(1, root.GetProperty("page_number").GetInt32());
+        Assert.Equal(2, root.GetProperty("chunk_index").GetInt32());
+        Assert.Equal(768, root.GetProperty("embedding_dimensions").GetInt32());
+    }
+
+    [Fact]
+    public void BuildVectorLiteral_UsesPostgresCompatibleInvariantFormat()
+    {
+        var literal = LaserficheDocumentIngestionService.BuildVectorLiteral([1.5f, -0.25f, 0f]);
+
+        Assert.Equal("[1.5,-0.25,0]", literal);
+    }
+
+    [Fact]
+    public void ParseEmbeddings_AcceptsOllamaBatchResponse()
+    {
+        const string response = """
+            {"embeddings":[[0.1,0.2,0.3],[0.4,0.5,0.6]]}
+            """;
+
+        var embeddings = OllamaTextEmbeddingService.ParseEmbeddings(response, 3, "test-model");
+
+        Assert.Equal(2, embeddings.Count);
+        Assert.Equal(new[] { 0.1f, 0.2f, 0.3f }, embeddings[0]);
+        Assert.Equal(new[] { 0.4f, 0.5f, 0.6f }, embeddings[1]);
+    }
+
+    [Fact]
+    public void ParseEmbeddings_RejectsWrongDimensions()
+    {
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            OllamaTextEmbeddingService.ParseEmbeddings(
+                "{\"embeddings\":[[0.1,0.2]]}",
+                3,
+                "test-model"));
+
+        Assert.Contains("returned 2 dimensions", exception.Message);
+    }
 }

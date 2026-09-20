@@ -8,4 +8,6 @@ public sealed record DocumentIngestionResult(
     string DocumentName,
     int MetadataFieldCount,
     bool WasInserted,
-    string IngestionStatus);
+    string IngestionStatus,
+    int ChunkCount,
+    string? EmbeddingModel);

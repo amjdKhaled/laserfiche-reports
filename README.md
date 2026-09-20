@@ -41,7 +41,7 @@ never committed.
 1. Laserfiche connection and document retrieval.
 2. Local Supabase schema and one-document ingestion.
 3. Local OCR fallback through Tesseract. (implemented)
-4. Chunking and local embeddings.
+4. Chunking and local embeddings. (implemented)
 5. Vector retrieval and local LLM answering.
 6. Single-chat UI.
 7. n8n automation and incremental synchronization.
@@ -79,6 +79,14 @@ Set the local repository and PostgreSQL connection in
     "Enabled": true,
     "ExecutablePath": "C:\\Program Files\\Tesseract-OCR\\tesseract.exe",
     "Languages": "ara+eng"
+  },
+  "LocalAI": {
+    "Provider": "Ollama",
+    "BaseUrl": "http://localhost:11434",
+    "EmbeddingModel": "nomic-embed-text-v2-moe",
+    "EmbeddingDimensions": 768,
+    "ChunkSize": 1200,
+    "ChunkOverlap": 200
   }
 }
 ```
@@ -106,10 +114,11 @@ Invoke-RestMethod -Method Post -Uri "https://localhost:PORT/api/ingestion/laserf
 
 The ingestion request saves the document identity, metadata, and searchable
 page text. It prefers text already available in Laserfiche and runs local OCR
-only for missing pages. Metadata records whether each page came from
-`laserfiche` or `ocr`. It sets `embedding` to `NULL`; chunking and embeddings are
-the next phase. Running the request again refreshes the same project-owned row
-instead of creating another one.
+only for missing pages. It then splits every page into overlapping chunks and
+uses the local Ollama `nomic-embed-text-v2-moe` model to create 768-dimensional
+embeddings. The document row keeps `embedding = NULL`; its `document-chunk`
+rows contain the vectors used by retrieval. Running the request again refreshes
+the same document row and replaces only that document's project-owned chunks.
 
 To verify that the application can retrieve document content as well as
 metadata, stream page 1 to a local file:

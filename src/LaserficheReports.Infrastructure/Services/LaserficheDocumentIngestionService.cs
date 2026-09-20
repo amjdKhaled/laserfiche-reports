@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Globalization;
 using LaserficheReports.Application.DTOs;
 using LaserficheReports.Application.Interfaces;
 using LaserficheReports.Domain.Entities;
@@ -17,23 +18,29 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
     private readonly ILaserficheEntryService _entries;
     private readonly ILaserficheDocumentService _documents;
     private readonly ILocalOcrService _ocr;
+    private readonly ITextEmbeddingService _embeddings;
     private readonly IRepositoryContext _repositoryContext;
     private readonly SupabaseOptions _options;
+    private readonly LocalAiOptions _localAiOptions;
     private readonly ILogger<LaserficheDocumentIngestionService> _logger;
 
     public LaserficheDocumentIngestionService(
         ILaserficheEntryService entries,
         ILaserficheDocumentService documents,
         ILocalOcrService ocr,
+        ITextEmbeddingService embeddings,
         IRepositoryContext repositoryContext,
         IOptions<SupabaseOptions> options,
+        IOptions<LocalAiOptions> localAiOptions,
         ILogger<LaserficheDocumentIngestionService> logger)
     {
         _entries = entries;
         _documents = documents;
         _ocr = ocr;
+        _embeddings = embeddings;
         _repositoryContext = repositoryContext;
         _options = options.Value;
+        _localAiOptions = localAiOptions.Value;
         _logger = logger;
     }
 
@@ -119,6 +126,17 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
         var hasUsableText = pageTexts.Count > 0;
         var ingestionStatus = hasUsableText ? "content-indexed" : "metadata-only";
         var textSource = ResolveTextSource(laserficheTextPageCount, ocrTextPageCount);
+        var chunks = hasUsableText
+            ? PageTextChunker.Split(
+                pageTexts,
+                _localAiOptions.EffectiveChunkSize,
+                _localAiOptions.EffectiveChunkOverlap)
+            : Array.Empty<PageTextChunker.TextChunk>();
+        var embeddings = chunks.Count > 0
+            ? await _embeddings.CreateEmbeddingsAsync(
+                chunks.Select(chunk => _localAiOptions.DocumentEmbeddingPrefix + chunk.Content).ToArray(),
+                cancellationToken).ConfigureAwait(false)
+            : Array.Empty<float[]>();
         var metadata = BuildMetadata(
             repository.RepositoryId,
             entry,
@@ -128,33 +146,59 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
             pageTexts.Count,
             laserficheTextPageCount,
             ocrTextPageCount,
-            pageTexts);
+            pageTexts,
+            chunks.Count,
+            chunks.Count > 0 ? _localAiOptions.EmbeddingModel : null);
         var content = BuildIndexedContent(entry, fields, pageTexts);
 
         await using var connection = new NpgsqlConnection(_options.PostgresConnectionString);
         await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
 
-        await using var command = new NpgsqlCommand(Sql, connection);
-        command.Parameters.AddWithValue("content", content);
-        command.Parameters.AddWithValue("metadata", metadata);
-        command.Parameters.AddWithValue("source", Source);
-        command.Parameters.AddWithValue("recordType", RecordType);
-        command.Parameters.AddWithValue("repositoryId", repository.RepositoryId);
-        command.Parameters.AddWithValue("entryId", entryId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        var (documentRowId, wasInserted) = await UpsertDocumentAsync(
+            connection,
+            transaction,
+            content,
+            metadata,
+            repository.RepositoryId,
+            entryId,
+            cancellationToken).ConfigureAwait(false);
 
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        await DeleteExistingChunksAsync(
+            connection,
+            transaction,
+            repository.RepositoryId,
+            entryId,
+            cancellationToken).ConfigureAwait(false);
+
+        for (var index = 0; index < chunks.Count; index++)
         {
-            throw new InvalidOperationException("Supabase did not return the indexed document row.");
+            var chunk = chunks[index];
+            var chunkMetadata = BuildChunkMetadata(
+                repository.RepositoryId,
+                entry,
+                documentRowId,
+                chunk,
+                chunks.Count,
+                _localAiOptions.EmbeddingModel,
+                _localAiOptions.EffectiveEmbeddingDimensions);
+
+            await InsertChunkAsync(
+                connection,
+                transaction,
+                chunk.Content,
+                chunkMetadata,
+                embeddings[index],
+                cancellationToken).ConfigureAwait(false);
         }
 
-        var documentRowId = reader.GetInt64(0);
-        var wasInserted = reader.GetBoolean(1);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
 
         _logger.LogInformation(
-            "{Action} Laserfiche metadata row {RowId} for repository {RepositoryId}, Entry {EntryId}.",
+            "{Action} Laserfiche row {RowId} and stored {ChunkCount} embedded chunks for repository {RepositoryId}, Entry {EntryId}.",
             wasInserted ? "Inserted" : "Updated",
             documentRowId,
+            chunks.Count,
             repository.RepositoryId,
             entryId);
 
@@ -165,7 +209,9 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
             entry.Name,
             fields.Count,
             wasInserted,
-            ingestionStatus);
+            ingestionStatus,
+            chunks.Count,
+            chunks.Count > 0 ? _localAiOptions.EmbeddingModel : null);
     }
 
     internal static string BuildMetadata(
@@ -177,7 +223,9 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
         int textPageCount = 0,
         int laserficheTextPageCount = 0,
         int ocrTextPageCount = 0,
-        IReadOnlyList<IndexedPageText>? textPages = null)
+        IReadOnlyList<IndexedPageText>? textPages = null,
+        int chunkCount = 0,
+        string? embeddingModel = null)
     {
         var payload = new
         {
@@ -200,6 +248,9 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
             text_page_count = textPageCount,
             laserfiche_text_page_count = laserficheTextPageCount,
             ocr_text_page_count = ocrTextPageCount,
+            chunk_count = chunkCount,
+            embedding_model = embeddingModel,
+            embedding_status = chunkCount > 0 ? "complete" : "not-created",
             text_pages = (textPages ?? Array.Empty<IndexedPageText>())
                 .OrderBy(page => page.PageNumber)
                 .Select(page => new
@@ -258,7 +309,96 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
 
     internal sealed record IndexedPageText(int PageNumber, string Text, string Source);
 
-    private const string Sql = """
+    internal static string BuildChunkMetadata(
+        string repositoryId,
+        LFEntry entry,
+        long parentDocumentId,
+        PageTextChunker.TextChunk chunk,
+        int chunkCount,
+        string embeddingModel,
+        int embeddingDimensions)
+    {
+        return JsonSerializer.Serialize(new
+        {
+            source = Source,
+            record_type = "document-chunk",
+            repository_id = repositoryId,
+            entry_id = entry.Id,
+            document_name = entry.Name,
+            full_path = entry.FullPath,
+            folder_path = entry.FolderPath,
+            template_id = entry.TemplateId,
+            template_name = entry.TemplateName,
+            parent_document_id = parentDocumentId,
+            chunk_index = chunk.Index,
+            chunk_count = chunkCount,
+            page_number = chunk.PageNumber,
+            start_offset = chunk.StartOffset,
+            end_offset = chunk.EndOffset,
+            text_source = chunk.Source,
+            embedding_model = embeddingModel,
+            embedding_dimensions = embeddingDimensions,
+            indexed_at = DateTimeOffset.UtcNow
+        });
+    }
+
+    internal static string BuildVectorLiteral(IReadOnlyList<float> embedding) =>
+        "[" + string.Join(",", embedding.Select(value => value.ToString("R", CultureInfo.InvariantCulture))) + "]";
+
+    private static async Task<(long DocumentRowId, bool WasInserted)> UpsertDocumentAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        string content,
+        string metadata,
+        string repositoryId,
+        int entryId,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand(UpsertDocumentSql, connection, transaction);
+        command.Parameters.AddWithValue("content", content);
+        command.Parameters.AddWithValue("metadata", metadata);
+        command.Parameters.AddWithValue("source", Source);
+        command.Parameters.AddWithValue("recordType", RecordType);
+        command.Parameters.AddWithValue("repositoryId", repositoryId);
+        command.Parameters.AddWithValue("entryId", entryId.ToString(CultureInfo.InvariantCulture));
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            throw new InvalidOperationException("Supabase did not return the indexed document row.");
+
+        return (reader.GetInt64(0), reader.GetBoolean(1));
+    }
+
+    private static async Task DeleteExistingChunksAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        string repositoryId,
+        int entryId,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand(DeleteChunksSql, connection, transaction);
+        command.Parameters.AddWithValue("source", Source);
+        command.Parameters.AddWithValue("repositoryId", repositoryId);
+        command.Parameters.AddWithValue("entryId", entryId.ToString(CultureInfo.InvariantCulture));
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task InsertChunkAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        string content,
+        string metadata,
+        IReadOnlyList<float> embedding,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand(InsertChunkSql, connection, transaction);
+        command.Parameters.AddWithValue("content", content);
+        command.Parameters.AddWithValue("metadata", metadata);
+        command.Parameters.AddWithValue("embedding", BuildVectorLiteral(embedding));
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private const string UpsertDocumentSql = """
         WITH updated AS (
             UPDATE public.documents
             SET content = @content,
@@ -280,5 +420,18 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
         UNION ALL
         SELECT id, TRUE AS was_inserted FROM inserted
         LIMIT 1;
+        """;
+
+    private const string DeleteChunksSql = """
+        DELETE FROM public.documents
+        WHERE metadata ->> 'source' = @source
+          AND metadata ->> 'record_type' = 'document-chunk'
+          AND metadata ->> 'repository_id' = @repositoryId
+          AND metadata ->> 'entry_id' = @entryId;
+        """;
+
+    private const string InsertChunkSql = """
+        INSERT INTO public.documents (content, metadata, embedding)
+        VALUES (@content, CAST(@metadata AS jsonb), CAST(@embedding AS extensions.vector));
         """;
 }

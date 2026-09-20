@@ -20,13 +20,13 @@
 - Record whether text came from Laserfiche, OCR, both, or neither. (complete)
 - Stream page images to OCR without persisting document files outside Laserfiche. (complete)
 
-## 4. Chunking and embeddings — current
+## 4. Chunking and embeddings — complete
 
-- Split text with page and offset references.
-- Generate 768-dimensional embeddings locally with the existing `nomic-embed-text-v2-moe` model.
-- Store chunks and embeddings in pgvector.
+- Split text with page and offset references. (complete)
+- Generate 768-dimensional embeddings locally with the existing `nomic-embed-text-v2-moe` model. (complete)
+- Store source-labelled chunk rows and embeddings in the existing `documents` table. (complete)
 
-## 5. Retrieval
+## 5. Retrieval — current
 
 - Embed the user's question locally.
 - Retrieve the best chunks with repository and permission filters.

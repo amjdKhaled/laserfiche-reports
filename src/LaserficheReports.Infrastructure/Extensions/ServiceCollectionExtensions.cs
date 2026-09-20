@@ -46,6 +46,9 @@ public static class ServiceCollectionExtensions
         services.AddOptions<OcrOptions>()
             .Bind(configuration.GetSection(OcrOptions.SectionName));
 
+        services.AddOptions<LocalAiOptions>()
+            .Bind(configuration.GetSection(LocalAiOptions.SectionName));
+
         // ── Memory cache (token cache) ────────────────────────────────────────
         services.AddMemoryCache();
 
@@ -91,6 +94,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ILaserficheSearchService, LaserficheSearchService>();
         services.AddScoped<ILaserficheDocumentService, LaserficheDocumentService>();
         services.AddScoped<ILocalOcrService, TesseractLocalOcrService>();
+        services.AddScoped<ITextEmbeddingService, OllamaTextEmbeddingService>();
         services.AddScoped<ILaserficheDocumentIngestionService, LaserficheDocumentIngestionService>();
         services.AddScoped<ILaserficheTemplateService, LaserficheTemplateService>();
         services.AddScoped<LaserficheAnalyticsService>();
@@ -192,6 +196,18 @@ public static class ServiceCollectionExtensions
         .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
         {
             AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate
+        });
+
+        services.AddHttpClient("Ollama", (sp, client) =>
+        {
+            var opts = sp.GetRequiredService<IOptions<LocalAiOptions>>().Value;
+            if (!Uri.TryCreate(opts.BaseUrl, UriKind.Absolute, out var baseUri))
+                throw new InvalidOperationException("LocalAI:BaseUrl must be an absolute URL.");
+
+            client.BaseAddress = baseUri;
+            client.Timeout = TimeSpan.FromSeconds(opts.EffectiveTimeoutSeconds);
+            client.DefaultRequestHeaders.Accept.Add(
+                new MediaTypeWithQualityHeaderValue("application/json"));
         });
     }
 }
