@@ -226,7 +226,8 @@ internal sealed class LaserficheDocumentService : ILaserficheDocumentService
                     entryId,
                     pageNumber);
 
-                return await StreamEdocAsync(entryId, cancellationToken).ConfigureAwait(false);
+                return await GetV1EdocPagePreviewAsync(entryId, pageNumber, cancellationToken)
+                    .ConfigureAwait(false);
             }
 
             throw new LaserficheException(
@@ -352,8 +353,47 @@ internal sealed class LaserficheDocumentService : ILaserficheDocumentService
             downloadResponse.Dispose();
         }
 
+        return CreateBrowserSafePageStream(
+            bytes,
+            upstreamContentType,
+            contentDisposition,
+            upstreamFileName,
+            entryId,
+            pageNumber);
+    }
+
+    private async Task<LaserficheEdocStream> GetV1EdocPagePreviewAsync(
+        int entryId,
+        int pageNumber,
+        CancellationToken cancellationToken)
+    {
+        using var edoc = await StreamEdocAsync(entryId, cancellationToken).ConfigureAwait(false);
+        using var buffer = new MemoryStream();
+        await edoc.Content.CopyToAsync(buffer, cancellationToken).ConfigureAwait(false);
+
+        return CreateBrowserSafePageStream(
+            buffer.ToArray(),
+            edoc.ContentType,
+            edoc.ContentDisposition,
+            edoc.FileName,
+            entryId,
+            pageNumber);
+    }
+
+    private static LaserficheEdocStream CreateBrowserSafePageStream(
+        byte[] bytes,
+        string upstreamContentType,
+        string? contentDisposition,
+        string? upstreamFileName,
+        int entryId,
+        int pageNumber)
+    {
         var detectedContentType = DetectImageContentType(bytes);
-        if (detectedContentType == "image/tiff")
+
+        // Repository API v1 exposes the original edoc rather than a dedicated
+        // page-image resource. Normalize the common raster formats to a real PNG
+        // so the HTTP content type, file extension, and bytes always agree.
+        if (detectedContentType is "image/tiff" or "image/jpeg" or "image/bmp" or "image/gif")
         {
             try
             {
@@ -378,8 +418,8 @@ internal sealed class LaserficheDocumentService : ILaserficheDocumentService
             catch (Exception ex) when (ex is ArgumentException or ExternalException)
             {
                 throw new LaserficheException(
-                    $"Laserfiche returned a TIFF page for entry {entryId} page {pageNumber}, " +
-                    "but local TIFF-to-PNG conversion failed.",
+                    $"Laserfiche returned a {detectedContentType} page for entry {entryId} " +
+                    $"page {pageNumber}, but local conversion to PNG failed.",
                     500,
                     ex);
             }
@@ -421,6 +461,19 @@ internal sealed class LaserficheDocumentService : ILaserficheDocumentService
 
         if (bytes.Length >= 3 && bytes[0] == 0xFF && bytes[1] == 0xD8 && bytes[2] == 0xFF)
             return "image/jpeg";
+
+        if (bytes.Length >= 6 &&
+            bytes[0] == 0x47 && bytes[1] == 0x49 && bytes[2] == 0x46 &&
+            bytes[3] == 0x38 && (bytes[4] == 0x37 || bytes[4] == 0x39) && bytes[5] == 0x61)
+            return "image/gif";
+
+        if (bytes.Length >= 2 && bytes[0] == 0x42 && bytes[1] == 0x4D)
+            return "image/bmp";
+
+        if (bytes.Length >= 5 &&
+            bytes[0] == 0x25 && bytes[1] == 0x50 && bytes[2] == 0x44 &&
+            bytes[3] == 0x46 && bytes[4] == 0x2D)
+            return "application/pdf";
 
         return null;
     }

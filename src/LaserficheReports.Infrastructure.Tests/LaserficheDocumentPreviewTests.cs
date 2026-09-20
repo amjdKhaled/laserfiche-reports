@@ -145,6 +145,9 @@ public sealed class LaserficheDocumentPreviewTests
     [InlineData("49492A00", "image/tiff")]
     [InlineData("4D4D002A", "image/tiff")]
     [InlineData("FFD8FF", "image/jpeg")]
+    [InlineData("474946383961", "image/gif")]
+    [InlineData("424D", "image/bmp")]
+    [InlineData("255044462D", "application/pdf")]
     [InlineData("7B7D", null)]
     public void ImageType_IsDetectedFromFileSignature(string hex, string? expected) =>
         Assert.Equal(
