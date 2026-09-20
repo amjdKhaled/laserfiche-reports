@@ -8,4 +8,6 @@ appsettings.Local.json
 .env
 *.user
 *.suo
-
+**/.venv/
+**/__pycache__/
+*.pyc

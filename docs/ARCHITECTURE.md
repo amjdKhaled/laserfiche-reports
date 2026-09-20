@@ -8,7 +8,7 @@ through localhost or the local network only.
 | ASP.NET Core | Chat UI, local API, security boundary, orchestration |
 | Laserfiche Repository API | Source documents, metadata, text, and repository structure |
 | Supabase/PostgreSQL + pgvector | Document index, chunks, metadata mirror, embeddings |
-| Local Tesseract OCR | Stream and extract Arabic/English text only when Laserfiche has no usable page text |
+| Local PaddleOCR-VL worker | Parse Arabic/English text and document layout only when Laserfiche has no usable page text |
 | Ollama or LM Studio | Local embeddings and answer generation |
 | n8n | Scheduled/incremental ingestion after the core pipeline works |
 

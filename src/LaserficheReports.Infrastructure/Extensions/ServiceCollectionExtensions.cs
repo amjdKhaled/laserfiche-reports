@@ -43,8 +43,8 @@ public static class ServiceCollectionExtensions
         services.AddOptions<SupabaseOptions>()
             .Bind(configuration.GetSection(SupabaseOptions.SectionName));
 
-        services.AddOptions<OcrOptions>()
-            .Bind(configuration.GetSection(OcrOptions.SectionName));
+        services.AddOptions<PaddleOcrOptions>()
+            .Bind(configuration.GetSection(PaddleOcrOptions.SectionName));
 
         services.AddOptions<LocalAiOptions>()
             .Bind(configuration.GetSection(LocalAiOptions.SectionName));
@@ -93,7 +93,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ILaserficheFieldDefinitionService, LaserficheFieldDefinitionService>();
         services.AddScoped<ILaserficheSearchService, LaserficheSearchService>();
         services.AddScoped<ILaserficheDocumentService, LaserficheDocumentService>();
-        services.AddScoped<ILocalOcrService, TesseractLocalOcrService>();
+        services.AddScoped<ILocalOcrService, PaddleOcrLocalService>();
         services.AddScoped<ITextEmbeddingService, OllamaTextEmbeddingService>();
         services.AddScoped<ILaserficheDocumentIngestionService, LaserficheDocumentIngestionService>();
         services.AddScoped<ILaserficheTemplateService, LaserficheTemplateService>();
@@ -208,6 +208,25 @@ public static class ServiceCollectionExtensions
             client.Timeout = TimeSpan.FromSeconds(opts.EffectiveTimeoutSeconds);
             client.DefaultRequestHeaders.Accept.Add(
                 new MediaTypeWithQualityHeaderValue("application/json"));
+        });
+
+        services.AddHttpClient("PaddleOcr", (sp, client) =>
+        {
+            var opts = sp.GetRequiredService<IOptions<PaddleOcrOptions>>().Value;
+            var baseUri = PaddleOcrLocalService.ValidateLoopbackBaseUrl(opts.BaseUrl);
+            var normalizedBaseUrl = baseUri.AbsoluteUri.EndsWith('/', StringComparison.Ordinal)
+                ? baseUri
+                : new Uri(baseUri.AbsoluteUri + "/", UriKind.Absolute);
+
+            client.BaseAddress = normalizedBaseUrl;
+            client.Timeout = TimeSpan.FromSeconds(opts.EffectiveTimeoutSeconds);
+            client.DefaultRequestHeaders.Accept.Add(
+                new MediaTypeWithQualityHeaderValue("application/json"));
+        })
+        .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+        {
+            AllowAutoRedirect = false,
+            UseProxy = false
         });
     }
 }

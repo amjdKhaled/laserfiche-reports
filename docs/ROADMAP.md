@@ -16,7 +16,7 @@
 ## 3. Local OCR fallback — complete
 
 - Prefer text already available from Laserfiche. (complete)
-- Run local Tesseract OCR only when usable text is missing. (complete)
+- Run local PaddleOCR-VL only when usable text is missing. (complete)
 - Record whether text came from Laserfiche, OCR, both, or neither. (complete)
 - Stream page images to OCR without persisting document files outside Laserfiche. (complete)
 

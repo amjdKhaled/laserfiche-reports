@@ -40,7 +40,7 @@ never committed.
 
 1. Laserfiche connection and document retrieval.
 2. Local Supabase schema and one-document ingestion.
-3. Local OCR fallback through Tesseract. (implemented)
+3. Local OCR fallback through PaddleOCR-VL. (implemented)
 4. Chunking and local embeddings. (implemented)
 5. Vector retrieval and local LLM answering.
 6. Single-chat UI.
@@ -77,12 +77,10 @@ Set the local repository and PostgreSQL connection in
   },
   "Ocr": {
     "Enabled": true,
-    "ExecutablePath": "C:\\Program Files\\Tesseract-OCR\\tesseract.exe",
-    "Languages": "ara+eng",
-    "PageSegmentationMode": 4,
-    "FallbackPageSegmentationModes": [6],
-    "ImageScaleFactor": 2,
-    "Dpi": 300
+    "BaseUrl": "http://127.0.0.1:8765",
+    "TimeoutSeconds": 600,
+    "MinimumTextLength": 3,
+    "MaxImageSizeMegabytes": 50
   },
   "LocalAI": {
     "Provider": "Ollama",
@@ -95,16 +93,36 @@ Set the local repository and PostgreSQL connection in
 }
 ```
 
-Install Tesseract on the same Windows machine and include both the Arabic and
-English language data files (`ara.traineddata` and `eng.traineddata`). OCR is
-used only when Laserfiche has no searchable text for a page. Images are streamed
-from Laserfiche into the local OCR process and are not saved in PostgreSQL or
-sent to an external service. If Tesseract is unavailable, ingestion continues
-with metadata and reports `metadata-only` rather than failing the document.
-Receipt and table pages are enlarged in memory and evaluated with table-aware
-and uniform-block page segmentation. Bidirectional formatting markers emitted
-by mixed Arabic/English OCR are removed before indexing. Prefer the official
-`tessdata_best` Arabic model when accuracy matters more than OCR speed.
+Install the local PaddleOCR-VL worker once from a normal PowerShell window (no
+Administrator privileges are required):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\paddleocr-vl\setup.ps1
+```
+
+The setup creates an isolated Python environment inside `tools/paddleocr-vl`.
+Start the worker in its own PowerShell window before the .NET application:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\paddleocr-vl\start.ps1
+```
+
+The first start downloads PaddleOCR-VL model files and can take several minutes.
+When the console says `PaddleOCR-VL worker is ready`, verify it with:
+
+```powershell
+Invoke-RestMethod -Uri "http://127.0.0.1:8765/health"
+```
+
+OCR is used only when Laserfiche has no searchable page text. Page images are
+sent only over the machine's loopback interface; the .NET service rejects any
+non-loopback OCR URL. The worker temporarily writes one page to the operating
+system temp directory for model inference and deletes it immediately afterward.
+No page image is stored in PostgreSQL or sent to an external OCR service. If the
+worker is unavailable, ingestion continues with metadata and reports
+`metadata-only` rather than failing the document. Paddle's layout-aware Markdown
+output is retained so Arabic paragraphs, columns, headings, and tables remain
+more coherent when the text is chunked.
 
 Start the API with local Laserfiche credentials, then ingest Entry `608`:
 
