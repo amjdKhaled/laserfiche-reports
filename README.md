@@ -40,7 +40,7 @@ never committed.
 
 1. Laserfiche connection and document retrieval.
 2. Local Supabase schema and one-document ingestion.
-3. Local OCR fallback.
+3. Local OCR fallback through Tesseract. (implemented)
 4. Chunking and local embeddings.
 5. Vector retrieval and local LLM answering.
 6. Single-chat UI.
@@ -73,10 +73,22 @@ Set the local repository and PostgreSQL connection in
     "RepositoryId": "testemployee"
   },
   "Supabase": {
-    "PostgresConnectionString": "Host=localhost;Port=5432;Database=postgres;Username=postgres;Password=YOUR_LOCAL_PASSWORD"
+    "PostgresConnectionString": "Host=localhost;Port=5432;Database=postgres;Username=postgres.YOUR_POOLER_TENANT_ID;Password=YOUR_LOCAL_PASSWORD;SSL Mode=Disable"
+  },
+  "Ocr": {
+    "Enabled": true,
+    "ExecutablePath": "C:\\Program Files\\Tesseract-OCR\\tesseract.exe",
+    "Languages": "ara+eng"
   }
 }
 ```
+
+Install Tesseract on the same Windows machine and include both the Arabic and
+English language data files (`ara.traineddata` and `eng.traineddata`). OCR is
+used only when Laserfiche has no searchable text for a page. Images are streamed
+from Laserfiche into the local OCR process and are not saved in PostgreSQL or
+sent to an external service. If Tesseract is unavailable, ingestion continues
+with metadata and reports `metadata-only` rather than failing the document.
 
 Start the API with local Laserfiche credentials, then ingest Entry `608`:
 
@@ -92,11 +104,12 @@ In a second PowerShell window, use the HTTPS address printed by `dotnet run`:
 Invoke-RestMethod -Method Post -Uri "https://localhost:PORT/api/ingestion/laserfiche/608" -SkipCertificateCheck
 ```
 
-The ingestion request saves the document identity, metadata, and any searchable
-page text already available in Laserfiche. It sets `embedding` to `NULL`; local
-OCR for pages without text, chunking, and embeddings are the next phase. Running
-the request again refreshes the same project-owned row instead of creating
-another one.
+The ingestion request saves the document identity, metadata, and searchable
+page text. It prefers text already available in Laserfiche and runs local OCR
+only for missing pages. Metadata records whether each page came from
+`laserfiche` or `ocr`. It sets `embedding` to `NULL`; chunking and embeddings are
+the next phase. Running the request again refreshes the same project-owned row
+instead of creating another one.
 
 To verify that the application can retrieve document content as well as
 metadata, stream page 1 to a local file:

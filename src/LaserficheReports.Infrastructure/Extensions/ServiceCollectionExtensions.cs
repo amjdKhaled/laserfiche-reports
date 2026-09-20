@@ -43,6 +43,9 @@ public static class ServiceCollectionExtensions
         services.AddOptions<SupabaseOptions>()
             .Bind(configuration.GetSection(SupabaseOptions.SectionName));
 
+        services.AddOptions<OcrOptions>()
+            .Bind(configuration.GetSection(OcrOptions.SectionName));
+
         // ── Memory cache (token cache) ────────────────────────────────────────
         services.AddMemoryCache();
 
@@ -87,6 +90,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ILaserficheFieldDefinitionService, LaserficheFieldDefinitionService>();
         services.AddScoped<ILaserficheSearchService, LaserficheSearchService>();
         services.AddScoped<ILaserficheDocumentService, LaserficheDocumentService>();
+        services.AddScoped<ILocalOcrService, TesseractLocalOcrService>();
         services.AddScoped<ILaserficheDocumentIngestionService, LaserficheDocumentIngestionService>();
         services.AddScoped<ILaserficheTemplateService, LaserficheTemplateService>();
         services.AddScoped<LaserficheAnalyticsService>();

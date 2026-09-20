@@ -13,13 +13,14 @@
 - Upsert its identity and metadata without storing the original file.
 - Save its available Laserfiche text and mark its ingestion state.
 
-## 3. Local OCR fallback — current
+## 3. Local OCR fallback — complete
 
 - Prefer text already available from Laserfiche. (complete)
-- Run local OCR only when usable text is missing.
-- Record whether text came from Laserfiche, OCR, or neither.
+- Run local Tesseract OCR only when usable text is missing. (complete)
+- Record whether text came from Laserfiche, OCR, both, or neither. (complete)
+- Stream page images to OCR without persisting document files outside Laserfiche. (complete)
 
-## 4. Chunking and embeddings
+## 4. Chunking and embeddings — current
 
 - Split text with page and offset references.
 - Generate 768-dimensional embeddings locally with the existing `nomic-embed-text-v2-moe` model.

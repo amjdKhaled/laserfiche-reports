@@ -16,6 +16,7 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
 
     private readonly ILaserficheEntryService _entries;
     private readonly ILaserficheDocumentService _documents;
+    private readonly ILocalOcrService _ocr;
     private readonly IRepositoryContext _repositoryContext;
     private readonly SupabaseOptions _options;
     private readonly ILogger<LaserficheDocumentIngestionService> _logger;
@@ -23,12 +24,14 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
     public LaserficheDocumentIngestionService(
         ILaserficheEntryService entries,
         ILaserficheDocumentService documents,
+        ILocalOcrService ocr,
         IRepositoryContext repositoryContext,
         IOptions<SupabaseOptions> options,
         ILogger<LaserficheDocumentIngestionService> logger)
     {
         _entries = entries;
         _documents = documents;
+        _ocr = ocr;
         _repositoryContext = repositoryContext;
         _options = options.Value;
         _logger = logger;
@@ -71,26 +74,61 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
                 .OrderBy(pageNumber => pageNumber)
                 .ToArray();
 
-        var pageTexts = new List<(int PageNumber, string Text)>();
+        var pageTexts = new List<IndexedPageText>();
         foreach (var pageNumber in pageNumbers)
         {
             var pageText = await _documents
                 .GetPageTextAsync(entryId, pageNumber, cancellationToken)
                 .ConfigureAwait(false);
+
             if (!string.IsNullOrWhiteSpace(pageText))
-                pageTexts.Add((pageNumber, pageText));
+            {
+                pageTexts.Add(new IndexedPageText(pageNumber, pageText, "laserfiche"));
+                continue;
+            }
+
+            try
+            {
+                using var pageImage = await _documents
+                    .GetPageImageAsync(entryId, pageNumber, cancellationToken)
+                    .ConfigureAwait(false);
+                var ocrText = await _ocr
+                    .TryExtractTextAsync(pageImage.Content, cancellationToken)
+                    .ConfigureAwait(false);
+
+                if (!string.IsNullOrWhiteSpace(ocrText))
+                    pageTexts.Add(new IndexedPageText(pageNumber, ocrText, "ocr"));
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                _logger.LogWarning(
+                    exception,
+                    "Local OCR fallback failed for Laserfiche Entry {EntryId}, page {PageNumber}. " +
+                    "The document will remain available with metadata only for this page.",
+                    entryId,
+                    pageNumber);
+            }
         }
 
-        var hasLaserficheText = pageTexts.Count > 0;
-        var ingestionStatus = hasLaserficheText ? "content-indexed" : "metadata-only";
-        var textSource = hasLaserficheText ? "laserfiche" : "none";
+        var laserficheTextPageCount = pageTexts.Count(page => page.Source == "laserfiche");
+        var ocrTextPageCount = pageTexts.Count(page => page.Source == "ocr");
+        var hasUsableText = pageTexts.Count > 0;
+        var ingestionStatus = hasUsableText ? "content-indexed" : "metadata-only";
+        var textSource = ResolveTextSource(laserficheTextPageCount, ocrTextPageCount);
         var metadata = BuildMetadata(
             repository.RepositoryId,
             entry,
             fields,
             ingestionStatus,
             textSource,
-            pageTexts.Count);
+            pageTexts.Count,
+            laserficheTextPageCount,
+            ocrTextPageCount,
+            pageTexts);
         var content = BuildIndexedContent(entry, fields, pageTexts);
 
         await using var connection = new NpgsqlConnection(_options.PostgresConnectionString);
@@ -136,7 +174,10 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
         IReadOnlyList<LFFieldValue> fields,
         string ingestionStatus = "metadata-only",
         string textSource = "none",
-        int textPageCount = 0)
+        int textPageCount = 0,
+        int laserficheTextPageCount = 0,
+        int ocrTextPageCount = 0,
+        IReadOnlyList<IndexedPageText>? textPages = null)
     {
         var payload = new
         {
@@ -157,6 +198,15 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
             ingestion_status = ingestionStatus,
             text_source = textSource,
             text_page_count = textPageCount,
+            laserfiche_text_page_count = laserficheTextPageCount,
+            ocr_text_page_count = ocrTextPageCount,
+            text_pages = (textPages ?? Array.Empty<IndexedPageText>())
+                .OrderBy(page => page.PageNumber)
+                .Select(page => new
+                {
+                    page_number = page.PageNumber,
+                    source = page.Source
+                }),
             indexed_at = DateTimeOffset.UtcNow,
             fields = fields.Select(field => new
             {
@@ -187,7 +237,7 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
     internal static string BuildIndexedContent(
         LFEntry entry,
         IReadOnlyList<LFFieldValue> fields,
-        IReadOnlyList<(int PageNumber, string Text)> pageTexts)
+        IReadOnlyList<IndexedPageText> pageTexts)
     {
         var sections = new List<string> { BuildMetadataContent(entry, fields) };
         sections.AddRange(pageTexts
@@ -197,6 +247,16 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
 
         return string.Join(Environment.NewLine + Environment.NewLine, sections);
     }
+
+    internal static string ResolveTextSource(int laserficheTextPageCount, int ocrTextPageCount)
+    {
+        if (laserficheTextPageCount > 0 && ocrTextPageCount > 0) return "mixed";
+        if (laserficheTextPageCount > 0) return "laserfiche";
+        if (ocrTextPageCount > 0) return "ocr";
+        return "none";
+    }
+
+    internal sealed record IndexedPageText(int PageNumber, string Text, string Source);
 
     private const string Sql = """
         WITH updated AS (

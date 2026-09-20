@@ -60,7 +60,11 @@ public sealed class LaserficheDocumentIngestionServiceTests
     {
         var entry = new LFEntry { Name = "Document A", FullPath = @"\HR\Document A" };
         LFFieldValue[] fields = [new() { FieldName = "Department", Value = "HR" }];
-        (int PageNumber, string Text)[] pages = [(2, "Second page"), (1, "First page")];
+        LaserficheDocumentIngestionService.IndexedPageText[] pages =
+        [
+            new(2, "Second page", "ocr"),
+            new(1, "First page", "laserfiche")
+        ];
 
         var content = LaserficheDocumentIngestionService.BuildIndexedContent(entry, fields, pages);
 
@@ -69,5 +73,49 @@ public sealed class LaserficheDocumentIngestionServiceTests
                     content.IndexOf("Page 2:", StringComparison.Ordinal));
         Assert.Contains("First page", content);
         Assert.Contains("Second page", content);
+    }
+
+    [Theory]
+    [InlineData(0, 0, "none")]
+    [InlineData(1, 0, "laserfiche")]
+    [InlineData(0, 1, "ocr")]
+    [InlineData(1, 1, "mixed")]
+    public void ResolveTextSource_ReportsTheSourcesUsed(
+        int laserfichePages,
+        int ocrPages,
+        string expected)
+    {
+        Assert.Equal(
+            expected,
+            LaserficheDocumentIngestionService.ResolveTextSource(laserfichePages, ocrPages));
+    }
+
+    [Fact]
+    public void BuildMetadata_RecordsOcrPageProvenance()
+    {
+        var entry = new LFEntry { Id = 609, Name = "Scanned page", PageCount = 1 };
+        LaserficheDocumentIngestionService.IndexedPageText[] pages =
+        [
+            new(1, "Extracted locally", "ocr")
+        ];
+
+        var json = LaserficheDocumentIngestionService.BuildMetadata(
+            "testemployee",
+            entry,
+            [],
+            "content-indexed",
+            "ocr",
+            textPageCount: 1,
+            laserficheTextPageCount: 0,
+            ocrTextPageCount: 1,
+            textPages: pages);
+
+        using var document = JsonDocument.Parse(json);
+        var root = document.RootElement;
+
+        Assert.Equal("ocr", root.GetProperty("text_source").GetString());
+        Assert.Equal(1, root.GetProperty("ocr_text_page_count").GetInt32());
+        Assert.Equal(1, root.GetProperty("text_pages")[0].GetProperty("page_number").GetInt32());
+        Assert.Equal("ocr", root.GetProperty("text_pages")[0].GetProperty("source").GetString());
     }
 }
