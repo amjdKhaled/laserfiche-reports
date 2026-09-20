@@ -214,7 +214,7 @@ public static class ServiceCollectionExtensions
         {
             var opts = sp.GetRequiredService<IOptions<PaddleOcrOptions>>().Value;
             var baseUri = PaddleOcrLocalService.ValidateLoopbackBaseUrl(opts.BaseUrl);
-            var normalizedBaseUrl = baseUri.AbsoluteUri.EndsWith('/', StringComparison.Ordinal)
+            var normalizedBaseUrl = baseUri.AbsoluteUri.EndsWith("/", StringComparison.Ordinal)
                 ? baseUri
                 : new Uri(baseUri.AbsoluteUri + "/", UriKind.Absolute);
 
