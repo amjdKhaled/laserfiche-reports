@@ -1,4 +1,5 @@
 using LaserficheReports.Application.Interfaces;
+using LaserficheReports.Domain.Exceptions;
 using LaserficheReports.Infrastructure.Configuration;
 using LaserficheReports.Infrastructure.Extensions;
 
@@ -126,8 +127,52 @@ app.MapPost("/api/ingestion/laserfiche/{entryId:int}", async (
         return Results.BadRequest(new { error = "Entry ID must be positive." });
     }
 
-    var result = await ingestion.IngestMetadataAsync(entryId, cancellationToken);
-    return Results.Ok(result);
+    try
+    {
+        var result = await ingestion.IngestMetadataAsync(entryId, cancellationToken);
+        return Results.Ok(result);
+    }
+    catch (LocalOcrException exception)
+    {
+        return Results.Json(new
+        {
+            error = "local_ocr_unavailable",
+            message = exception.Message,
+            preservedExistingIndex = true
+        }, statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+});
+
+app.MapGet("/api/ocr/status", async (
+    IHttpClientFactory httpClientFactory,
+    CancellationToken cancellationToken) =>
+{
+    try
+    {
+        var client = httpClientFactory.CreateClient("PaddleOcr");
+        using var response = await client.GetAsync("health", cancellationToken);
+        var body = await response.Content.ReadAsStringAsync(cancellationToken);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            return Results.Json(new
+            {
+                isReady = false,
+                statusCode = (int)response.StatusCode,
+                error = "PaddleOCR worker returned an unsuccessful health response."
+            }, statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
+
+        return Results.Content(body, "application/json; charset=utf-8", statusCode: StatusCodes.Status200OK);
+    }
+    catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException)
+    {
+        return Results.Json(new
+        {
+            isReady = false,
+            error = "PaddleOCR worker is unavailable. Start tools/paddleocr-vl/start.ps1."
+        }, statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
 });
 
 app.MapHealthChecks("/health");

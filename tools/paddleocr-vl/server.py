@@ -39,15 +39,53 @@ def extract_markdown(result: Any) -> str:
     markdown = getattr(result, "markdown", None)
     if markdown is None and isinstance(result, dict):
         markdown = result.get("markdown")
-    if markdown is None:
-        return ""
+
+    if isinstance(markdown, str):
+        return markdown.strip()
 
     texts = markdown.get("markdown_texts", "") if isinstance(markdown, dict) else ""
     if isinstance(texts, str):
-        return texts.strip()
+        text = texts.strip()
+        if text:
+            return text
     if isinstance(texts, list):
-        return "\n\n".join(str(value).strip() for value in texts if str(value).strip())
-    return str(texts).strip() if texts else ""
+        text = "\n\n".join(str(value).strip() for value in texts if str(value).strip())
+        if text:
+            return text
+
+    # PaddleOCR releases expose the structured result through either a `json`
+    # attribute or the result dictionary itself. Falling back to block_content
+    # prevents a successful OCR request from being reported as empty merely
+    # because the installed PaddleOCR version shaped `markdown` differently.
+    structured = getattr(result, "json", None)
+    if not isinstance(structured, dict) and isinstance(result, dict):
+        structured = result
+    if isinstance(structured, dict):
+        nested = structured.get("res")
+        if isinstance(nested, dict):
+            structured = nested
+
+        nested_markdown = structured.get("markdown")
+        if isinstance(nested_markdown, str) and nested_markdown.strip():
+            return nested_markdown.strip()
+        if isinstance(nested_markdown, dict):
+            nested_texts = nested_markdown.get("markdown_texts")
+            if isinstance(nested_texts, str) and nested_texts.strip():
+                return nested_texts.strip()
+
+        blocks = structured.get("parsing_res_list")
+        if isinstance(blocks, list):
+            block_texts = []
+            for block in blocks:
+                if not isinstance(block, dict):
+                    continue
+                content = block.get("block_content")
+                if isinstance(content, str) and content.strip():
+                    block_texts.append(content.strip())
+            if block_texts:
+                return "\n\n".join(block_texts)
+
+    return ""
 
 
 class OcrRuntime:
@@ -63,6 +101,9 @@ class OcrRuntime:
         self._pipeline = PaddleOCRVL(
             pipeline_version=pipeline_version,
             device=device,
+            use_doc_orientation_classify=True,
+            use_doc_unwarping=True,
+            format_block_content=True,
         )
         print("PaddleOCR-VL worker is ready.", flush=True)
 

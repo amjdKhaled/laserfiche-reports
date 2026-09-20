@@ -10,4 +10,8 @@ public sealed record DocumentIngestionResult(
     bool WasInserted,
     string IngestionStatus,
     int ChunkCount,
-    string? EmbeddingModel);
+    string? EmbeddingModel,
+    int DetectedPageCount,
+    int OcrAttemptCount,
+    int OcrPageCount,
+    string? ContentDiagnostic);

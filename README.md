@@ -80,7 +80,8 @@ Set the local repository and PostgreSQL connection in
     "BaseUrl": "http://127.0.0.1:8765",
     "TimeoutSeconds": 600,
     "MinimumTextLength": 3,
-    "MaxImageSizeMegabytes": 50
+    "MaxImageSizeMegabytes": 50,
+    "MaxFallbackPages": 100
   },
   "LocalAI": {
     "Provider": "Ollama",
@@ -114,15 +115,24 @@ When the console says `PaddleOCR-VL worker is ready`, verify it with:
 Invoke-RestMethod -Uri "http://127.0.0.1:8765/health"
 ```
 
+After the .NET application starts, verify the complete application-to-worker
+connection with:
+
+```powershell
+Invoke-RestMethod -Uri "http://127.0.0.1:5187/api/ocr/status"
+```
+
 OCR is used only when Laserfiche has no searchable page text. Page images are
 sent only over the machine's loopback interface; the .NET service rejects any
 non-loopback OCR URL. The worker temporarily writes one page to the operating
 system temp directory for model inference and deletes it immediately afterward.
 No page image is stored in PostgreSQL or sent to an external OCR service. If the
-worker is unavailable, ingestion continues with metadata and reports
-`metadata-only` rather than failing the document. Paddle's layout-aware Markdown
-output is retained so Arabic paragraphs, columns, headings, and tables remain
-more coherent when the text is chunked.
+worker is unavailable, ingestion returns HTTP 503 and preserves any existing
+indexed content and chunks. Electronic documents that report `pageCount=0` are
+probed through the V2 Export endpoint so OCR is still invoked; probing stops at
+the first unavailable page and is capped by `MaxFallbackPages`. Paddle's
+layout-aware Markdown output is retained so Arabic paragraphs, columns,
+headings, and tables remain more coherent when the text is chunked.
 
 Start the API with local Laserfiche credentials, then ingest Entry `608`:
 

@@ -2,6 +2,7 @@ using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
 using LaserficheReports.Application.Interfaces;
+using LaserficheReports.Domain.Exceptions;
 using LaserficheReports.Infrastructure.Options;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -69,7 +70,8 @@ internal sealed class PaddleOcrLocalService : ILocalOcrService
                     "Local PaddleOCR-VL returned HTTP {StatusCode}. Details: {Details}",
                     (int)response.StatusCode,
                     details);
-                return null;
+                throw new LocalOcrException(
+                    $"PaddleOCR worker returned HTTP {(int)response.StatusCode}. Check the PaddleOCR terminal for details.");
             }
 
             var result = await response.Content.ReadFromJsonAsync<PaddleOcrResponse>(
@@ -90,7 +92,9 @@ internal sealed class PaddleOcrLocalService : ILocalOcrService
             _logger.LogWarning(
                 "Local PaddleOCR-VL timed out after {TimeoutSeconds} seconds.",
                 _options.EffectiveTimeoutSeconds);
-            return null;
+            throw new LocalOcrException(
+                $"PaddleOCR timed out after {_options.EffectiveTimeoutSeconds} seconds. " +
+                "Check that the worker is still running.");
         }
         catch (HttpRequestException exception)
         {
@@ -98,12 +102,14 @@ internal sealed class PaddleOcrLocalService : ILocalOcrService
                 exception,
                 "Local PaddleOCR-VL is unavailable at {BaseUrl}. Start tools/paddleocr-vl/start.ps1.",
                 _options.BaseUrl);
-            return null;
+            throw new LocalOcrException(
+                $"PaddleOCR is unavailable at {_options.BaseUrl}. Start tools/paddleocr-vl/start.ps1.",
+                exception);
         }
         catch (JsonException exception)
         {
             _logger.LogWarning(exception, "Local PaddleOCR-VL returned an invalid response.");
-            return null;
+            throw new LocalOcrException("PaddleOCR returned an invalid JSON response.", exception);
         }
     }
 

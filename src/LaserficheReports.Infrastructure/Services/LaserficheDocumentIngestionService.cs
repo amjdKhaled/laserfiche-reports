@@ -3,6 +3,7 @@ using System.Globalization;
 using LaserficheReports.Application.DTOs;
 using LaserficheReports.Application.Interfaces;
 using LaserficheReports.Domain.Entities;
+using LaserficheReports.Domain.Exceptions;
 using LaserficheReports.Infrastructure.Options;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -22,6 +23,7 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
     private readonly IRepositoryContext _repositoryContext;
     private readonly SupabaseOptions _options;
     private readonly LocalAiOptions _localAiOptions;
+    private readonly PaddleOcrOptions _ocrOptions;
     private readonly ILogger<LaserficheDocumentIngestionService> _logger;
 
     public LaserficheDocumentIngestionService(
@@ -32,6 +34,7 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
         IRepositoryContext repositoryContext,
         IOptions<SupabaseOptions> options,
         IOptions<LocalAiOptions> localAiOptions,
+        IOptions<PaddleOcrOptions> ocrOptions,
         ILogger<LaserficheDocumentIngestionService> logger)
     {
         _entries = entries;
@@ -41,6 +44,7 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
         _repositoryContext = repositoryContext;
         _options = options.Value;
         _localAiOptions = localAiOptions.Value;
+        _ocrOptions = ocrOptions.Value;
         _logger = logger;
     }
 
@@ -73,38 +77,55 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
             .GetEntryFieldsAsync(entryId, cancellationToken)
             .ConfigureAwait(false);
 
-        var pageNumbers = entry.PageCount is > 0
-            ? Enumerable.Range(1, entry.PageCount.Value).ToArray()
-            : (await _documents.GetDocumentPagesAsync(entryId, cancellationToken).ConfigureAwait(false))
-                .Select(page => page.PageNumber)
-                .Distinct()
-                .OrderBy(pageNumber => pageNumber)
-                .ToArray();
-
-        var pageTexts = new List<IndexedPageText>();
-        foreach (var pageNumber in pageNumbers)
+        IReadOnlyList<LFDocumentPage> discoveredPages = [];
+        if (entry.PageCount is not > 0)
         {
-            var pageText = await _documents
-                .GetPageTextAsync(entryId, pageNumber, cancellationToken)
-                .ConfigureAwait(false);
-
-            if (!string.IsNullOrWhiteSpace(pageText))
-            {
-                pageTexts.Add(new IndexedPageText(pageNumber, pageText, "laserfiche"));
-                continue;
-            }
-
             try
             {
-                using var pageImage = await _documents
-                    .GetPageImageAsync(entryId, pageNumber, cancellationToken)
+                discoveredPages = await _documents
+                    .GetDocumentPagesAsync(entryId, cancellationToken)
                     .ConfigureAwait(false);
-                var ocrText = await _ocr
-                    .TryExtractTextAsync(pageImage.Content, cancellationToken)
-                    .ConfigureAwait(false);
+            }
+            catch (LaserficheReports.Domain.Exceptions.LaserficheException exception)
+                when (exception.StatusCode == (int)System.Net.HttpStatusCode.NotFound)
+            {
+                // V2 does not expose a GET page collection on every installation.
+                // Electronic documents can also report pageCount=0 while the Export
+                // endpoint can still render their first page as PNG.
+                _logger.LogInformation(
+                    "Laserfiche did not expose a page collection for Entry {EntryId}; " +
+                    "the ingestion fallback will probe page 1 through Export.",
+                    entryId);
+            }
+        }
 
-                if (!string.IsNullOrWhiteSpace(ocrText))
-                    pageTexts.Add(new IndexedPageText(pageNumber, ocrText, "ocr"));
+        var resolvedPageNumbers = ResolvePageNumbers(entry.PageCount, discoveredPages);
+        var isFallbackPageProbe = entry.PageCount is not > 0 && discoveredPages.Count == 0;
+        var candidatePageNumbers = isFallbackPageProbe
+            ? Enumerable.Range(1, _ocrOptions.EffectiveMaxFallbackPages).ToArray()
+            : resolvedPageNumbers;
+
+        _logger.LogInformation(
+            "Content ingestion page discovery. EntryId={EntryId}; ReportedPageCount={ReportedPageCount}; " +
+            "DiscoveredPageCount={DiscoveredPageCount}; CandidatePages={CandidatePages}.",
+            entryId,
+            entry.PageCount ?? 0,
+            discoveredPages.Count,
+            isFallbackPageProbe ? "sequential-export-probe" : string.Join(",", candidatePageNumbers));
+
+        var pageTexts = new List<IndexedPageText>();
+        var detectedPageNumbers = new HashSet<int>();
+        var ocrAttemptCount = 0;
+        var contentFailureCount = 0;
+        LocalOcrException? ocrFailure = null;
+        foreach (var pageNumber in candidatePageNumbers)
+        {
+            string? pageText = null;
+            try
+            {
+                pageText = await _documents
+                    .GetPageTextAsync(entryId, pageNumber, cancellationToken)
+                    .ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -114,18 +135,100 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
             {
                 _logger.LogWarning(
                     exception,
+                    "Laserfiche page text retrieval failed for Entry {EntryId}, page {PageNumber}; trying local OCR.",
+                    entryId,
+                    pageNumber);
+            }
+
+            if (!string.IsNullOrWhiteSpace(pageText))
+            {
+                detectedPageNumbers.Add(pageNumber);
+                pageTexts.Add(new IndexedPageText(pageNumber, pageText, "laserfiche"));
+                continue;
+            }
+
+            try
+            {
+                using var pageImage = await _documents
+                    .GetPageImageAsync(entryId, pageNumber, cancellationToken)
+                    .ConfigureAwait(false);
+                detectedPageNumbers.Add(pageNumber);
+                ocrAttemptCount++;
+                var ocrText = await _ocr
+                    .TryExtractTextAsync(pageImage.Content, cancellationToken)
+                    .ConfigureAwait(false);
+
+                if (!string.IsNullOrWhiteSpace(ocrText))
+                {
+                    pageTexts.Add(new IndexedPageText(pageNumber, ocrText, "ocr"));
+                }
+                else
+                {
+                    _logger.LogWarning(
+                        "PaddleOCR-VL returned no usable text for Laserfiche Entry {EntryId}, page {PageNumber}.",
+                        entryId,
+                        pageNumber);
+                }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (LocalOcrException exception)
+            {
+                contentFailureCount++;
+                ocrFailure ??= exception;
+                _logger.LogError(
+                    exception,
+                    "PaddleOCR infrastructure failure for Laserfiche Entry {EntryId}, page {PageNumber}.",
+                    entryId,
+                    pageNumber);
+                break;
+            }
+            catch (LaserficheReports.Domain.Exceptions.LaserficheException exception)
+                when (isFallbackPageProbe && pageNumber > 1 &&
+                      exception.StatusCode is >= 400 and < 500)
+            {
+                _logger.LogInformation(
+                    "Sequential page export completed for Entry {EntryId}; page {PageNumber} was not available (HTTP {StatusCode}).",
+                    entryId,
+                    pageNumber,
+                    exception.StatusCode);
+                break;
+            }
+            catch (Exception exception)
+            {
+                contentFailureCount++;
+                _logger.LogWarning(
+                    exception,
                     "Local OCR fallback failed for Laserfiche Entry {EntryId}, page {PageNumber}. " +
                     "The document will remain available with metadata only for this page.",
                     entryId,
                     pageNumber);
+
+                if (isFallbackPageProbe)
+                    break;
             }
         }
 
         var laserficheTextPageCount = pageTexts.Count(page => page.Source == "laserfiche");
         var ocrTextPageCount = pageTexts.Count(page => page.Source == "ocr");
         var hasUsableText = pageTexts.Count > 0;
+        if (!hasUsableText && ocrFailure is not null)
+        {
+            // Do not overwrite an existing indexed document or delete its chunks
+            // merely because the local OCR worker is temporarily unavailable.
+            throw ocrFailure;
+        }
+
         var ingestionStatus = hasUsableText ? "content-indexed" : "metadata-only";
         var textSource = ResolveTextSource(laserficheTextPageCount, ocrTextPageCount);
+        var contentDiagnostic = ResolveContentDiagnostic(
+            hasUsableText,
+            detectedPageNumbers.Count,
+            ocrAttemptCount,
+            ocrTextPageCount,
+            contentFailureCount);
         var chunks = hasUsableText
             ? PageTextChunker.Split(
                 pageTexts,
@@ -148,7 +251,10 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
             ocrTextPageCount,
             pageTexts,
             chunks.Count,
-            chunks.Count > 0 ? _localAiOptions.EmbeddingModel : null);
+            chunks.Count > 0 ? _localAiOptions.EmbeddingModel : null,
+            detectedPageNumbers.Count,
+            ocrAttemptCount,
+            contentDiagnostic);
         var content = BuildIndexedContent(entry, fields, pageTexts);
 
         await using var connection = new NpgsqlConnection(_options.PostgresConnectionString);
@@ -211,7 +317,11 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
             wasInserted,
             ingestionStatus,
             chunks.Count,
-            chunks.Count > 0 ? _localAiOptions.EmbeddingModel : null);
+            chunks.Count > 0 ? _localAiOptions.EmbeddingModel : null,
+            detectedPageNumbers.Count,
+            ocrAttemptCount,
+            ocrTextPageCount,
+            contentDiagnostic);
     }
 
     internal static string BuildMetadata(
@@ -225,7 +335,10 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
         int ocrTextPageCount = 0,
         IReadOnlyList<IndexedPageText>? textPages = null,
         int chunkCount = 0,
-        string? embeddingModel = null)
+        string? embeddingModel = null,
+        int detectedPageCount = 0,
+        int ocrAttemptCount = 0,
+        string? contentDiagnostic = null)
     {
         var payload = new
         {
@@ -239,6 +352,7 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
             template_id = entry.TemplateId,
             template_name = entry.TemplateName,
             page_count = entry.PageCount,
+            detected_page_count = detectedPageCount,
             file_size_bytes = entry.FileSizeBytes,
             creator = entry.Creator,
             creation_time = entry.CreationTime,
@@ -248,6 +362,8 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
             text_page_count = textPageCount,
             laserfiche_text_page_count = laserficheTextPageCount,
             ocr_text_page_count = ocrTextPageCount,
+            ocr_attempt_count = ocrAttemptCount,
+            content_diagnostic = contentDiagnostic,
             chunk_count = chunkCount,
             embedding_model = embeddingModel,
             embedding_status = chunkCount > 0 ? "complete" : "not-created",
@@ -305,6 +421,45 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
         if (laserficheTextPageCount > 0) return "laserfiche";
         if (ocrTextPageCount > 0) return "ocr";
         return "none";
+    }
+
+    internal static IReadOnlyList<int> ResolvePageNumbers(
+        int? reportedPageCount,
+        IReadOnlyList<LFDocumentPage> discoveredPages)
+    {
+        if (reportedPageCount is > 0)
+            return Enumerable.Range(1, reportedPageCount.Value).ToArray();
+
+        var pageNumbers = discoveredPages
+            .Select(page => page.PageNumber)
+            .Where(pageNumber => pageNumber > 0)
+            .Distinct()
+            .OrderBy(pageNumber => pageNumber)
+            .ToArray();
+
+        // An electronic document can legitimately report zero repository image
+        // pages while V2 Export can render page 1. Always probe it once so OCR is
+        // actually invoked instead of silently producing metadata-only rows.
+        return pageNumbers.Length > 0 ? pageNumbers : [1];
+    }
+
+    internal static string? ResolveContentDiagnostic(
+        bool hasUsableText,
+        int detectedPageCount,
+        int ocrAttemptCount,
+        int ocrTextPageCount,
+        int contentFailureCount)
+    {
+        if (hasUsableText && contentFailureCount == 0) return null;
+        if (hasUsableText)
+            return $"Content was indexed partially; {contentFailureCount} page operation(s) failed.";
+        if (detectedPageCount == 0)
+            return "No document pages were detected.";
+        if (contentFailureCount > 0)
+            return $"OCR was attempted {ocrAttemptCount} time(s), but {contentFailureCount} page operation(s) failed. Check the application and PaddleOCR worker logs.";
+        if (ocrAttemptCount > 0 && ocrTextPageCount == 0)
+            return $"PaddleOCR was called for {ocrAttemptCount} page(s) but returned no usable text.";
+        return "No searchable document text was available.";
     }
 
     internal sealed record IndexedPageText(int PageNumber, string Text, string Source);

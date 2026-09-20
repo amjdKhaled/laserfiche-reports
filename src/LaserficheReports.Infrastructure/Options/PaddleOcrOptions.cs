@@ -9,8 +9,10 @@ public sealed class PaddleOcrOptions
     public int TimeoutSeconds { get; init; } = 600;
     public int MinimumTextLength { get; init; } = 3;
     public int MaxImageSizeMegabytes { get; init; } = 50;
+    public int MaxFallbackPages { get; init; } = 100;
 
     internal int EffectiveTimeoutSeconds => Math.Clamp(TimeoutSeconds, 30, 1800);
     internal int EffectiveMinimumTextLength => Math.Clamp(MinimumTextLength, 1, 1000);
     internal long EffectiveMaxImageBytes => Math.Clamp(MaxImageSizeMegabytes, 1, 200) * 1024L * 1024L;
+    internal int EffectiveMaxFallbackPages => Math.Clamp(MaxFallbackPages, 1, 1000);
 }

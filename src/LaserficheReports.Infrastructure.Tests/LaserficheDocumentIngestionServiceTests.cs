@@ -91,6 +91,42 @@ public sealed class LaserficheDocumentIngestionServiceTests
     }
 
     [Fact]
+    public void ResolvePageNumbers_ProbesFirstPage_WhenLaserficheReportsNoPages()
+    {
+        var pages = LaserficheDocumentIngestionService.ResolvePageNumbers(0, []);
+
+        Assert.Equal(new[] { 1 }, pages);
+    }
+
+    [Fact]
+    public void ResolvePageNumbers_UsesDiscoveredPages_WhenReportedCountIsMissing()
+    {
+        LFDocumentPage[] discovered =
+        [
+            new() { PageNumber = 3 },
+            new() { PageNumber = 1 },
+            new() { PageNumber = 3 }
+        ];
+
+        var pages = LaserficheDocumentIngestionService.ResolvePageNumbers(null, discovered);
+
+        Assert.Equal(new[] { 1, 3 }, pages);
+    }
+
+    [Fact]
+    public void ResolveContentDiagnostic_ExplainsEmptyOcrResult()
+    {
+        var diagnostic = LaserficheDocumentIngestionService.ResolveContentDiagnostic(
+            hasUsableText: false,
+            detectedPageCount: 1,
+            ocrAttemptCount: 1,
+            ocrTextPageCount: 0,
+            contentFailureCount: 0);
+
+        Assert.Contains("returned no usable text", diagnostic);
+    }
+
+    [Fact]
     public void BuildMetadata_RecordsOcrPageProvenance()
     {
         var entry = new LFEntry { Id = 609, Name = "Scanned page", PageCount = 1 };
