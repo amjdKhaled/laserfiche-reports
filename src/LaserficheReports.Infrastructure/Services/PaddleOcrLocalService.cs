@@ -1,3 +1,4 @@
+using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
@@ -56,11 +57,12 @@ internal sealed class PaddleOcrLocalService : ILocalOcrService
 
         if (imageBytes.Length == 0) return null;
 
-        var request = new PaddleOcrRequest(Convert.ToBase64String(imageBytes));
         try
         {
             var client = _httpClientFactory.CreateClient("PaddleOcr");
-            using var response = await client.PostAsJsonAsync("ocr", request, JsonOptions, cancellationToken)
+            using var requestContent = new ByteArrayContent(imageBytes);
+            requestContent.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+            using var response = await client.PostAsync("ocr", requestContent, cancellationToken)
                 .ConfigureAwait(false);
 
             if (!response.IsSuccessStatusCode)
@@ -71,7 +73,7 @@ internal sealed class PaddleOcrLocalService : ILocalOcrService
                     (int)response.StatusCode,
                     details);
                 throw new LocalOcrException(
-                    $"PaddleOCR worker returned HTTP {(int)response.StatusCode}. Check the PaddleOCR terminal for details.");
+                    $"PaddleOCR worker returned HTTP {(int)response.StatusCode}: {details}");
             }
 
             var result = await response.Content.ReadFromJsonAsync<PaddleOcrResponse>(
@@ -207,6 +209,5 @@ internal sealed class PaddleOcrLocalService : ILocalOcrService
         return details.Length <= 500 ? details : details[..500];
     }
 
-    private sealed record PaddleOcrRequest(string ImageBase64);
     private sealed record PaddleOcrResponse(string? Text, string? Engine, string? Model);
 }
