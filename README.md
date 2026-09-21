@@ -78,7 +78,7 @@ Set the local repository and PostgreSQL connection in
   "Ocr": {
     "Enabled": true,
     "BaseUrl": "http://127.0.0.1:8765",
-    "TimeoutSeconds": 600,
+    "TimeoutSeconds": 1800,
     "MinimumTextLength": 3,
     "MaxImageSizeMegabytes": 50,
     "MaxFallbackPages": 100
@@ -108,7 +108,7 @@ The setup creates an isolated Python environment inside `tools/paddleocr-vl`.
 Start the worker in its own PowerShell window before the .NET application:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\paddleocr-vl\start.ps1
+powershell -ExecutionPolicy Bypass -File .\tools\paddleocr-vl\start.ps1 -TextDetectionMaxSideLength 3000
 ```
 
 The first start downloads the PP-StructureV3 layout/table models and the Arabic PP-OCRv5 recognition model
@@ -118,6 +118,11 @@ ready`, verify it with:
 ```powershell
 Invoke-RestMethod -Uri "http://127.0.0.1:8765/health"
 ```
+
+The default 3000-pixel detection limit reduces CPU processing time while
+preserving enough detail for Arabic legal documents. Submit one ingestion
+request at a time; concurrent OCR requests are rejected with `ocr_busy`
+instead of waiting in a long queue.
 
 After the .NET application starts, verify the complete application-to-worker
 connection with:

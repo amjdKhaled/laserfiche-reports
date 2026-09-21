@@ -25,6 +25,10 @@ MAX_JSON_REQUEST_BYTES = 70 * 1024 * 1024
 ENGINE_NAME = "PP-StructureV3"
 
 
+class OcrBusyError(RuntimeError):
+    """Raised when another CPU OCR request is already running."""
+
+
 def image_suffix(image_bytes: bytes) -> str:
     if image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
         return ".png"
@@ -139,12 +143,14 @@ class OcrRuntime:
         recognition_model: str,
         device: str,
         minimum_score: float,
+        text_det_limit_side_len: int,
     ) -> None:
         self.ocr_version = ocr_version
         self.language = language
         self.recognition_model = recognition_model
         self.device = device
         self.minimum_score = minimum_score
+        self.text_det_limit_side_len = text_det_limit_side_len
         self._lock = threading.Lock()
         print(
             f"Loading {ENGINE_NAME} {ocr_version} ({recognition_model}, lang={language}) "
@@ -166,6 +172,7 @@ class OcrRuntime:
             use_formula_recognition=False,
             use_chart_recognition=False,
             format_block_content=True,
+            text_det_limit_side_len=text_det_limit_side_len,
         )
         print(f"{ENGINE_NAME} Arabic worker is ready.", flush=True)
 
@@ -184,13 +191,18 @@ class OcrRuntime:
                 f"OCR request image_sha256={digest} bytes={len(image_bytes)}",
                 flush=True,
             )
-            with self._lock:
+            if not self._lock.acquire(blocking=False):
+                raise OcrBusyError(
+                    "Another OCR request is already running; wait for it to finish."
+                )
+            try:
                 results = self._pipeline.predict(
                     temp_path,
                     use_doc_orientation_classify=True,
                     use_doc_unwarping=False,
                     use_textline_orientation=True,
                     text_rec_score_thresh=self.minimum_score,
+                    text_det_limit_side_len=self.text_det_limit_side_len,
                 )
                 texts: list[str] = []
                 scores: list[float] = []
@@ -201,6 +213,8 @@ class OcrRuntime:
                     if result_text:
                         texts.append(result_text)
                     scores.extend(result_scores)
+            finally:
+                self._lock.release()
 
             elapsed_ms = round((time.perf_counter() - started) * 1000)
             mean_confidence = sum(scores) / len(scores) if scores else None
@@ -243,6 +257,7 @@ class OcrHandler(BaseHTTPRequestHandler):
                 "ocrVersion": self.runtime.ocr_version,
                 "language": self.runtime.language,
                 "device": self.runtime.device,
+                "textDetLimitSideLen": self.runtime.text_det_limit_side_len,
                 "generative": False,
             },
         )
@@ -303,6 +318,12 @@ class OcrHandler(BaseHTTPRequestHandler):
                     "elapsedMs": result.elapsed_ms,
                 },
             )
+        except OcrBusyError as exception:
+            print(f"OCR request rejected: {exception}", flush=True)
+            self._json(
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                {"error": "ocr_busy", "message": str(exception)},
+            )
         except Exception as exception:  # Paddle raises backend-specific types.
             print(f"OCR request failed: {type(exception).__name__}: {exception}", flush=True)
             self._json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": "ocr_failed"})
@@ -315,8 +336,14 @@ class OcrHandler(BaseHTTPRequestHandler):
         self.send_response(status.value)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+            # The caller may time out while a CPU OCR pass is finishing. The
+            # OCR worker stays healthy; there is simply nobody left to receive
+            # this particular response.
+            return
 
 
 def main() -> None:
@@ -330,11 +357,19 @@ def main() -> None:
         "--recognition-model", default="arabic_PP-OCRv5_mobile_rec"
     )
     parser.add_argument("--minimum-score", type=float, default=0.35)
+    parser.add_argument(
+        "--text-det-limit-side-len",
+        type=int,
+        default=3000,
+        help="Maximum long side passed to the layout/text detector (1600-4000).",
+    )
     args = parser.parse_args()
     if args.host not in {"127.0.0.1", "localhost", "::1"}:
         parser.error("--host must be a loopback address")
     if not 0 <= args.minimum_score <= 1:
         parser.error("--minimum-score must be between 0 and 1")
+    if not 1600 <= args.text_det_limit_side_len <= 4000:
+        parser.error("--text-det-limit-side-len must be between 1600 and 4000")
 
     OcrHandler.runtime = OcrRuntime(
         args.ocr_version,
@@ -342,6 +377,7 @@ def main() -> None:
         args.recognition_model,
         args.device,
         args.minimum_score,
+        args.text_det_limit_side_len,
     )
     server = ThreadingHTTPServer((args.host, args.port), OcrHandler)
     print(f"Listening on http://{args.host}:{args.port}", flush=True)
