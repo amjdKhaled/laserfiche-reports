@@ -17,7 +17,11 @@ from typing import Any
 from paddleocr import PaddleOCRVL
 
 
-MAX_REQUEST_BYTES = 70 * 1024 * 1024
+# The .NET client sends the page as application/octet-stream.  Keeping the
+# legacy JSON limit separate avoids the ~33% Base64 expansion that caused
+# otherwise valid page images to be rejected with HTTP 413.
+MAX_IMAGE_BYTES = 200 * 1024 * 1024
+MAX_JSON_REQUEST_BYTES = 70 * 1024 * 1024
 
 
 def image_suffix(image_bytes: bytes) -> str:
@@ -154,16 +158,33 @@ class OcrHandler(BaseHTTPRequestHandler):
         except ValueError:
             self._json(HTTPStatus.BAD_REQUEST, {"error": "invalid_content_length"})
             return
-        if length <= 0 or length > MAX_REQUEST_BYTES:
-            self._json(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, {"error": "request_too_large"})
+        content_type = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+        maximum_bytes = (
+            MAX_IMAGE_BYTES
+            if content_type == "application/octet-stream"
+            else MAX_JSON_REQUEST_BYTES
+        )
+        if length <= 0 or length > maximum_bytes:
+            self._json(
+                HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                {
+                    "error": "request_too_large",
+                    "contentLength": length,
+                    "maximumBytes": maximum_bytes,
+                },
+            )
             return
 
         try:
-            payload = json.loads(self.rfile.read(length).decode("utf-8"))
-            encoded = payload.get("imageBase64")
-            if not isinstance(encoded, str) or not encoded:
-                raise ValueError("imageBase64 is required")
-            image_bytes = base64.b64decode(encoded, validate=True)
+            request_bytes = self.rfile.read(length)
+            if content_type == "application/octet-stream":
+                image_bytes = request_bytes
+            else:
+                payload = json.loads(request_bytes.decode("utf-8"))
+                encoded = payload.get("imageBase64")
+                if not isinstance(encoded, str) or not encoded:
+                    raise ValueError("imageBase64 is required")
+                image_bytes = base64.b64decode(encoded, validate=True)
         except (UnicodeDecodeError, json.JSONDecodeError, ValueError, binascii.Error):
             self._json(HTTPStatus.BAD_REQUEST, {"error": "invalid_image_payload"})
             return
