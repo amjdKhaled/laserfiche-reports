@@ -17,12 +17,12 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
-from paddleocr import PaddleOCR
+from paddleocr import PPStructureV3
 
 
 MAX_IMAGE_BYTES = 200 * 1024 * 1024
 MAX_JSON_REQUEST_BYTES = 70 * 1024 * 1024
-ENGINE_NAME = "PaddleOCR"
+ENGINE_NAME = "PP-StructureV3"
 
 
 def image_suffix(image_bytes: bytes) -> str:
@@ -77,6 +77,51 @@ def extract_lines(result: Any, minimum_score: float) -> tuple[list[str], list[fl
     return lines, accepted_scores
 
 
+def extract_structure_text(result: Any, minimum_score: float) -> tuple[str, list[float]]:
+    """Extract blocks in PP-StructureV3's restored reading order."""
+    value = structured_result(result)
+    blocks = value.get("parsing_res_list", [])
+    ordered_blocks: list[tuple[int, str]] = []
+    if hasattr(blocks, "__iter__") and not isinstance(blocks, (str, bytes, dict)):
+        for fallback_index, block in enumerate(blocks):
+            if not isinstance(block, dict):
+                continue
+            content = str(block.get("block_content") or "").strip()
+            if not content:
+                continue
+            try:
+                order = int(block.get("index", fallback_index))
+            except (TypeError, ValueError):
+                order = fallback_index
+            ordered_blocks.append((order, content))
+
+    # The pipeline already returns parsing_res_list in reading order. Sorting by
+    # its explicit index keeps behavior stable across PaddleOCR 3.x releases.
+    ordered_blocks.sort(key=lambda item: item[0])
+    contents: list[str] = []
+    for _, content in ordered_blocks:
+        if not contents or contents[-1] != content:
+            contents.append(content)
+
+    overall = value.get("overall_ocr_res", {})
+    scores: list[float] = []
+    if isinstance(overall, dict):
+        for raw_score in overall.get("rec_scores", []):
+            try:
+                score = float(raw_score)
+            except (TypeError, ValueError):
+                continue
+            if score >= minimum_score:
+                scores.append(score)
+
+    if contents:
+        return "\n\n".join(contents).strip(), scores
+
+    # Defensive fallback for unexpected 3.x result shapes.
+    lines, fallback_scores = extract_lines(overall, minimum_score)
+    return "\n".join(lines).strip(), fallback_scores
+
+
 @dataclass(frozen=True)
 class OcrResult:
     text: str
@@ -108,7 +153,7 @@ class OcrRuntime:
         )
         # PaddleOCR-VL is intentionally not used here: as a generative model it
         # can produce fluent text that is absent from the input image.
-        self._pipeline = PaddleOCR(
+        self._pipeline = PPStructureV3(
             lang=language,
             ocr_version=ocr_version,
             text_recognition_model_name=recognition_model,
@@ -116,6 +161,11 @@ class OcrRuntime:
             use_doc_orientation_classify=True,
             use_doc_unwarping=False,
             use_textline_orientation=True,
+            use_seal_recognition=False,
+            use_table_recognition=True,
+            use_formula_recognition=False,
+            use_chart_recognition=False,
+            format_block_content=True,
         )
         print(f"{ENGINE_NAME} Arabic worker is ready.", flush=True)
 
@@ -142,25 +192,28 @@ class OcrRuntime:
                     use_textline_orientation=True,
                     text_rec_score_thresh=self.minimum_score,
                 )
-                lines: list[str] = []
+                texts: list[str] = []
                 scores: list[float] = []
                 for result in results:
-                    result_lines, result_scores = extract_lines(
+                    result_text, result_scores = extract_structure_text(
                         result, self.minimum_score
                     )
-                    lines.extend(result_lines)
+                    if result_text:
+                        texts.append(result_text)
                     scores.extend(result_scores)
 
             elapsed_ms = round((time.perf_counter() - started) * 1000)
             mean_confidence = sum(scores) / len(scores) if scores else None
+            text = "\n\n".join(texts).strip()
+            line_count = sum(1 for line in text.splitlines() if line.strip())
             print(
-                f"OCR completed image_sha256={digest} lines={len(lines)} "
+                f"OCR completed image_sha256={digest} lines={line_count} "
                 f"mean_confidence={mean_confidence} elapsed_ms={elapsed_ms}",
                 flush=True,
             )
             return OcrResult(
-                text="\n".join(lines).strip(),
-                line_count=len(lines),
+                text=text,
+                line_count=line_count,
                 mean_confidence=mean_confidence,
                 image_sha256=digest,
                 elapsed_ms=elapsed_ms,
@@ -175,7 +228,7 @@ class OcrRuntime:
 
 class OcrHandler(BaseHTTPRequestHandler):
     runtime: OcrRuntime
-    server_version = "LaserfichePaddleOCR/2.0"
+    server_version = "LaserfichePaddleOCR/3.0"
 
     def do_GET(self) -> None:  # noqa: N802
         if self.path.rstrip("/") != "/health":

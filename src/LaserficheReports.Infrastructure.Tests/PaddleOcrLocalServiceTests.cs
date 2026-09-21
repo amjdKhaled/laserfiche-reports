@@ -51,6 +51,18 @@ public sealed class PaddleOcrLocalServiceTests
     }
 
     [Fact]
+    public void ValidateResponseIdentity_AcceptsNonGenerativeStructureWorker()
+    {
+        var image = new byte[] { 1, 2, 3 };
+        var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(image)).ToLowerInvariant();
+
+        PaddleOcrLocalService.ValidateResponseIdentity(
+            image,
+            new PaddleOcrLocalService.PaddleOcrResponse(
+                "نص", "PP-StructureV3", "arabic_PP-OCRv5_mobile_rec", hash, 1, 0.9, 10));
+    }
+
+    [Fact]
     public void ValidateResponseIdentity_RejectsDifferentImageHash()
     {
         var exception = Assert.Throws<LocalOcrException>(() =>

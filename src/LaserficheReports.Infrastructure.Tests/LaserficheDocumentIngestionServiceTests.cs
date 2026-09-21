@@ -156,6 +156,26 @@ public sealed class LaserficheDocumentIngestionServiceTests
     }
 
     [Fact]
+    public void BuildMetadata_RecordsOcrCorrectionProvenance()
+    {
+        var entry = new LFEntry { Id = 618, Name = "Arabic regulation", PageCount = 1 };
+
+        var json = LaserficheDocumentIngestionService.BuildMetadata(
+            "testemployee",
+            entry,
+            [],
+            ocrCorrectionAttemptCount: 1,
+            ocrCorrectedPageCount: 1,
+            ocrCorrectionModel: "qwen2.5:7b");
+
+        using var document = JsonDocument.Parse(json);
+        var root = document.RootElement;
+        Assert.Equal(1, root.GetProperty("ocr_correction_attempt_count").GetInt32());
+        Assert.Equal(1, root.GetProperty("ocr_corrected_page_count").GetInt32());
+        Assert.Equal("qwen2.5:7b", root.GetProperty("ocr_correction_model").GetString());
+    }
+
+    [Fact]
     public void PageTextChunker_PreservesPageAndOffsetsWithOverlap()
     {
         var text = string.Join(' ', Enumerable.Repeat("Arabic English searchable text.", 20));

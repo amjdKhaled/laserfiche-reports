@@ -19,6 +19,7 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
     private readonly ILaserficheEntryService _entries;
     private readonly ILaserficheDocumentService _documents;
     private readonly ILocalOcrService _ocr;
+    private readonly IOcrTextCorrectionService _ocrCorrection;
     private readonly ITextEmbeddingService _embeddings;
     private readonly IRepositoryContext _repositoryContext;
     private readonly SupabaseOptions _options;
@@ -30,6 +31,7 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
         ILaserficheEntryService entries,
         ILaserficheDocumentService documents,
         ILocalOcrService ocr,
+        IOcrTextCorrectionService ocrCorrection,
         ITextEmbeddingService embeddings,
         IRepositoryContext repositoryContext,
         IOptions<SupabaseOptions> options,
@@ -40,6 +42,7 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
         _entries = entries;
         _documents = documents;
         _ocr = ocr;
+        _ocrCorrection = ocrCorrection;
         _embeddings = embeddings;
         _repositoryContext = repositoryContext;
         _options = options.Value;
@@ -116,6 +119,9 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
         var pageTexts = new List<IndexedPageText>();
         var detectedPageNumbers = new HashSet<int>();
         var ocrAttemptCount = 0;
+        var ocrCorrectionAttemptCount = 0;
+        var ocrCorrectedPageCount = 0;
+        string? ocrCorrectionModel = null;
         var contentFailureCount = 0;
         LocalOcrException? ocrFailure = null;
         foreach (var pageNumber in candidatePageNumbers)
@@ -160,7 +166,19 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
 
                 if (!string.IsNullOrWhiteSpace(ocrText))
                 {
-                    pageTexts.Add(new IndexedPageText(pageNumber, ocrText, "ocr"));
+                    var correction = await _ocrCorrection
+                        .CorrectAsync(ocrText, cancellationToken)
+                        .ConfigureAwait(false);
+                    if (!string.IsNullOrWhiteSpace(correction.Model))
+                    {
+                        ocrCorrectionAttemptCount++;
+                        ocrCorrectionModel = correction.Model;
+                    }
+                    if (correction.WasCorrected)
+                    {
+                        ocrCorrectedPageCount++;
+                    }
+                    pageTexts.Add(new IndexedPageText(pageNumber, correction.Text, "ocr"));
                 }
                 else
                 {
@@ -254,6 +272,9 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
             chunks.Count > 0 ? _localAiOptions.EmbeddingModel : null,
             detectedPageNumbers.Count,
             ocrAttemptCount,
+            ocrCorrectionAttemptCount,
+            ocrCorrectedPageCount,
+            ocrCorrectionModel,
             contentDiagnostic);
         var content = BuildIndexedContent(entry, fields, pageTexts);
 
@@ -321,6 +342,9 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
             detectedPageNumbers.Count,
             ocrAttemptCount,
             ocrTextPageCount,
+            ocrCorrectionAttemptCount,
+            ocrCorrectedPageCount,
+            ocrCorrectionModel,
             contentDiagnostic);
     }
 
@@ -338,6 +362,9 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
         string? embeddingModel = null,
         int detectedPageCount = 0,
         int ocrAttemptCount = 0,
+        int ocrCorrectionAttemptCount = 0,
+        int ocrCorrectedPageCount = 0,
+        string? ocrCorrectionModel = null,
         string? contentDiagnostic = null)
     {
         var payload = new
@@ -363,6 +390,9 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
             laserfiche_text_page_count = laserficheTextPageCount,
             ocr_text_page_count = ocrTextPageCount,
             ocr_attempt_count = ocrAttemptCount,
+            ocr_correction_attempt_count = ocrCorrectionAttemptCount,
+            ocr_corrected_page_count = ocrCorrectedPageCount,
+            ocr_correction_model = ocrCorrectionModel,
             content_diagnostic = contentDiagnostic,
             chunk_count = chunkCount,
             embedding_model = embeddingModel,

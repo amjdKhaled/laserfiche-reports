@@ -14,4 +14,7 @@ public sealed record DocumentIngestionResult(
     int DetectedPageCount,
     int OcrAttemptCount,
     int OcrPageCount,
+    int OcrCorrectionAttemptCount,
+    int OcrCorrectedPageCount,
+    string? OcrCorrectionModel,
     string? ContentDiagnostic);

@@ -94,6 +94,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ILaserficheSearchService, LaserficheSearchService>();
         services.AddScoped<ILaserficheDocumentService, LaserficheDocumentService>();
         services.AddScoped<ILocalOcrService, PaddleOcrLocalService>();
+        services.AddScoped<IOcrTextCorrectionService, OllamaOcrTextCorrectionService>();
         services.AddScoped<ITextEmbeddingService, OllamaTextEmbeddingService>();
         services.AddScoped<ILaserficheDocumentIngestionService, LaserficheDocumentIngestionService>();
         services.AddScoped<ILaserficheTemplateService, LaserficheTemplateService>();

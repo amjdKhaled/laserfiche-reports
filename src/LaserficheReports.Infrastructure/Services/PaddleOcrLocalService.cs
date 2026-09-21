@@ -166,7 +166,7 @@ internal sealed class PaddleOcrLocalService : ILocalOcrService
 
     internal static void ValidateResponseIdentity(byte[] imageBytes, PaddleOcrResponse? result)
     {
-        if (!string.Equals(result?.Engine, "PaddleOCR", StringComparison.Ordinal))
+        if (result?.Engine is not ("PaddleOCR" or "PP-StructureV3"))
         {
             throw new LocalOcrException(
                 "The OCR worker is an old or unsupported version. Pull the latest code and restart " +

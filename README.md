@@ -89,7 +89,10 @@ Set the local repository and PostgreSQL connection in
     "EmbeddingModel": "nomic-embed-text-v2-moe",
     "EmbeddingDimensions": 768,
     "ChunkSize": 1200,
-    "ChunkOverlap": 200
+    "OcrCorrectionEnabled": true,
+    "OcrCorrectionModel": "qwen2.5:7b",
+    "TimeoutSeconds": 600,
+    "ChunkOverlap": 80
   }
 }
 ```
@@ -108,8 +111,8 @@ Start the worker in its own PowerShell window before the .NET application:
 powershell -ExecutionPolicy Bypass -File .\tools\paddleocr-vl\start.ps1
 ```
 
-The first start downloads the PP-OCRv5 detection and Arabic recognition models
-and can take several minutes. When the console says `PaddleOCR Arabic worker is
+The first start downloads the PP-StructureV3 layout/table models and the Arabic PP-OCRv5 recognition model
+and can take several minutes. When the console says `PP-StructureV3 Arabic worker is
 ready`, verify it with:
 
 ```powershell
@@ -132,12 +135,17 @@ worker is unavailable, ingestion returns HTTP 503 and preserves any existing
 indexed content and chunks. Electronic documents that report `pageCount=0` are
 probed through the V2 Export endpoint so OCR is still invoked; probing stops at
 the first unavailable page and is capped by `MaxFallbackPages`. The worker uses
-the non-generative `arabic_PP-OCRv5_mobile_rec` model. Each OCR
+the non-generative `PP-StructureV3` layout pipeline with the
+`arabic_PP-OCRv5_mobile_rec` recognition model. Arabic OCR output is then
+proofread locally in Arabic or English by the configured Ollama model. Entry
+`618` is the Arabic reference document used for testing, not a language restriction.
+A correction is rejected if
+it changes any number/date or changes the text length materially. Each OCR
 response includes the SHA-256 hash of the received page; the .NET service checks
 that hash before storing text so stale or mismatched results cannot enter the
 index. OCR confidence below `0.35` is discarded by default.
 
-Start the API with local Laserfiche credentials, then ingest Entry `608`:
+Start the API with local Laserfiche credentials, then ingest the Arabic reference Entry `618`:
 
 ```powershell
 $env:LF_USERNAME = "YOUR_LASERFICHE_USERNAME"
@@ -145,10 +153,10 @@ $env:LF_PASSWORD = "YOUR_LASERFICHE_PASSWORD"
 dotnet run --project .\src\LaserficheReports.Web
 ```
 
-In a second PowerShell window, use the HTTPS address printed by `dotnet run`:
+In a second PowerShell window, use the address printed by `dotnet run`:
 
 ```powershell
-Invoke-RestMethod -Method Post -Uri "https://localhost:PORT/api/ingestion/laserfiche/608" -SkipCertificateCheck
+Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:5187/api/ingestion/laserfiche/618" -TimeoutSec 1800
 ```
 
 The ingestion request saves the document identity, metadata, and searchable
@@ -164,8 +172,8 @@ metadata, stream page 1 to a local file:
 
 ```powershell
 Invoke-WebRequest `
-  -Uri "http://127.0.0.1:5187/api/laserfiche/documents/608/pages/1/image" `
-  -OutFile ".\laserfiche-608-page-1.bin"
+  -Uri "http://127.0.0.1:5187/api/laserfiche/documents/618/pages/1/image" `
+  -OutFile ".\laserfiche-618-page-1.bin"
 ```
 
 The response is streamed from Laserfiche and is not stored on the application

@@ -9,7 +9,7 @@
 
 - Reuse the existing Supabase/PostgreSQL `documents` table with source-labelled
   Laserfiche chunks.
-- Read one known Laserfiche document (Entry 608).
+- Read one known Arabic Laserfiche document (Entry 618).
 - Upsert its identity and metadata without storing the original file.
 - Save its available Laserfiche text and mark its ingestion state.
 
