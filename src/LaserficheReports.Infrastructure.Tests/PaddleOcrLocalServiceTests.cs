@@ -13,10 +13,12 @@ public sealed class PaddleOcrLocalServiceTests
     [Fact]
     public async Task TryExtractTextAsync_PostsImageAndReturnsLayoutMarkdown()
     {
-        string? requestBody = null;
+        byte[]? requestBody = null;
+        string? requestMediaType = null;
         var handler = new StubHandler(async request =>
         {
-            requestBody = await request.Content!.ReadAsStringAsync();
+            requestBody = await request.Content!.ReadAsByteArrayAsync();
+            requestMediaType = request.Content.Headers.ContentType?.MediaType;
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(
@@ -31,8 +33,8 @@ public sealed class PaddleOcrLocalServiceTests
         var result = await service.TryExtractTextAsync(image);
 
         Assert.Equal("# عنوان\n\n| البيان | القيمة |", result);
-        Assert.NotNull(requestBody);
-        Assert.Contains("iVBORw==", requestBody);
+        Assert.Equal("application/octet-stream", requestMediaType);
+        Assert.Equal(new byte[] { 0x89, 0x50, 0x4E, 0x47 }, requestBody);
     }
 
     [Theory]
