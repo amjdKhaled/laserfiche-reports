@@ -40,7 +40,7 @@ never committed.
 
 1. Laserfiche connection and document retrieval.
 2. Local Supabase schema and one-document ingestion.
-3. Local OCR fallback through PaddleOCR-VL. (implemented)
+3. Local Arabic OCR fallback through non-generative PP-OCRv5. (implemented)
 4. Chunking and local embeddings. (implemented)
 5. Vector retrieval and local LLM answering.
 6. Single-chat UI.
@@ -94,7 +94,7 @@ Set the local repository and PostgreSQL connection in
 }
 ```
 
-Install the local PaddleOCR-VL worker once from a normal PowerShell window (no
+Install the local PaddleOCR worker once from a normal PowerShell window (no
 Administrator privileges are required):
 
 ```powershell
@@ -108,8 +108,9 @@ Start the worker in its own PowerShell window before the .NET application:
 powershell -ExecutionPolicy Bypass -File .\tools\paddleocr-vl\start.ps1
 ```
 
-The first start downloads PaddleOCR-VL model files and can take several minutes.
-When the console says `PaddleOCR-VL worker is ready`, verify it with:
+The first start downloads the PP-OCRv5 detection and Arabic recognition models
+and can take several minutes. When the console says `PaddleOCR Arabic worker is
+ready`, verify it with:
 
 ```powershell
 Invoke-RestMethod -Uri "http://127.0.0.1:8765/health"
@@ -130,9 +131,11 @@ No page image is stored in PostgreSQL or sent to an external OCR service. If the
 worker is unavailable, ingestion returns HTTP 503 and preserves any existing
 indexed content and chunks. Electronic documents that report `pageCount=0` are
 probed through the V2 Export endpoint so OCR is still invoked; probing stops at
-the first unavailable page and is capped by `MaxFallbackPages`. Paddle's
-layout-aware Markdown output is retained so Arabic paragraphs, columns,
-headings, and tables remain more coherent when the text is chunked.
+the first unavailable page and is capped by `MaxFallbackPages`. The worker uses
+the non-generative `arabic_PP-OCRv5_mobile_rec` model. Each OCR
+response includes the SHA-256 hash of the received page; the .NET service checks
+that hash before storing text so stale or mismatched results cannot enter the
+index. OCR confidence below `0.35` is discarded by default.
 
 Start the API with local Laserfiche credentials, then ingest Entry `608`:
 

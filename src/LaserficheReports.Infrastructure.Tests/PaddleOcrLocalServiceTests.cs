@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text;
+using LaserficheReports.Domain.Exceptions;
 using LaserficheReports.Infrastructure.Services;
 using LaserficheReports.Infrastructure.Options;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -11,7 +12,7 @@ namespace LaserficheReports.Infrastructure.Tests;
 public sealed class PaddleOcrLocalServiceTests
 {
     [Fact]
-    public async Task TryExtractTextAsync_PostsImageAndReturnsLayoutMarkdown()
+    public async Task TryExtractTextAsync_PostsImageAndReturnsVerifiedArabicText()
     {
         byte[]? requestBody = null;
         string? requestMediaType = null;
@@ -22,7 +23,7 @@ public sealed class PaddleOcrLocalServiceTests
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(
-                    "{\"text\":\"# عنوان\\n\\n| البيان | القيمة |\",\"engine\":\"PaddleOCR-VL\",\"model\":\"v1.6\"}",
+                    "{\"text\":\"عنوان\\nالبيان القيمة\",\"engine\":\"PaddleOCR\",\"model\":\"arabic_PP-OCRv5_mobile_rec\",\"imageSha256\":\"0f4636c78f65d3639ece5a064b5ae753e3408614a14fb18ab4d7540d2c248543\",\"lineCount\":2,\"meanConfidence\":0.91}",
                     Encoding.UTF8,
                     "application/json")
             };
@@ -32,9 +33,33 @@ public sealed class PaddleOcrLocalServiceTests
         await using var image = new MemoryStream([0x89, 0x50, 0x4E, 0x47]);
         var result = await service.TryExtractTextAsync(image);
 
-        Assert.Equal("# عنوان\n\n| البيان | القيمة |", result);
+        Assert.Equal("عنوان\nالبيان القيمة", result);
         Assert.Equal("application/octet-stream", requestMediaType);
         Assert.Equal(new byte[] { 0x89, 0x50, 0x4E, 0x47 }, requestBody);
+    }
+
+    [Fact]
+    public void ValidateResponseIdentity_RejectsOldGenerativeWorker()
+    {
+        var exception = Assert.Throws<LocalOcrException>(() =>
+            PaddleOcrLocalService.ValidateResponseIdentity(
+                [1, 2, 3],
+                new PaddleOcrLocalService.PaddleOcrResponse(
+                    "invented", "PaddleOCR-VL", "v1.6", null, null, null, null)));
+
+        Assert.Contains("hallucinate", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ValidateResponseIdentity_RejectsDifferentImageHash()
+    {
+        var exception = Assert.Throws<LocalOcrException>(() =>
+            PaddleOcrLocalService.ValidateResponseIdentity(
+                [1, 2, 3],
+                new PaddleOcrLocalService.PaddleOcrResponse(
+                    "text", "PaddleOCR", "arabic_PP-OCRv5_mobile_rec", "wrong", 1, 0.9, 10)));
+
+        Assert.Contains("does not match", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Theory]

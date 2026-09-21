@@ -165,7 +165,7 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
                 else
                 {
                     _logger.LogWarning(
-                        "PaddleOCR-VL returned no usable text for Laserfiche Entry {EntryId}, page {PageNumber}.",
+                        "PaddleOCR returned no usable text for Laserfiche Entry {EntryId}, page {PageNumber}.",
                         entryId,
                         pageNumber);
                 }

@@ -1,5 +1,6 @@
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using LaserficheReports.Application.Interfaces;
@@ -11,7 +12,7 @@ using Microsoft.Extensions.Options;
 namespace LaserficheReports.Infrastructure.Services;
 
 /// <summary>
-/// Sends page images to a PaddleOCR-VL worker bound to the loopback interface.
+/// Sends page images to a non-generative PaddleOCR worker bound to the loopback interface.
 /// The loopback-only validation prevents document content from being sent to a
 /// remote OCR endpoint through configuration mistakes.
 /// </summary>
@@ -51,7 +52,7 @@ internal sealed class PaddleOcrLocalService : ILocalOcrService
         }
         catch (InvalidDataException exception)
         {
-            _logger.LogWarning(exception, "Local PaddleOCR-VL rejected a page image.");
+            _logger.LogWarning(exception, "Local PaddleOCR rejected a page image.");
             return null;
         }
 
@@ -69,7 +70,7 @@ internal sealed class PaddleOcrLocalService : ILocalOcrService
             {
                 var details = await ReadLimitedErrorAsync(response, cancellationToken).ConfigureAwait(false);
                 _logger.LogWarning(
-                    "Local PaddleOCR-VL returned HTTP {StatusCode}. Details: {Details}",
+                    "Local PaddleOCR returned HTTP {StatusCode}. Details: {Details}",
                     (int)response.StatusCode,
                     details);
                 throw new LocalOcrException(
@@ -79,12 +80,13 @@ internal sealed class PaddleOcrLocalService : ILocalOcrService
             var result = await response.Content.ReadFromJsonAsync<PaddleOcrResponse>(
                 JsonOptions,
                 cancellationToken).ConfigureAwait(false);
+            ValidateResponseIdentity(imageBytes, result);
             var text = NormalizeText(result?.Text);
             if (text.Length < _options.EffectiveMinimumTextLength) return null;
 
             _logger.LogInformation(
                 "Local OCR completed with {Engine} ({Model}); extracted {CharacterCount} characters.",
-                result?.Engine ?? "PaddleOCR-VL",
+                result?.Engine ?? "PaddleOCR",
                 result?.Model ?? "unknown",
                 text.Length);
             return text;
@@ -92,7 +94,7 @@ internal sealed class PaddleOcrLocalService : ILocalOcrService
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
             _logger.LogWarning(
-                "Local PaddleOCR-VL timed out after {TimeoutSeconds} seconds.",
+                "Local PaddleOCR timed out after {TimeoutSeconds} seconds.",
                 _options.EffectiveTimeoutSeconds);
             throw new LocalOcrException(
                 $"PaddleOCR timed out after {_options.EffectiveTimeoutSeconds} seconds. " +
@@ -102,7 +104,7 @@ internal sealed class PaddleOcrLocalService : ILocalOcrService
         {
             _logger.LogWarning(
                 exception,
-                "Local PaddleOCR-VL is unavailable at {BaseUrl}. Start tools/paddleocr-vl/start.ps1.",
+                "Local PaddleOCR is unavailable at {BaseUrl}. Start tools/paddleocr-vl/start.ps1.",
                 _options.BaseUrl);
             throw new LocalOcrException(
                 $"PaddleOCR is unavailable at {_options.BaseUrl}. Start tools/paddleocr-vl/start.ps1.",
@@ -110,7 +112,7 @@ internal sealed class PaddleOcrLocalService : ILocalOcrService
         }
         catch (JsonException exception)
         {
-            _logger.LogWarning(exception, "Local PaddleOCR-VL returned an invalid response.");
+            _logger.LogWarning(exception, "Local PaddleOCR returned an invalid response.");
             throw new LocalOcrException("PaddleOCR returned an invalid JSON response.", exception);
         }
     }
@@ -162,6 +164,24 @@ internal sealed class PaddleOcrLocalService : ILocalOcrService
         return result.ToString().Trim();
     }
 
+    internal static void ValidateResponseIdentity(byte[] imageBytes, PaddleOcrResponse? result)
+    {
+        if (!string.Equals(result?.Engine, "PaddleOCR", StringComparison.Ordinal))
+        {
+            throw new LocalOcrException(
+                "The OCR worker is an old or unsupported version. Pull the latest code and restart " +
+                "tools/paddleocr-vl/start.ps1; PaddleOCR-VL output is rejected because it can hallucinate text.");
+        }
+
+        var expectedHash = Convert.ToHexString(SHA256.HashData(imageBytes)).ToLowerInvariant();
+        if (string.IsNullOrWhiteSpace(result.ImageSha256) ||
+            !string.Equals(result.ImageSha256, expectedHash, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new LocalOcrException(
+                "The OCR response does not match the page image that was sent. The result was rejected.");
+        }
+    }
+
     private static string RemoveDirectionalControls(string value)
     {
         var result = new StringBuilder(value.Length);
@@ -209,5 +229,12 @@ internal sealed class PaddleOcrLocalService : ILocalOcrService
         return details.Length <= 500 ? details : details[..500];
     }
 
-    private sealed record PaddleOcrResponse(string? Text, string? Engine, string? Model);
+    internal sealed record PaddleOcrResponse(
+        string? Text,
+        string? Engine,
+        string? Model,
+        string? ImageSha256,
+        int? LineCount,
+        double? MeanConfidence,
+        long? ElapsedMs);
 }

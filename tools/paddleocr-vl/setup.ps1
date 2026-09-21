@@ -31,7 +31,7 @@ if (-not (Test-Path $venvPython)) {
 
 & $venvPython -m pip install --upgrade pip
 & $venvPython -m pip install "paddlepaddle==3.2.1" -i "https://www.paddlepaddle.org.cn/packages/stable/cpu/"
-& $venvPython -m pip install --upgrade "paddleocr[doc-parser]"
+& $venvPython -m pip install --upgrade "paddleocr"
 
-Write-Host "PaddleOCR-VL setup completed. Start it with:"
+Write-Host "Arabic PP-OCRv5 setup completed. Start it with:"
 Write-Host "powershell -ExecutionPolicy Bypass -File .\tools\paddleocr-vl\start.ps1"
