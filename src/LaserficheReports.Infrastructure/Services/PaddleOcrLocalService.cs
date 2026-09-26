@@ -81,6 +81,9 @@ internal sealed class PaddleOcrLocalService : ILocalOcrService
                 JsonOptions,
                 cancellationToken).ConfigureAwait(false);
             ValidateResponseIdentity(imageBytes, result);
+            if (result?.NeedsReview == true)
+                _logger.LogWarning("Local OCR contains uncertain text requiring source-image review. " +
+                                   "Engine confidence is not measured transcription accuracy.");
             var text = NormalizeText(result?.Text);
             if (text.Length < _options.EffectiveMinimumTextLength) return null;
 
@@ -236,5 +239,6 @@ internal sealed class PaddleOcrLocalService : ILocalOcrService
         string? ImageSha256,
         int? LineCount,
         double? MeanConfidence,
-        long? ElapsedMs);
+        long? ElapsedMs,
+        bool? NeedsReview = null);
 }

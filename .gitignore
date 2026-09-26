@@ -11,3 +11,6 @@ appsettings.Local.json
 **/.venv/
 **/__pycache__/
 *.pyc
+
+# Private OCR evaluation inputs and outputs
+ocr-evaluation/

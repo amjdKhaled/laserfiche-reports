@@ -8,6 +8,7 @@ import base64
 import binascii
 import hashlib
 import json
+import math
 import os
 import tempfile
 import threading
@@ -17,7 +18,6 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
-from paddleocr import PPStructureV3
 
 
 MAX_IMAGE_BYTES = 200 * 1024 * 1024
@@ -71,13 +71,13 @@ def extract_lines(result: Any, minimum_score: float) -> tuple[list[str], list[fl
         if not text:
             continue
         try:
-            score = float(scores[index]) if index < len(scores) else 1.0
+            score = float(scores[index]) if index < len(scores) else float("nan")
         except (TypeError, ValueError):
-            score = 0.0
-        if score < minimum_score:
-            continue
+            score = float("nan")
+        # Retain uncertain text; confidence is diagnostic, not a deletion rule.
         lines.append(text)
-        accepted_scores.append(score)
+        if math.isfinite(score) and 0 <= score <= 1:
+            accepted_scores.append(score)
     return lines, accepted_scores
 
 
@@ -102,10 +102,8 @@ def extract_structure_text(result: Any, minimum_score: float) -> tuple[str, list
     # The pipeline already returns parsing_res_list in reading order. Sorting by
     # its explicit index keeps behavior stable across PaddleOCR 3.x releases.
     ordered_blocks.sort(key=lambda item: item[0])
-    contents: list[str] = []
-    for _, content in ordered_blocks:
-        if not contents or contents[-1] != content:
-            contents.append(content)
+    # Repeated labels/values may be real content in distinct table cells.
+    contents = [content for _, content in ordered_blocks]
 
     overall = value.get("overall_ocr_res", {})
     scores: list[float] = []
@@ -115,7 +113,7 @@ def extract_structure_text(result: Any, minimum_score: float) -> tuple[str, list
                 score = float(raw_score)
             except (TypeError, ValueError):
                 continue
-            if score >= minimum_score:
+            if math.isfinite(score) and 0 <= score <= 1:
                 scores.append(score)
 
     if contents:
@@ -126,6 +124,36 @@ def extract_structure_text(result: Any, minimum_score: float) -> tuple[str, list
     return "\n".join(lines).strip(), fallback_scores
 
 
+def extract_review_lines(result: Any, threshold: float, page_index: int) -> list[dict[str, Any]]:
+    """Expose uncertainty without inventing word/character-level probabilities."""
+    value = structured_result(result)
+    overall = value.get("overall_ocr_res", value)
+    if not isinstance(overall, dict):
+        return []
+    texts = overall.get("rec_texts", [])
+    scores = overall.get("rec_scores", [])
+    if isinstance(texts, (str, bytes)) or not hasattr(texts, "__iter__"):
+        return []
+    if isinstance(scores, (str, bytes)) or not hasattr(scores, "__len__"):
+        scores = []
+    review = []
+    for index, raw in enumerate(texts):
+        text = str(raw).strip()
+        if not text:
+            continue
+        try:
+            score = float(scores[index]) if index < len(scores) else None
+        except (TypeError, ValueError):
+            score = None
+        if score is not None and (not math.isfinite(score) or not 0 <= score <= 1):
+            score = None
+        if score is None or score < threshold:
+            review.append({"pageIndex": page_index, "lineIndex": index,
+                           "text": text, "score": score,
+                           "reason": "missing-score" if score is None else "low-score"})
+    return review
+
+
 @dataclass(frozen=True)
 class OcrResult:
     text: str
@@ -133,6 +161,7 @@ class OcrResult:
     mean_confidence: float | None
     image_sha256: str
     elapsed_ms: int
+    review_lines: list[dict[str, Any]]
 
 
 class OcrRuntime:
@@ -159,6 +188,8 @@ class OcrRuntime:
         )
         # PaddleOCR-VL is intentionally not used here: as a generative model it
         # can produce fluent text that is absent from the input image.
+        from paddleocr import PPStructureV3
+
         self._pipeline = PPStructureV3(
             lang=language,
             ocr_version=ocr_version,
@@ -201,12 +232,14 @@ class OcrRuntime:
                     use_doc_orientation_classify=True,
                     use_doc_unwarping=False,
                     use_textline_orientation=True,
-                    text_rec_score_thresh=self.minimum_score,
+                    text_rec_score_thresh=0.0,
                     text_det_limit_side_len=self.text_det_limit_side_len,
                 )
                 texts: list[str] = []
                 scores: list[float] = []
-                for result in results:
+                review_lines: list[dict[str, Any]] = []
+                for page_index, result in enumerate(results):
+                    review_lines.extend(extract_review_lines(result, self.minimum_score, page_index))
                     result_text, result_scores = extract_structure_text(
                         result, self.minimum_score
                     )
@@ -231,6 +264,7 @@ class OcrRuntime:
                 mean_confidence=mean_confidence,
                 image_sha256=digest,
                 elapsed_ms=elapsed_ms,
+                review_lines=review_lines,
             )
         finally:
             if temp_path:
@@ -316,6 +350,9 @@ class OcrHandler(BaseHTTPRequestHandler):
                     "lineCount": result.line_count,
                     "meanConfidence": result.mean_confidence,
                     "elapsedMs": result.elapsed_ms,
+                    "reviewLines": result.review_lines,
+                    "needsReview": bool(result.review_lines) or result.mean_confidence is None,
+                    "confidenceKind": "uncalibrated-engine-score",
                 },
             )
         except OcrBusyError as exception:
@@ -356,12 +393,13 @@ def main() -> None:
     parser.add_argument(
         "--recognition-model", default="arabic_PP-OCRv5_mobile_rec"
     )
-    parser.add_argument("--minimum-score", type=float, default=0.35)
+    parser.add_argument("--minimum-score", type=float, default=0.35,
+                        help="Review threshold only; uncertain text is retained.")
     parser.add_argument(
         "--text-det-limit-side-len",
         type=int,
         default=3000,
-        help="Maximum long side passed to the layout/text detector (1600-4000).",
+        help="Text detector side-length parameter (1600-4000); internal resize limits still apply.",
     )
     args = parser.parse_args()
     if args.host not in {"127.0.0.1", "localhost", "::1"}:
