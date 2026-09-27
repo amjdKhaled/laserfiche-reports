@@ -88,9 +88,11 @@ internal sealed class PaddleOcrLocalService : ILocalOcrService
             if (text.Length < _options.EffectiveMinimumTextLength) return null;
 
             _logger.LogInformation(
-                "Local OCR completed with {Engine} ({Model}); extracted {CharacterCount} characters.",
+                "Local OCR completed with {Engine} ({Model}) using {SelectedVariant}; " +
+                "extracted {CharacterCount} characters.",
                 result?.Engine ?? "PaddleOCR",
                 result?.Model ?? "unknown",
+                result?.SelectedVariant ?? "unknown variant",
                 text.Length);
             return text;
         }
@@ -240,5 +242,6 @@ internal sealed class PaddleOcrLocalService : ILocalOcrService
         int? LineCount,
         double? MeanConfidence,
         long? ElapsedMs,
-        bool? NeedsReview = null);
+        bool? NeedsReview = null,
+        string? SelectedVariant = null);
 }

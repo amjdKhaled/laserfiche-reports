@@ -10,6 +10,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import tempfile
 import threading
 import time
@@ -23,10 +24,175 @@ from typing import Any
 MAX_IMAGE_BYTES = 200 * 1024 * 1024
 MAX_JSON_REQUEST_BYTES = 70 * 1024 * 1024
 ENGINE_NAME = "PP-StructureV3"
+ARABIC_WORD_RE = re.compile(r"[\u0621-\u063a\u0641-\u064a\u066e-\u06d3]{2,}")
+PREPROCESSING_PROFILES = {
+    "original": ("original",),
+    "quality": ("original", "clahe"),
+    "thorough": ("original", "clahe", "adaptive"),
+}
 
 
 class OcrBusyError(RuntimeError):
     """Raised when another CPU OCR request is already running."""
+
+
+def image_variants(image_bytes: bytes, profile: str) -> list[tuple[str, bytes]]:
+    """Create independent OpenCV variants while retaining the exact original."""
+    names = PREPROCESSING_PROFILES[profile]
+    if names == ("original",):
+        return [("original", image_bytes)]
+
+    import cv2
+    import numpy as np
+
+    decoded = cv2.imdecode(np.frombuffer(image_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
+    if decoded is None:
+        raise ValueError("OpenCV could not decode the supplied image.")
+    gray = cv2.cvtColor(decoded, cv2.COLOR_BGR2GRAY)
+    values: list[tuple[str, bytes]] = [("original", image_bytes)]
+    for name in names[1:]:
+        if name == "clahe":
+            candidate = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(gray)
+        elif name == "adaptive":
+            denoised = cv2.GaussianBlur(gray, (3, 3), 0)
+            candidate = cv2.adaptiveThreshold(
+                denoised,
+                255,
+                cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                cv2.THRESH_BINARY,
+                41,
+                11,
+            )
+        else:  # Defensive guard for a future invalid profile definition.
+            raise ValueError(f"Unknown image variant: {name}")
+        encoded, output = cv2.imencode(".png", candidate)
+        if not encoded:
+            raise ValueError(f"OpenCV could not encode the {name} image variant.")
+        values.append((name, output.tobytes()))
+    return values
+
+
+class ArabicMorphologyScorer:
+    """Use CAMeL morphology as a candidate-quality signal, never as a rewriter."""
+
+    def __init__(self, enabled: bool = True) -> None:
+        self.enabled = enabled
+        self.available = False
+        self.error: str | None = None
+        self._analyzer: Any = None
+        self._cache: dict[str, bool] = {}
+        if not enabled:
+            return
+        try:
+            from camel_tools.morphology.analyzer import Analyzer
+            from camel_tools.morphology.database import MorphologyDB
+
+            self._analyzer = Analyzer(
+                MorphologyDB.builtin_db("calima-msa-r13"), cache_size=10000
+            )
+            self.available = True
+        except Exception as exception:
+            self.error = f"{type(exception).__name__}: {exception}"
+            print(
+                "CAMeL Tools morphology is unavailable; candidate selection will "
+                f"fall back to OCR confidence and noise checks. {self.error}",
+                flush=True,
+            )
+
+    def score(self, text: str) -> tuple[float | None, int]:
+        tokens = ARABIC_WORD_RE.findall(text)
+        if not self.available or not tokens:
+            return None, len(tokens)
+        if len(self._cache) > 50000:
+            self._cache.clear()
+        unique_tokens = set(tokens)
+        for token in unique_tokens:
+            if token not in self._cache:
+                try:
+                    self._cache[token] = bool(self._analyzer.analyze(token))
+                except Exception:
+                    self._cache[token] = False
+        recognized = sum(1 for token in tokens if self._cache[token])
+        return recognized / len(tokens), len(tokens)
+
+
+def text_noise_ratio(text: str) -> float:
+    """Estimate obvious OCR noise without changing the recognized text."""
+    tokens = re.findall(r"\S+", text)
+    if not tokens:
+        return 1.0
+    single_arabic = sum(
+        1 for token in tokens if re.fullmatch(r"[\u0621-\u063a\u0641-\u064a]", token)
+    )
+    lines = [re.sub(r"\s+", " ", line.strip()) for line in text.splitlines() if line.strip()]
+    duplicates = len(lines) - len(set(lines))
+    single_ratio = single_arabic / len(tokens)
+    duplicate_ratio = duplicates / len(lines) if lines else 0.0
+    return min(1.0, 0.7 * single_ratio + 0.3 * duplicate_ratio)
+
+
+@dataclass(frozen=True)
+class OcrCandidate:
+    variant: str
+    text: str
+    scores: list[float]
+    review_lines: list[dict[str, Any]]
+    morphology_coverage: float | None
+    arabic_token_count: int
+    quality_score: float
+
+    @property
+    def mean_confidence(self) -> float | None:
+        return sum(self.scores) / len(self.scores) if self.scores else None
+
+
+def build_candidate(
+    variant: str,
+    text: str,
+    scores: list[float],
+    review_lines: list[dict[str, Any]],
+    morphology: ArabicMorphologyScorer,
+) -> OcrCandidate:
+    morphology_coverage, token_count = morphology.score(text)
+    confidence = sum(scores) / len(scores) if scores else 0.0
+    morphology_signal = (
+        morphology_coverage
+        if morphology_coverage is not None and token_count >= 5
+        else 0.5
+    )
+    quality = (
+        0.50 * confidence
+        + 0.40 * morphology_signal
+        + 0.10 * (1.0 - text_noise_ratio(text))
+    )
+    return OcrCandidate(
+        variant=variant,
+        text=text,
+        scores=scores,
+        review_lines=review_lines,
+        morphology_coverage=morphology_coverage,
+        arabic_token_count=token_count,
+        quality_score=quality,
+    )
+
+
+def select_candidate(
+    candidates: list[OcrCandidate], minimum_improvement: float = 0.03
+) -> OcrCandidate:
+    """Prefer original unless a non-destructive variant is clearly stronger."""
+    if not candidates:
+        raise ValueError("At least one OCR candidate is required.")
+    original = next((item for item in candidates if item.variant == "original"), candidates[0])
+    best = max(candidates, key=lambda item: item.quality_score)
+    if best is original or best.quality_score < original.quality_score + minimum_improvement:
+        return original
+    # A short high-confidence fragment must not replace a substantially more
+    # complete original page. This is a guard, not a completeness claim.
+    original_tokens = max(1, len(re.findall(r"\S+", original.text)))
+    best_tokens = len(re.findall(r"\S+", best.text))
+    if best_tokens < original_tokens * 0.60:
+        return original
+    return best
 
 
 def image_suffix(image_bytes: bytes) -> str:
@@ -167,6 +333,8 @@ class OcrResult:
     image_sha256: str
     elapsed_ms: int
     review_lines: list[dict[str, Any]]
+    selected_variant: str
+    candidates: list[dict[str, Any]]
 
 
 class OcrRuntime:
@@ -178,6 +346,8 @@ class OcrRuntime:
         device: str,
         minimum_score: float,
         text_det_limit_side_len: int,
+        preprocessing_profile: str,
+        use_camel_tools: bool,
     ) -> None:
         self.ocr_version = ocr_version
         self.language = language
@@ -185,6 +355,18 @@ class OcrRuntime:
         self.device = device
         self.minimum_score = minimum_score
         self.text_det_limit_side_len = text_det_limit_side_len
+        self.preprocessing_profile = preprocessing_profile
+        self.opencv_version: str | None = None
+        try:
+            import cv2
+
+            self.opencv_version = str(cv2.__version__)
+        except Exception as exception:
+            if preprocessing_profile != "original":
+                raise RuntimeError(
+                    "OpenCV is required for the selected preprocessing profile. "
+                    "Run tools/paddleocr-vl/setup.ps1 again."
+                ) from exception
         self._lock = threading.Lock()
         print(
             f"Loading {ENGINE_NAME} {ocr_version} ({recognition_model}, lang={language}) "
@@ -210,19 +392,19 @@ class OcrRuntime:
             format_block_content=True,
             text_det_limit_side_len=text_det_limit_side_len,
         )
-        print(f"{ENGINE_NAME} Arabic worker is ready.", flush=True)
+        self._morphology = ArabicMorphologyScorer(use_camel_tools)
+        print(
+            f"{ENGINE_NAME} Arabic worker is ready. "
+            f"OpenCV profile={preprocessing_profile}; "
+            f"CAMeL morphology={'ready' if self._morphology.available else 'fallback'}.",
+            flush=True,
+        )
 
     def recognize(self, image_bytes: bytes) -> OcrResult:
         digest = hashlib.sha256(image_bytes).hexdigest()
         started = time.perf_counter()
-        temp_path = ""
+        temp_paths: list[str] = []
         try:
-            with tempfile.NamedTemporaryFile(
-                suffix=image_suffix(image_bytes), delete=False
-            ) as temp_file:
-                temp_file.write(image_bytes)
-                temp_path = temp_file.name
-
             print(
                 f"OCR request image_sha256={digest} bytes={len(image_bytes)}",
                 flush=True,
@@ -232,34 +414,65 @@ class OcrRuntime:
                     "Another OCR request is already running; wait for it to finish."
                 )
             try:
-                results = self._pipeline.predict(
-                    temp_path,
-                    use_doc_orientation_classify=True,
-                    use_doc_unwarping=False,
-                    use_textline_orientation=True,
-                    text_rec_score_thresh=self.minimum_score,
-                    text_det_limit_side_len=self.text_det_limit_side_len,
-                )
-                texts: list[str] = []
-                scores: list[float] = []
-                review_lines: list[dict[str, Any]] = []
-                for page_index, result in enumerate(results):
-                    review_lines.extend(extract_review_lines(result, self.minimum_score, page_index))
-                    result_text, result_scores = extract_structure_text(
-                        result, self.minimum_score
+                candidates: list[OcrCandidate] = []
+                for variant, variant_bytes in image_variants(
+                    image_bytes, self.preprocessing_profile
+                ):
+                    with tempfile.NamedTemporaryFile(
+                        suffix=image_suffix(variant_bytes), delete=False
+                    ) as temp_file:
+                        temp_file.write(variant_bytes)
+                        temp_path = temp_file.name
+                        temp_paths.append(temp_path)
+                    variant_started = time.perf_counter()
+                    results = self._pipeline.predict(
+                        temp_path,
+                        use_doc_orientation_classify=True,
+                        use_doc_unwarping=False,
+                        use_textline_orientation=True,
+                        text_rec_score_thresh=self.minimum_score,
+                        text_det_limit_side_len=self.text_det_limit_side_len,
                     )
-                    if result_text:
-                        texts.append(result_text)
-                    scores.extend(result_scores)
+                    texts: list[str] = []
+                    scores: list[float] = []
+                    review_lines: list[dict[str, Any]] = []
+                    for page_index, result in enumerate(results):
+                        review_lines.extend(
+                            extract_review_lines(result, self.minimum_score, page_index)
+                        )
+                        result_text, result_scores = extract_structure_text(
+                            result, self.minimum_score
+                        )
+                        if result_text:
+                            texts.append(result_text)
+                        scores.extend(result_scores)
+                    candidate = build_candidate(
+                        variant,
+                        "\n\n".join(texts).strip(),
+                        scores,
+                        review_lines,
+                        self._morphology,
+                    )
+                    candidates.append(candidate)
+                    print(
+                        f"OCR candidate image_sha256={digest} variant={variant} "
+                        f"quality={candidate.quality_score:.4f} "
+                        f"mean_confidence={candidate.mean_confidence} "
+                        f"morphology_coverage={candidate.morphology_coverage} "
+                        f"elapsed_ms={round((time.perf_counter() - variant_started) * 1000)}",
+                        flush=True,
+                    )
+                selected = select_candidate(candidates)
             finally:
                 self._lock.release()
 
             elapsed_ms = round((time.perf_counter() - started) * 1000)
-            mean_confidence = sum(scores) / len(scores) if scores else None
-            text = "\n\n".join(texts).strip()
+            mean_confidence = selected.mean_confidence
+            text = selected.text
             line_count = sum(1 for line in text.splitlines() if line.strip())
             print(
                 f"OCR completed image_sha256={digest} lines={line_count} "
+                f"selected_variant={selected.variant} "
                 f"mean_confidence={mean_confidence} elapsed_ms={elapsed_ms}",
                 flush=True,
             )
@@ -269,10 +482,24 @@ class OcrRuntime:
                 mean_confidence=mean_confidence,
                 image_sha256=digest,
                 elapsed_ms=elapsed_ms,
-                review_lines=review_lines,
+                review_lines=selected.review_lines,
+                selected_variant=selected.variant,
+                candidates=[
+                    {
+                        "variant": item.variant,
+                        "qualityScore": round(item.quality_score, 6),
+                        "meanConfidence": item.mean_confidence,
+                        "morphologyCoverage": item.morphology_coverage,
+                        "arabicTokenCount": item.arabic_token_count,
+                        "lineCount": sum(
+                            1 for line in item.text.splitlines() if line.strip()
+                        ),
+                    }
+                    for item in candidates
+                ],
             )
         finally:
-            if temp_path:
+            for temp_path in temp_paths:
                 try:
                     os.remove(temp_path)
                 except OSError:
@@ -297,6 +524,12 @@ class OcrHandler(BaseHTTPRequestHandler):
                 "language": self.runtime.language,
                 "device": self.runtime.device,
                 "textDetLimitSideLen": self.runtime.text_det_limit_side_len,
+                "preprocessingProfile": self.runtime.preprocessing_profile,
+                "opencv": self.runtime.opencv_version is not None,
+                "opencvVersion": self.runtime.opencv_version,
+                "camelToolsEnabled": self.runtime._morphology.enabled,
+                "camelTools": self.runtime._morphology.available,
+                "camelToolsError": self.runtime._morphology.error,
                 "generative": False,
             },
         )
@@ -355,6 +588,8 @@ class OcrHandler(BaseHTTPRequestHandler):
                     "lineCount": result.line_count,
                     "meanConfidence": result.mean_confidence,
                     "elapsedMs": result.elapsed_ms,
+                    "selectedVariant": result.selected_variant,
+                    "candidates": result.candidates,
                     "reviewLines": result.review_lines,
                     "needsReview": bool(result.review_lines) or result.mean_confidence is None,
                     "confidenceKind": "uncalibrated-engine-score",
@@ -403,8 +638,19 @@ def main() -> None:
     parser.add_argument(
         "--text-det-limit-side-len",
         type=int,
-        default=3000,
+        default=4000,
         help="Text detector side-length parameter (1600-4000); internal resize limits still apply.",
+    )
+    parser.add_argument(
+        "--preprocessing-profile",
+        choices=tuple(PREPROCESSING_PROFILES),
+        default="quality",
+        help="original=one pass; quality=original+CLAHE; thorough also tries adaptive thresholding.",
+    )
+    parser.add_argument(
+        "--disable-camel-tools",
+        action="store_true",
+        help="Disable CAMeL morphology candidate scoring (recognized text is never rewritten).",
     )
     args = parser.parse_args()
     if args.host not in {"127.0.0.1", "localhost", "::1"}:
@@ -421,6 +667,8 @@ def main() -> None:
         args.device,
         args.minimum_score,
         args.text_det_limit_side_len,
+        args.preprocessing_profile,
+        not args.disable_camel_tools,
     )
     server = ThreadingHTTPServer((args.host, args.port), OcrHandler)
     print(f"Listening on http://{args.host}:{args.port}", flush=True)

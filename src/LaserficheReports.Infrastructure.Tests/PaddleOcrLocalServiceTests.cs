@@ -23,7 +23,7 @@ public sealed class PaddleOcrLocalServiceTests
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(
-                    "{\"text\":\"عنوان\\nالبيان القيمة\",\"engine\":\"PaddleOCR\",\"model\":\"arabic_PP-OCRv5_mobile_rec\",\"imageSha256\":\"0f4636c78f65d3639ece5a064b5ae753e3408614a14fb18ab4d7540d2c248543\",\"lineCount\":2,\"meanConfidence\":0.91}",
+                    "{\"text\":\"عنوان\\nالبيان القيمة\",\"engine\":\"PaddleOCR\",\"model\":\"arabic_PP-OCRv5_mobile_rec\",\"imageSha256\":\"0f4636c78f65d3639ece5a064b5ae753e3408614a14fb18ab4d7540d2c248543\",\"lineCount\":2,\"meanConfidence\":0.91,\"selectedVariant\":\"clahe\"}",
                     Encoding.UTF8,
                     "application/json")
             };

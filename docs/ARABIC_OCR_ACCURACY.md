@@ -66,6 +66,13 @@ recognition and table structure remain subject to real-image evaluation.
 12. Promote a new default only after paired tests show improvement without material
     regressions in critical fields. Stop based on measured marginal benefit, not an
     unbounded promise of perfect OCR. Keep a tested rollback baseline.
+13. OpenCV preprocessing must retain the byte-identical original as a candidate.
+    The production `quality` profile compares original and CLAHE; `thorough` also
+    tries adaptive thresholding. Do not assume preprocessing is always better.
+14. CAMeL Tools morphology coverage is only a ranking feature. Names, loanwords,
+    OCR fragments, and specialized terms may be valid without a dictionary
+    analysis. It must never rewrite text, and a preprocessed candidate needs a
+    clear score margin plus a completeness guard before replacing the original.
 
 ## Local paired experiments
 
@@ -91,7 +98,8 @@ local uncommitted changes. Run this benchmark script against it:
   --output .\ocr-evaluation\baseline.json
 ```
 
-Then start the changed worker and run:
+Then start the changed worker with `-PreprocessingProfile original` so each
+benchmark request performs exactly one OCR pass, and run:
 
 ```powershell
 .\tools\paddleocr-vl\.venv\Scripts\python.exe .\tools\paddleocr-vl\benchmark.py `
@@ -112,6 +120,11 @@ OCR at all. Test complete ingestion separately after selecting a policy.
 A scale2 page may still be resized by the detector; it is not a fix for that limit.
 Model comparisons can use separate local workers/ports with separate report files.
 
+After the offline variants identify promising image transforms, test the worker's
+production selector separately with `-PreprocessingProfile quality`. Its response
+contains `selectedVariant` and candidate diagnostics. Do not choose the production
+policy from Entry 618 alone; keep at least one held-out Arabic page.
+
 ## Research consulted
 
 - Tesseract image quality, segmentation and scaling:
@@ -120,6 +133,12 @@ Model comparisons can use separate local workers/ports with separate report file
   https://tesseract-ocr.github.io/tessdoc/Data-Files.html
 - Official PaddleOCR pipeline parameters and Arabic model listing:
   https://github.com/PaddlePaddle/PaddleOCR/blob/main/docs/version3.x/pipeline_usage/OCR.en.md
+- OpenCV CLAHE and adaptive thresholding:
+  https://docs.opencv.org/4.10.0/d6/db6/classcv_1_1CLAHE.html
+  https://docs.opencv.org/4.10.0/d7/d1b/group__imgproc__misc.html
+- CAMeL Tools morphology analyzer and MSA database:
+  https://camel-tools.readthedocs.io/en/stable/api/morphology/analyzer.html
+  https://camel-tools.readthedocs.io/en/latest/reference/packages.html
 - KITAB-Bench, Arabic-specific document evaluation:
   https://arxiv.org/abs/2502.14949
 - Baseer, Arabic document OCR; reported results belong to its evaluation setup,
@@ -129,8 +148,10 @@ Model comparisons can use separate local workers/ports with separate report file
 
 ## Verification status
 
-Eight Python unit tests cover filtered weak text, repeated blocks, unknown scores,
-strict Arabic distinctions, edit metrics, local-only endpoints and image variants.
+Python unit tests cover filtered weak text, repeated blocks, unknown scores,
+strict Arabic distinctions, edit metrics, local-only endpoints, image variants,
+CAMeL scoring without rewriting, selection margin, completeness guarding, and
+obvious noise penalties.
 Python syntax and whitespace checks passed. These are software checks, not an OCR
 accuracy benchmark. .NET tests and real Paddle inference remain to be run on the
 installed environment; the Arabic image/reference set is still required.
