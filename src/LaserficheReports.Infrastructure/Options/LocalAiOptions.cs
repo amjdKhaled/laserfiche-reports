@@ -21,7 +21,7 @@ internal sealed class LocalAiOptions
 
     public int EffectiveEmbeddingDimensions => EmbeddingDimensions > 0 ? EmbeddingDimensions : 768;
     public int EffectiveEmbeddingBatchSize => Math.Clamp(EmbeddingBatchSize, 1, 64);
-    public int EffectiveTimeoutSeconds => Math.Clamp(TimeoutSeconds, 10, 600);
+    public int EffectiveTimeoutSeconds => Math.Clamp(TimeoutSeconds, 10, 1800);
     public int EffectiveChunkSize => Math.Clamp(ChunkSize, 200, 8000);
     public int EffectiveChunkOverlap => Math.Clamp(ChunkOverlap, 0, EffectiveChunkSize / 2);
     public int EffectiveOcrCorrectionMaxTokens => Math.Clamp(OcrCorrectionMaxTokens, 512, 32768);
