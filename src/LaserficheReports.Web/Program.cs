@@ -153,12 +153,23 @@ app.MapPost("/api/ingestion/laserfiche/{entryId:int}", async (
             preservedExistingIndex = true
         }, statusCode: StatusCodes.Status503ServiceUnavailable);
     }
-    catch (NpgsqlException)
+    catch (PostgresException exception)
+    {
+        return Results.Json(new
+        {
+            error = "supabase_write_failed",
+            message = exception.MessageText,
+            sqlState = exception.SqlState,
+            preservedExistingIndex = true
+        }, statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+    catch (NpgsqlException exception)
     {
         return Results.Json(new
         {
             error = "supabase_database_unavailable",
             message = "The local Supabase/PostgreSQL database is unavailable. Check Supabase:PostgresConnectionString and the database service.",
+            databaseError = exception.Message,
             preservedExistingIndex = true
         }, statusCode: StatusCodes.Status503ServiceUnavailable);
     }
@@ -192,6 +203,69 @@ app.MapGet("/api/ocr/status", async (
         {
             isReady = false,
             error = "PaddleOCR worker is unavailable. Start tools/paddleocr-vl/start.ps1."
+        }, statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+});
+
+app.MapGet("/api/database/status", async (
+    IConfiguration configuration,
+    CancellationToken cancellationToken) =>
+{
+    var connectionString = configuration["Supabase:PostgresConnectionString"];
+    if (string.IsNullOrWhiteSpace(connectionString))
+    {
+        return Results.Json(new
+        {
+            status = "unavailable",
+            error = "supabase_connection_string_missing"
+        }, statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+
+    try
+    {
+        var settings = new NpgsqlConnectionStringBuilder(connectionString);
+        await using var connection = new NpgsqlConnection(connectionString);
+        await connection.OpenAsync(cancellationToken);
+        await using var command = new NpgsqlCommand("SELECT 1;", connection);
+        await command.ExecuteScalarAsync(cancellationToken);
+
+        return Results.Ok(new
+        {
+            status = "ready",
+            host = settings.Host,
+            port = settings.Port,
+            database = settings.Database,
+            username = settings.Username
+        });
+    }
+    catch (PostgresException exception) when (
+        exception.SqlState == "XX000" &&
+        exception.MessageText.Contains("ENOIDENTIFIER", StringComparison.OrdinalIgnoreCase))
+    {
+        return Results.Json(new
+        {
+            status = "unavailable",
+            error = "supabase_tenant_identifier_missing",
+            message = "Use Username=postgres.YOUR_POOLER_TENANT_ID in appsettings.Local.json."
+        }, statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+    catch (PostgresException exception)
+    {
+        return Results.Json(new
+        {
+            status = "unavailable",
+            error = "supabase_connection_failed",
+            message = exception.MessageText,
+            sqlState = exception.SqlState
+        }, statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+    catch (Exception exception) when (exception is NpgsqlException or ArgumentException)
+    {
+        return Results.Json(new
+        {
+            status = "unavailable",
+            error = "supabase_connection_failed",
+            message = exception.Message
         }, statusCode: StatusCodes.Status503ServiceUnavailable);
     }
 });
