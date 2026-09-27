@@ -7,14 +7,16 @@ or .NET SDK were available in the editing environment.
 
 ## Findings in the current implementation
 
-- Recognition threshold 0.35 could discard uncertain source text before recovery.
-  Recognition now retains available text; the threshold flags review instead.
-- Identical neighbouring structure blocks were deleted by text equality alone.
-  Distinct repeated labels/cells are now retained.
+- A trial that lowered the Paddle recognition threshold from 0.35 to 0.0
+  surfaced visibly incoherent Arabic in Entry 618. Restored 0.35 while keeping
+  available low-score line diagnostics for review. This can omit faint words.
+- A trial retaining every identical neighbouring structure block caused visible
+  duplication in Entry 618. Restored the previous adjacent deduplication rule;
+  distinct but identical consecutive cells still need spatially grounded handling.
 - Missing fallback scores previously became 1.0. Unknown scores now remain unknown;
   nonfinite/out-of-range values do not enter the mean.
-- Mean confidence excluded low scores, producing an optimistic statistic. Valid
-  low scores now contribute. Mean confidence is still not transcription accuracy.
+- The aggregate mean score includes any finite overall recognition scores
+  provided by Paddle. It is still not transcription accuracy.
 - Ollama received text without the image. Length and numeric checks could not
   establish that names or words matched the document. Automatic rewriting is off;
   legacy opt-in configurations cannot replace text with an unverified suggestion.
@@ -24,8 +26,8 @@ or .NET SDK were available in the editing environment.
   prove that recognition crops lost the same resolution. Changing a CLI upper
   bound alone would not remove Paddle's internal `max_side_limit`.
 
-Low-score retention may also retain noise. This is a deliberate tradeoff requiring
-review, not proof of an improved CER. Detection can still miss text entirely; no
+The threshold can drop faint but correct text; rejected lines need separate visual
+review. Detection can still miss text entirely; no
 recognizer score detects an omitted region reliably. Layout, RTL, mixed-language
 recognition and table structure remain subject to real-image evaluation.
 
@@ -127,7 +129,7 @@ Model comparisons can use separate local workers/ports with separate report file
 
 ## Verification status
 
-Eight Python unit tests cover retained weak text, repeated blocks, unknown scores,
+Eight Python unit tests cover filtered weak text, repeated blocks, unknown scores,
 strict Arabic distinctions, edit metrics, local-only endpoints and image variants.
 Python syntax and whitespace checks passed. These are software checks, not an OCR
 accuracy benchmark. .NET tests and real Paddle inference remain to be run on the
