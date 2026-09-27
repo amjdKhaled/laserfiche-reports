@@ -141,17 +141,6 @@ internal sealed partial class OllamaOcrTextCorrectionService : IOcrTextCorrectio
         var ratio = candidateLength / (double)originalLength;
         if (ratio is < 0.80 or > 1.20) return "length-changed-too-much";
 
-        var originalNumbers = ProtectedNumberRegex().Matches(original)
-            .Cast<Match>()
-            .Select(match => match.Value)
-            .ToArray();
-        var candidateNumbers = ProtectedNumberRegex().Matches(candidate)
-            .Cast<Match>()
-            .Select(match => match.Value)
-            .ToArray();
-        if (!originalNumbers.SequenceEqual(candidateNumbers, StringComparer.Ordinal))
-            return "numbers-or-dates-changed";
-
         var originalLatinTokens = ProtectedLatinTokenRegex().Matches(original)
             .Cast<Match>()
             .Select(match => match.Value)
@@ -162,6 +151,17 @@ internal sealed partial class OllamaOcrTextCorrectionService : IOcrTextCorrectio
             .ToArray();
         if (!originalLatinTokens.SequenceEqual(candidateLatinTokens, StringComparer.Ordinal))
             return "latin-identifiers-changed";
+
+        var originalNumbers = ProtectedNumberRegex().Matches(original)
+            .Cast<Match>()
+            .Select(match => match.Value)
+            .ToArray();
+        var candidateNumbers = ProtectedNumberRegex().Matches(candidate)
+            .Cast<Match>()
+            .Select(match => match.Value)
+            .ToArray();
+        if (!originalNumbers.SequenceEqual(candidateNumbers, StringComparer.Ordinal))
+            return "numbers-or-dates-changed";
 
         if (candidate.Contains("```", StringComparison.Ordinal) ||
             candidate.Contains("<ocr>", StringComparison.OrdinalIgnoreCase))
