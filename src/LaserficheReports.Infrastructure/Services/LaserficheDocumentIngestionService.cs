@@ -66,8 +66,9 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
                 "Supabase:PostgresConnectionString is missing. Configure it in appsettings.Local.json.");
         }
 
-        // Fail before expensive page export, OCR, and embedding work when the
-        // local database or Supabase pooler configuration is unavailable.
+        // Verify the database before spending several minutes exporting pages,
+        // running OCR, and generating embeddings. This also makes pooler/tenant
+        // configuration errors fail immediately without touching an existing index.
         await EnsureDatabaseAvailableAsync(cancellationToken).ConfigureAwait(false);
 
         var repository = await _repositoryContext
@@ -164,14 +165,19 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
                     .ConfigureAwait(false);
                 detectedPageNumbers.Add(pageNumber);
                 ocrAttemptCount++;
+                using var imageBuffer = new MemoryStream();
+                await pageImage.Content.CopyToAsync(imageBuffer, cancellationToken)
+                    .ConfigureAwait(false);
+                var pageImageBytes = imageBuffer.ToArray();
+                using var ocrImage = new MemoryStream(pageImageBytes, writable: false);
                 var ocrText = await _ocr
-                    .TryExtractTextAsync(pageImage.Content, cancellationToken)
+                    .TryExtractTextAsync(ocrImage, cancellationToken)
                     .ConfigureAwait(false);
 
                 if (!string.IsNullOrWhiteSpace(ocrText))
                 {
                     var correction = await _ocrCorrection
-                        .CorrectAsync(ocrText, cancellationToken)
+                        .CorrectAsync(ocrText, pageImageBytes, cancellationToken)
                         .ConfigureAwait(false);
                     if (!string.IsNullOrWhiteSpace(correction.Model))
                     {
