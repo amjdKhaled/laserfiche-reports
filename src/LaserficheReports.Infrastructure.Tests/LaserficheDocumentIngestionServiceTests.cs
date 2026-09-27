@@ -166,13 +166,13 @@ public sealed class LaserficheDocumentIngestionServiceTests
             [],
             ocrCorrectionAttemptCount: 1,
             ocrCorrectedPageCount: 1,
-            ocrCorrectionModel: "qwen2.5:7b");
+            ocrCorrectionModel: "qwen2.5vl:3b");
 
         using var document = JsonDocument.Parse(json);
         var root = document.RootElement;
         Assert.Equal(1, root.GetProperty("ocr_correction_attempt_count").GetInt32());
         Assert.Equal(1, root.GetProperty("ocr_corrected_page_count").GetInt32());
-        Assert.Equal("qwen2.5:7b", root.GetProperty("ocr_correction_model").GetString());
+        Assert.Equal("qwen2.5vl:3b", root.GetProperty("ocr_correction_model").GetString());
     }
 
     [Fact]
