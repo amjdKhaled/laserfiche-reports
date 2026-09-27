@@ -10,7 +10,7 @@ namespace LaserficheReports.Infrastructure.Tests;
 public sealed class OllamaOcrTextCorrectionServiceTests
 {
     [Fact]
-    public async Task CorrectAsync_AcceptsConservativeArabicCorrection()
+    public async Task CorrectAsync_RejectsUnverifiedArabicCorrection()
     {
         var handler = new StubHandler(_ => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
         {
@@ -23,8 +23,9 @@ public sealed class OllamaOcrTextCorrectionServiceTests
 
         var result = await service.CorrectAsync("قرار الجلس الإدارة رقم 27 بتاريخ 1448/03/27");
 
-        Assert.True(result.WasCorrected);
-        Assert.Equal("قرار مجلس الإدارة رقم 27 بتاريخ 1448/03/27", result.Text);
+        Assert.False(result.WasCorrected);
+        Assert.Equal("قرار الجلس الإدارة رقم 27 بتاريخ 1448/03/27", result.Text);
+        Assert.Equal("visual-verification-required", result.Diagnostic);
         Assert.Equal("qwen2.5:7b", result.Model);
     }
 
@@ -57,13 +58,23 @@ public sealed class OllamaOcrTextCorrectionServiceTests
     }
 
     [Fact]
-    public void ValidateCorrection_AcceptsArabicLetterAndSpacingFixes()
+    public void ValidateCorrection_RequiresVisualEvidenceForLetterChanges()
     {
         var error = OllamaOcrTextCorrectionService.ValidateCorrection(
             "الجهة العنية والقرار رقم 27",
             "الجهة المعنية والقرار رقم 27");
 
-        Assert.Null(error);
+        Assert.Equal("visual-verification-required", error);
+    }
+
+    [Theory]
+    [InlineData("محمد رقم ١٢", "محمود رقم ١٢", "visual-verification-required")]
+    [InlineData("رقم ١٢", "رقم 12", "numbers-or-dates-changed")]
+    [InlineData("أ 12 ب 34", "أ 34 ب 12", "numbers-or-dates-changed")]
+    public void ValidateCorrection_ProtectsNamesDigitShapesAndOrder(
+        string original, string candidate, string expected)
+    {
+        Assert.Equal(expected, OllamaOcrTextCorrectionService.ValidateCorrection(original, candidate));
     }
 
     private static OllamaOcrTextCorrectionService CreateService(HttpMessageHandler handler)

@@ -1,6 +1,4 @@
-using System.Globalization;
 using System.Net.Http.Json;
-using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using LaserficheReports.Application.Interfaces;
@@ -11,8 +9,8 @@ using Microsoft.Extensions.Options;
 namespace LaserficheReports.Infrastructure.Services;
 
 /// <summary>
-/// Uses a local Ollama model as a conservative OCR proofreader. The result is
-/// rejected whenever protected numbers/dates change or the output shape is implausible.
+/// Evaluates local Ollama suggestions. Text-only changes are retained as unverified
+/// and cannot replace source OCR until an image-backed verification path exists.
 /// </summary>
 internal sealed partial class OllamaOcrTextCorrectionService : IOcrTextCorrectionService
 {
@@ -133,15 +131,13 @@ internal sealed partial class OllamaOcrTextCorrectionService : IOcrTextCorrectio
         var ratio = candidateLength / (double)originalLength;
         if (ratio is < 0.80 or > 1.20) return "length-changed-too-much";
 
-        var originalNumbers = ProtectedNumberRegex().Matches(NormalizeDigits(original))
+        var originalNumbers = ProtectedNumberRegex().Matches(original)
             .Cast<Match>()
             .Select(match => match.Value)
-            .OrderBy(value => value, StringComparer.Ordinal)
             .ToArray();
-        var candidateNumbers = ProtectedNumberRegex().Matches(NormalizeDigits(candidate))
+        var candidateNumbers = ProtectedNumberRegex().Matches(candidate)
             .Cast<Match>()
             .Select(match => match.Value)
-            .OrderBy(value => value, StringComparer.Ordinal)
             .ToArray();
         if (!originalNumbers.SequenceEqual(candidateNumbers, StringComparer.Ordinal))
             return "numbers-or-dates-changed";
@@ -150,18 +146,12 @@ internal sealed partial class OllamaOcrTextCorrectionService : IOcrTextCorrectio
             candidate.Contains("<ocr>", StringComparison.OrdinalIgnoreCase))
             return "unexpected-wrapper";
 
-        return null;
-    }
+        // This service receives text only. A fluent replacement (including a
+        // proper name) cannot be verified against the source image here.
+        if (!string.Equals(original.Trim(), candidate.Trim(), StringComparison.Ordinal))
+            return "visual-verification-required";
 
-    private static string NormalizeDigits(string value)
-    {
-        var result = new StringBuilder(value.Length);
-        foreach (var character in value)
-        {
-            var digit = CharUnicodeInfo.GetDigitValue(character);
-            result.Append(digit >= 0 ? (char)('0' + digit) : character);
-        }
-        return result.ToString();
+        return null;
     }
 
     [GeneratedRegex(@"\d+(?:[\s./:\-]\d+)*", RegexOptions.CultureInvariant)]

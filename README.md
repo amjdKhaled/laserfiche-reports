@@ -141,14 +141,19 @@ indexed content and chunks. Electronic documents that report `pageCount=0` are
 probed through the V2 Export endpoint so OCR is still invoked; probing stops at
 the first unavailable page and is capped by `MaxFallbackPages`. The worker uses
 the non-generative `PP-StructureV3` layout pipeline with the
-`arabic_PP-OCRv5_mobile_rec` recognition model. Arabic OCR output is then
-proofread locally in Arabic or English by the configured Ollama model. Entry
-`618` is the Arabic reference document used for testing, not a language restriction.
-A correction is rejected if
-it changes any number/date or changes the text length materially. Each OCR
-response includes the SHA-256 hash of the received page; the .NET service checks
-that hash before storing text so stale or mismatched results cannot enter the
-index. OCR confidence below `0.35` is discarded by default.
+`arabic_PP-OCRv5_mobile_rec` recognition model. Text-only Ollama rewriting is disabled by default; even when an older local
+configuration enables it, changed text is rejected until image-backed verification
+is available. This protects names as well as digit shapes and numeric order.
+Entry `618` is the Arabic reference document used for testing, not a language restriction.
+Each OCR response includes the SHA-256 hash of the received page; the .NET service
+checks that hash before storing text. Low-confidence text is retained, with
+`reviewLines` and `needsReview` diagnostics. `--minimum-score` is now a review
+threshold, not a text-deletion threshold. These engine scores are not calibrated
+accuracy percentages. Review metadata is logged by .NET, not persisted in the
+existing database schema.
+
+See [Arabic OCR accuracy evaluation](docs/ARABIC_OCR_ACCURACY.md) for paired
+local experiments and the outstanding real-document validation gate.
 
 Start the API with local Laserfiche credentials, then ingest the Arabic reference Entry `618`:
 
