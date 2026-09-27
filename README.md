@@ -108,7 +108,9 @@ The setup creates an isolated Python environment inside `tools/paddleocr-vl`.
 Start the worker in its own PowerShell window before the .NET application:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\paddleocr-vl\start.ps1 -TextDetectionMaxSideLength 3000
+powershell -ExecutionPolicy Bypass -File .\tools\paddleocr-vl\start.ps1 `
+  -TextDetectionMaxSideLength 4000 `
+  -PreprocessingProfile quality
 ```
 
 The first start downloads the PP-StructureV3 layout/table models and the Arabic PP-OCRv5 recognition model
@@ -119,10 +121,21 @@ ready`, verify it with:
 Invoke-RestMethod -Uri "http://127.0.0.1:8765/health"
 ```
 
-The default 3000-pixel detection limit reduces CPU processing time while
-preserving enough detail for Arabic legal documents. Submit one ingestion
-request at a time; concurrent OCR requests are rejected with `ocr_busy`
-instead of waiting in a long queue.
+The setup also installs headless OpenCV and CAMeL Tools' Modern Standard Arabic
+morphology database. Only CAMeL's morphology runtime dependencies are installed
+in this dedicated worker environment; its unrelated PyTorch/Transformer NLP
+components are intentionally omitted. The default `quality` profile runs the
+exact original image and an independent OpenCV CLAHE contrast variant. CAMeL
+morphology, Paddle's recognition score, and conservative noise checks rank the
+candidates. CAMeL is never used to rewrite, spell-correct, or invent recognized
+text. A variant must beat the original by a safety margin and retain at least
+60% of its tokens before it can be selected.
+
+`quality` performs two full OCR passes and therefore takes roughly twice as long
+as `-PreprocessingProfile original` on CPU. Use `thorough` only for a measured
+experiment; it adds adaptive thresholding as a third full pass. Submit one
+ingestion request at a time; concurrent OCR requests are rejected with
+`ocr_busy` instead of waiting in a long queue.
 
 After the .NET application starts, verify the complete application-to-worker
 connection with:
@@ -150,7 +163,10 @@ checks that hash before storing text. Low-confidence text is excluded from the i
 `reviewLines` and `needsReview` when Paddle provides rejected line scores.
 `--minimum-score` defaults to `0.35`. These engine scores are not calibrated
 accuracy percentages. Review metadata is logged by .NET, not persisted in the
-existing database schema.
+existing database schema. The worker response also reports `selectedVariant` and
+per-candidate confidence/morphology diagnostics. `/health` reports `opencv`,
+`camelTools`, and `preprocessingProfile`; verify `camelTools : True` before the
+Entry 618 accuracy test.
 
 See [Arabic OCR accuracy evaluation](docs/ARABIC_OCR_ACCURACY.md) for paired
 local experiments and the outstanding real-document validation gate.

@@ -1,6 +1,28 @@
 import unittest
 from benchmark import metrics, distance, variants, validate_endpoint
-from server import extract_lines, extract_structure_text, extract_review_lines
+from server import (
+    OcrCandidate,
+    build_candidate,
+    extract_lines,
+    extract_review_lines,
+    extract_structure_text,
+    image_variants,
+    select_candidate,
+    text_noise_ratio,
+)
+
+
+class FakeMorphology:
+    def __init__(self, coverage, token_count):
+        self.coverage = coverage
+        self.token_count = token_count
+
+    def score(self, _text):
+        return self.coverage, self.token_count
+
+
+def candidate(name, quality, text='نص عربي صالح للاختبار'):
+    return OcrCandidate(name, text, [0.8], [], 0.8, 5, quality)
 
 
 class AccuracyTests(unittest.TestCase):
@@ -57,6 +79,35 @@ class AccuracyTests(unittest.TestCase):
         self.assertEqual(values['original'], raw)
         with Image.open(io.BytesIO(values['scale2'])) as im:
             self.assertEqual(im.size, (40, 20))
+
+    def test_original_opencv_profile_preserves_exact_bytes(self):
+        raw = b'not-decoded-because-original-does-not-need-opencv'
+        self.assertEqual(image_variants(raw, 'original'), [('original', raw)])
+
+    def test_camel_signal_scores_but_does_not_rewrite_text(self):
+        text = 'المنطقة الاقتصادية الخاصة بجازان'
+        value = build_candidate('clahe', text, [0.9, 0.8], [], FakeMorphology(1.0, 5))
+        self.assertEqual(value.text, text)
+        self.assertEqual(value.morphology_coverage, 1.0)
+        self.assertGreater(value.quality_score, 0.8)
+
+    def test_candidate_requires_clear_improvement_over_original(self):
+        original = candidate('original', 0.70)
+        self.assertIs(select_candidate([original, candidate('clahe', 0.72)]), original)
+        self.assertEqual(
+            select_candidate([original, candidate('clahe', 0.75)]).variant,
+            'clahe',
+        )
+
+    def test_short_fragment_cannot_replace_complete_original(self):
+        original = candidate('original', 0.60, ' '.join(['نص'] * 20))
+        short = candidate('clahe', 0.95, 'نص قصير')
+        self.assertIs(select_candidate([original, short]), original)
+
+    def test_noise_penalizes_isolated_arabic_characters_and_duplicates(self):
+        clean = 'لائحة المنطقة الاقتصادية الخاصة بجازان'
+        noisy = 'ل ل ي ي\nل ل ي ي\nل ل ي ي'
+        self.assertLess(text_noise_ratio(clean), text_noise_ratio(noisy))
 
 
 if __name__ == '__main__':

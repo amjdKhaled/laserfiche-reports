@@ -7,7 +7,10 @@ param(
     [ValidateRange(0.0, 1.0)]
     [double]$MinimumScore = 0.35,
     [ValidateRange(1600, 4000)]
-    [int]$TextDetectionMaxSideLength = 3000,
+    [int]$TextDetectionMaxSideLength = 4000,
+    [ValidateSet("original", "quality", "thorough")]
+    [string]$PreprocessingProfile = "quality",
+    [switch]$DisableCamelTools,
     [int]$Port = 8765
 )
 
@@ -19,12 +22,20 @@ if (-not (Test-Path $python)) {
     throw "PaddleOCR is not installed. Run tools\paddleocr-vl\setup.ps1 first."
 }
 
-& $python $server `
-    --host "127.0.0.1" `
-    --port $Port `
-    --device $Device `
-    --ocr-version $OcrVersion `
-    --language $Language `
-    --recognition-model $RecognitionModel `
-    --minimum-score $MinimumScore `
-    --text-det-limit-side-len $TextDetectionMaxSideLength
+$arguments = @(
+    $server,
+    "--host", "127.0.0.1",
+    "--port", $Port,
+    "--device", $Device,
+    "--ocr-version", $OcrVersion,
+    "--language", $Language,
+    "--recognition-model", $RecognitionModel,
+    "--minimum-score", $MinimumScore,
+    "--text-det-limit-side-len", $TextDetectionMaxSideLength,
+    "--preprocessing-profile", $PreprocessingProfile
+)
+if ($DisableCamelTools) {
+    $arguments += "--disable-camel-tools"
+}
+
+& $python @arguments
