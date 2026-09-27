@@ -146,9 +146,9 @@ configuration enables it, changed text is rejected until image-backed verificati
 is available. This protects names as well as digit shapes and numeric order.
 Entry `618` is the Arabic reference document used for testing, not a language restriction.
 Each OCR response includes the SHA-256 hash of the received page; the .NET service
-checks that hash before storing text. Low-confidence text is retained, with
-`reviewLines` and `needsReview` diagnostics. `--minimum-score` is now a review
-threshold, not a text-deletion threshold. These engine scores are not calibrated
+checks that hash before storing text. Low-confidence text is excluded from the indexed result. The worker exposes
+`reviewLines` and `needsReview` when Paddle provides rejected line scores.
+`--minimum-score` defaults to `0.35`. These engine scores are not calibrated
 accuracy percentages. Review metadata is logged by .NET, not persisted in the
 existing database schema.
 
