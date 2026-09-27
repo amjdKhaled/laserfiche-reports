@@ -2,6 +2,7 @@ using LaserficheReports.Application.Interfaces;
 using LaserficheReports.Domain.Exceptions;
 using LaserficheReports.Infrastructure.Configuration;
 using LaserficheReports.Infrastructure.Extensions;
+using Npgsql;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -138,6 +139,26 @@ app.MapPost("/api/ingestion/laserfiche/{entryId:int}", async (
         {
             error = "local_ocr_unavailable",
             message = exception.Message,
+            preservedExistingIndex = true
+        }, statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+    catch (PostgresException exception) when (
+        exception.SqlState == "XX000" &&
+        exception.MessageText.Contains("ENOIDENTIFIER", StringComparison.OrdinalIgnoreCase))
+    {
+        return Results.Json(new
+        {
+            error = "supabase_tenant_identifier_missing",
+            message = "The Supabase pooler username must include its tenant identifier, for example Username=postgres.YOUR_POOLER_TENANT_ID.",
+            preservedExistingIndex = true
+        }, statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+    catch (NpgsqlException)
+    {
+        return Results.Json(new
+        {
+            error = "supabase_database_unavailable",
+            message = "The local Supabase/PostgreSQL database is unavailable. Check Supabase:PostgresConnectionString and the database service.",
             preservedExistingIndex = true
         }, statusCode: StatusCodes.Status503ServiceUnavailable);
     }
