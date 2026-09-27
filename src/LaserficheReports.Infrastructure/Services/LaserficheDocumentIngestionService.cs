@@ -66,6 +66,10 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
                 "Supabase:PostgresConnectionString is missing. Configure it in appsettings.Local.json.");
         }
 
+        // Fail before expensive page export, OCR, and embedding work when the
+        // local database or Supabase pooler configuration is unavailable.
+        await EnsureDatabaseAvailableAsync(cancellationToken).ConfigureAwait(false);
+
         var repository = await _repositoryContext
             .GetActiveRepositoryAsync(cancellationToken)
             .ConfigureAwait(false);
@@ -552,6 +556,14 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
             throw new InvalidOperationException("Supabase did not return the indexed document row.");
 
         return (reader.GetInt64(0), reader.GetBoolean(1));
+    }
+
+    private async Task EnsureDatabaseAvailableAsync(CancellationToken cancellationToken)
+    {
+        await using var connection = new NpgsqlConnection(_options.PostgresConnectionString);
+        await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = new NpgsqlCommand("SELECT 1;", connection);
+        await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private static async Task DeleteExistingChunksAsync(
