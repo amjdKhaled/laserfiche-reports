@@ -74,10 +74,10 @@ def extract_lines(result: Any, minimum_score: float) -> tuple[list[str], list[fl
             score = float(scores[index]) if index < len(scores) else float("nan")
         except (TypeError, ValueError):
             score = float("nan")
-        # Retain uncertain text; confidence is diagnostic, not a deletion rule.
+        if not math.isfinite(score) or not 0 <= score <= 1 or score < minimum_score:
+            continue
         lines.append(text)
-        if math.isfinite(score) and 0 <= score <= 1:
-            accepted_scores.append(score)
+        accepted_scores.append(score)
     return lines, accepted_scores
 
 
@@ -102,8 +102,13 @@ def extract_structure_text(result: Any, minimum_score: float) -> tuple[str, list
     # The pipeline already returns parsing_res_list in reading order. Sorting by
     # its explicit index keeps behavior stable across PaddleOCR 3.x releases.
     ordered_blocks.sort(key=lambda item: item[0])
-    # Repeated labels/values may be real content in distinct table cells.
-    contents = [content for _, content in ordered_blocks]
+    # StructureV3 can repeat the same block in adjacent output positions.
+    # This is a pragmatic rollback to the last published selection policy;
+    # precise cell identity needs image-backed verification.
+    contents: list[str] = []
+    for _, content in ordered_blocks:
+        if not contents or contents[-1] != content:
+            contents.append(content)
 
     overall = value.get("overall_ocr_res", {})
     scores: list[float] = []
@@ -232,7 +237,7 @@ class OcrRuntime:
                     use_doc_orientation_classify=True,
                     use_doc_unwarping=False,
                     use_textline_orientation=True,
-                    text_rec_score_thresh=0.0,
+                    text_rec_score_thresh=self.minimum_score,
                     text_det_limit_side_len=self.text_det_limit_side_len,
                 )
                 texts: list[str] = []
@@ -394,7 +399,7 @@ def main() -> None:
         "--recognition-model", default="arabic_PP-OCRv5_mobile_rec"
     )
     parser.add_argument("--minimum-score", type=float, default=0.35,
-                        help="Review threshold only; uncertain text is retained.")
+                        help="Minimum text recognition score; lower scores are omitted from output.")
     parser.add_argument(
         "--text-det-limit-side-len",
         type=int,

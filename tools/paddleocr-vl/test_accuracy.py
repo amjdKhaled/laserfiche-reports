@@ -4,18 +4,18 @@ from server import extract_lines, extract_structure_text, extract_review_lines
 
 
 class AccuracyTests(unittest.TestCase):
-    def test_low_confidence_is_retained(self):
+    def test_low_confidence_is_excluded_from_search_text(self):
         lines, scores = extract_lines({'rec_texts': ['محمد', '١٢', 'مجهول'],
                                       'rec_scores': [0.2, 0.99]}, 0.35)
-        self.assertEqual(lines, ['محمد', '١٢', 'مجهول'])
-        self.assertEqual(scores, [0.2, 0.99])
+        self.assertEqual(lines, ['١٢'])
+        self.assertEqual(scores, [0.99])
 
-    def test_repeated_distinct_blocks_are_retained(self):
+    def test_adjacent_identical_blocks_are_coalesced(self):
         result = {'parsing_res_list': [{'index': 0, 'block_content': 'المبلغ'},
                                      {'index': 1, 'block_content': 'المبلغ'}],
                   'overall_ocr_res': {'rec_scores': [0.1, 0.9]}}
         text, scores = extract_structure_text(result, 0.35)
-        self.assertEqual(text, 'المبلغ\n\nالمبلغ')
+        self.assertEqual(text, 'المبلغ')
         self.assertAlmostEqual(sum(scores) / len(scores), 0.5)
 
     def test_nonfinite_missing_and_low_scores_require_review(self):
