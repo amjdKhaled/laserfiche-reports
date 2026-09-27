@@ -8,7 +8,7 @@ internal sealed class LocalAiOptions
     public string BaseUrl { get; init; } = "http://localhost:11434";
     public string ChatModel { get; init; } = string.Empty;
     public bool OcrCorrectionEnabled { get; init; } = false;
-    public string OcrCorrectionModel { get; init; } = "qwen2.5:7b";
+    public string OcrCorrectionModel { get; init; } = "qwen2.5vl:3b";
     public int OcrCorrectionMaxTokens { get; init; } = 8192;
     public string EmbeddingModel { get; init; } = "nomic-embed-text-v2-moe";
     public int EmbeddingDimensions { get; init; } = 768;
