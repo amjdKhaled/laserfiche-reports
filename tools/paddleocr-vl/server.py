@@ -23,7 +23,7 @@ from typing import Any
 
 MAX_IMAGE_BYTES = 200 * 1024 * 1024
 MAX_JSON_REQUEST_BYTES = 70 * 1024 * 1024
-ENGINE_NAME = "PP-StructureV3"
+ENGINE_NAME = "PaddleOCR"
 ARABIC_WORD_RE = re.compile(r"[\u0621-\u063a\u0641-\u064a\u066e-\u06d3]{2,}")
 PREPROCESSING_PROFILES = {
     "original": ("original",),
@@ -375,9 +375,14 @@ class OcrRuntime:
         )
         # PaddleOCR-VL is intentionally not used here: as a generative model it
         # can produce fluent text that is absent from the input image.
-        from paddleocr import PPStructureV3
+        from paddleocr import PaddleOCR
 
-        self._pipeline = PPStructureV3(
+        # Use the focused OCR pipeline. PP-StructureV3 also loads layout,
+        # table-cell and table-recognition models; on large CPU images that
+        # duplicated the OCR sub-pipeline and could make Windows terminate the
+        # worker without a Python traceback. The ingestion path needs faithful
+        # text and reading order, not HTML/table reconstruction.
+        self._pipeline = PaddleOCR(
             lang=language,
             ocr_version=ocr_version,
             text_recognition_model_name=recognition_model,
@@ -440,15 +445,14 @@ class OcrRuntime:
                         review_lines.extend(
                             extract_review_lines(result, self.minimum_score, page_index)
                         )
-                        result_text, result_scores = extract_structure_text(
+                        result_lines, result_scores = extract_lines(
                             result, self.minimum_score
                         )
-                        if result_text:
-                            texts.append(result_text)
+                        texts.extend(result_lines)
                         scores.extend(result_scores)
                     candidate = build_candidate(
                         variant,
-                        "\n\n".join(texts).strip(),
+                        "\n".join(texts).strip(),
                         scores,
                         review_lines,
                         self._morphology,

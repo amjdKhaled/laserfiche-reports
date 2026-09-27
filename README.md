@@ -113,8 +113,8 @@ powershell -ExecutionPolicy Bypass -File .\tools\paddleocr-vl\start.ps1 `
   -PreprocessingProfile quality
 ```
 
-The first start downloads the PP-StructureV3 layout/table models and the Arabic PP-OCRv5 recognition model
-and can take several minutes. When the console says `PP-StructureV3 Arabic worker is
+The first start downloads the PaddleOCR detection/orientation models and the Arabic PP-OCRv5 recognition model
+and can take several minutes. When the console says `PaddleOCR Arabic worker is
 ready`, verify it with:
 
 ```powershell
@@ -153,7 +153,7 @@ worker is unavailable, ingestion returns HTTP 503 and preserves any existing
 indexed content and chunks. Electronic documents that report `pageCount=0` are
 probed through the V2 Export endpoint so OCR is still invoked; probing stops at
 the first unavailable page and is capped by `MaxFallbackPages`. The worker uses
-the non-generative `PP-StructureV3` layout pipeline with the
+the non-generative `PaddleOCR` text pipeline with the
 `arabic_PP-OCRv5_mobile_rec` recognition model. Text-only Ollama rewriting is disabled by default; even when an older local
 configuration enables it, changed text is rejected until image-backed verification
 is available. This protects names as well as digit shapes and numeric order.

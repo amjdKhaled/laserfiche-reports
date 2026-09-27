@@ -66,5 +66,5 @@ if ($LASTEXITCODE -ne 0) {
     throw "OpenCV or CAMeL Tools verification failed. Recreate tools\paddleocr-vl\.venv and run setup.ps1 again."
 }
 
-Write-Host "Arabic PP-StructureV3, OpenCV, and CAMeL Tools setup completed. Start it with:"
+Write-Host "Arabic PaddleOCR, OpenCV, and CAMeL Tools setup completed. Start it with:"
 Write-Host "powershell -ExecutionPolicy Bypass -File .\tools\paddleocr-vl\start.ps1"
