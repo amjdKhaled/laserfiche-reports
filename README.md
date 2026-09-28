@@ -87,7 +87,13 @@ dotnet run --project .\src\LaserficheReports.Web
 Open `http://127.0.0.1:5187/` and sign in with your Laserfiche account.
 The **Documents & system** tab shows
 database, repository, graph, and optional OCR status. Its ingestion form
-indexes a chosen Entry ID. To process several known documents using LangGraph:
+indexes a chosen Entry ID. Verify the services from another PowerShell window:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\check-local.ps1
+```
+
+To process several known documents using LangGraph:
 
 ```powershell
 $env:LF_USERNAME = "YOUR_LASERFICHE_USERNAME"
