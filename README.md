@@ -6,7 +6,7 @@ Fully local, on-premise AI reporting and chat for Laserfiche.
 
 - Reuse the proven Laserfiche Repository API integration from `amjdKhaled/Asset-Manager-1zip`.
 - Keep Laserfiche as the source of truth.
-- Run the web application, n8n, Supabase/PostgreSQL with pgvector, OCR, and the LLM on the same machine.
+- Run the web application, LangGraph, Supabase/PostgreSQL with pgvector, and Ollama on the same machine.
 - Never send documents, metadata, prompts, embeddings, or credentials to a cloud service.
 
 ## Planned local flow
@@ -44,7 +44,59 @@ never committed.
 4. Chunking and local embeddings. (implemented)
 5. Vector retrieval and local LLM answering.
 6. Single-chat UI.
-7. n8n automation and incremental synchronization.
+7. Local LangGraph orchestration and explicit batch synchronization.
+
+## Run the chat interface (Windows)
+
+This branch adds a local chat and document interface at
+`http://127.0.0.1:5187/`. The existing `public.documents` table is reused.
+OCR can be deferred: set `Ocr:Enabled` to `false` in your private
+`appsettings.Local.json`, and first ask questions about documents that
+already have stored chunks and embeddings.
+
+1. Run local Supabase and Ollama. Ensure `nomic-embed-text-v2-moe` and
+   `qwen2.5:7b` are installed in Ollama.
+2. Copy `src/LaserficheReports.Web/appsettings.Local.example.json` to
+   `src/LaserficheReports.Web/appsettings.Local.json` and enter your existing
+   Laserfiche and local PostgreSQL details. Do not commit the private file.
+3. Apply the database migrations if they have not already been applied:
+   `powershell -ExecutionPolicy Bypass -File .\scripts\apply-database.ps1`.
+4. Set up the small Python graph environment once:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\reports-graph\setup.ps1
+```
+
+5. In a dedicated PowerShell window start the answer graph:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\reports-graph\start.ps1 -Model qwen2.5:7b
+```
+
+6. In another PowerShell window start .NET:
+
+```powershell
+$env:LF_USERNAME = "YOUR_LASERFICHE_USERNAME"
+$env:LF_PASSWORD = "YOUR_LASERFICHE_PASSWORD"
+$env:ASPNETCORE_URLS = "http://127.0.0.1:5187"
+dotnet run --project .\src\LaserficheReports.Web
+```
+
+Open `http://127.0.0.1:5187/`. The **Documents & system** tab shows
+database, repository, graph, and optional OCR status. Its ingestion form
+indexes a chosen Entry ID. To process several known documents using LangGraph:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\reports-graph\sync.ps1 -EntryIds 618,609
+```
+
+The sync command can run from Windows Task Scheduler if periodic refresh of
+those explicit IDs is needed. Discovery of all changed Laserfiche entries,
+per-user login and access control, and production-wide deployment still need
+design and validation. The current credential configuration governs which
+Laserfiche entries can be read. Do not expose this service on a network with
+shared administrator credentials. Browser chat history stays in that browser's
+local storage; no new history table is created.
 
 The detailed implementation sequence is documented in `docs/ROADMAP.md`.
 

@@ -158,6 +158,14 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
                 continue;
             }
 
+            if (!_ocrOptions.Enabled)
+            {
+                // When OCR is deferred, never export page images. A document with
+                // unknown page count stops after the first page without text.
+                if (isFallbackPageProbe) break;
+                continue;
+            }
+
             try
             {
                 using var pageImage = await _documents
@@ -247,6 +255,32 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
             // Do not overwrite an existing indexed document or delete its chunks
             // merely because the local OCR worker is temporarily unavailable.
             throw ocrFailure;
+        }
+        if (!hasUsableText && !_ocrOptions.Enabled)
+        {
+            await using var existingConnection = new NpgsqlConnection(_options.PostgresConnectionString);
+            await existingConnection.OpenAsync(cancellationToken).ConfigureAwait(false);
+            const string existingSql = """
+                select id, coalesce((metadata ->> 'chunk_count')::integer, 0)
+                from public.documents
+                where metadata ->> 'source' = 'laserfiche-reports'
+                  and metadata ->> 'record_type' = 'document-metadata'
+                  and lower(metadata ->> 'repository_id') = lower(@repository)
+                  and metadata ->> 'entry_id' = @entryId
+                order by id desc limit 1
+                """;
+            await using var existingCommand = new NpgsqlCommand(existingSql, existingConnection);
+            existingCommand.Parameters.AddWithValue("repository", repository.RepositoryId);
+            existingCommand.Parameters.AddWithValue("entryId", entryId.ToString(CultureInfo.InvariantCulture));
+            await using var reader = await existingCommand.ExecuteReaderAsync(cancellationToken);
+            if (await reader.ReadAsync(cancellationToken) && reader.GetInt32(1) > 0)
+            {
+                return new DocumentIngestionResult(reader.GetInt64(0), entryId,
+                    repository.RepositoryId, entry.Name, fields.Count, false, "content-indexed",
+                    reader.GetInt32(1), _localAiOptions.EmbeddingModel, detectedPageNumbers.Count,
+                    0, 0, 0, 0, null,
+                    "OCR is disabled and Laserfiche has no page text; existing index was preserved.");
+            }
         }
 
         var ingestionStatus = hasUsableText ? "content-indexed" : "metadata-only";

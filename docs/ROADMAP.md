@@ -38,17 +38,17 @@
 - Require grounded answers and an explicit "not found" response when evidence
   is insufficient.
 
-## 7. Single-chat interface
+## 7. Single-chat interface — implemented on the feature branch
 
 - Login, Chat, History, and Admin only; no dashboard.
 - Arabic and English support.
 - Answers show clickable Laserfiche evidence.
 
-## 8. n8n automation
+## 8. LangGraph orchestration — explicit Entry ID batch implemented
 
-- Use local n8n for scheduled and incremental ingestion.
-- n8n does not sit in the path of every chat question.
-- Retry failed ingestion jobs and refresh documents changed in Laserfiche.
+- Use local LangGraph to prepare evidence, call Ollama, and return an answer.
+- Run the local sync graph for explicitly selected Entry IDs (optionally through Windows Task Scheduler).
+- Incremental discovery of changed entries remains to be implemented before production scheduling.
 
 ## 9. Security and portability
 

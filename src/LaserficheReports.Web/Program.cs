@@ -2,6 +2,7 @@ using LaserficheReports.Application.Interfaces;
 using LaserficheReports.Domain.Exceptions;
 using LaserficheReports.Infrastructure.Configuration;
 using LaserficheReports.Infrastructure.Extensions;
+using LaserficheReports.Web;
 using Npgsql;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -51,6 +52,21 @@ builder.Services.AddSession(options =>
     options.IdleTimeout = TimeSpan.FromHours(8);
 });
 builder.Services.AddLaserficheInfrastructure(builder.Configuration);
+builder.Services.AddScoped<ReportsChatService>();
+builder.Services.AddHttpClient("ReportsGraph", client =>
+{
+    var baseUrl = builder.Configuration["ReportsGraph:BaseUrl"] ?? "http://127.0.0.1:8766";
+    var uri = new Uri(baseUrl);
+    if (uri.Scheme != Uri.UriSchemeHttp ||
+        uri.Host is not ("127.0.0.1" or "localhost" or "::1"))
+        throw new InvalidOperationException("ReportsGraph:BaseUrl must be local HTTP.");
+    client.BaseAddress = new Uri(uri.AbsoluteUri.TrimEnd('/') + "/");
+    client.Timeout = TimeSpan.FromMinutes(15);
+}).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+{
+    AllowAutoRedirect = false,
+    UseProxy = false
+});
 
 var app = builder.Build();
 
@@ -63,13 +79,46 @@ app.Logger.LogInformation(
     builder.Configuration["Laserfiche:RepositoryId"] ?? "(missing)");
 
 app.UseSession();
+app.UseDefaultFiles();
+app.UseStaticFiles();
 
-app.MapGet("/", () => Results.Ok(new
+app.MapGet("/api/app/status", () => Results.Ok(new { application = "Laserfiche Reports", mode = "local-only" }));
+
+app.MapGet("/api/graph/status", async (IHttpClientFactory factory, CancellationToken cancellationToken) =>
 {
-    application = "Laserfiche Reports",
-    mode = "local-only",
-    phase = 1
-}));
+    try
+    {
+        using var response = await factory.CreateClient("ReportsGraph").GetAsync("health", cancellationToken);
+        return response.IsSuccessStatusCode
+            ? Results.Ok(new { status = "ready", engine = "LangGraph" })
+            : Results.Json(new { status = "unavailable" }, statusCode: 503);
+    }
+    catch (HttpRequestException)
+    {
+        return Results.Json(new { status = "unavailable" }, statusCode: 503);
+    }
+});
+
+app.MapGet("/api/reports/documents", async (ReportsChatService chat, CancellationToken cancellationToken) =>
+    Results.Ok(await chat.ListAsync(cancellationToken)));
+
+app.MapPost("/api/reports/chat", async (ChatQuestion request, ReportsChatService chat,
+    CancellationToken cancellationToken) =>
+{
+    try
+    {
+        return Results.Ok(await chat.AskAsync(request.Question, cancellationToken));
+    }
+    catch (ArgumentException exception)
+    {
+        return Results.BadRequest(new { error = exception.Message });
+    }
+    catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException)
+    {
+        return Results.Json(new { error = "Local LangGraph or Ollama is unavailable.",
+            detail = exception.Message }, statusCode: 503);
+    }
+});
 
 app.MapGet("/api/laserfiche/status", async (
     ILaserficheRepositoryService repositories,
@@ -273,3 +322,5 @@ app.MapGet("/api/database/status", async (
 app.MapHealthChecks("/health");
 
 app.Run();
+
+internal sealed record ChatQuestion(string Question);

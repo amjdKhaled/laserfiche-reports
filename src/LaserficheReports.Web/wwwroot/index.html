@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Laserfiche Reports</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand"><span class="mark">◈</span><div><strong>Laserfiche Reports</strong><small>تقارير المستندات المحلية</small></div></div>
+      <button class="new-chat" id="new-chat">＋ محادثة جديدة</button>
+      <div class="side-heading">المحادثات الأخيرة</div>
+      <div id="history" class="history"></div>
+      <div class="side-footer"><span class="privacy-dot"></span> البيانات تبقى على جهازك</div>
+    </aside>
+    <main class="main">
+      <header class="topbar">
+        <div><h1>اسأل وثائقك</h1><p>إجابات مستندة إلى وثائق Laserfiche المفهرسة</p></div>
+        <div class="tabs"><button id="tab-chat" class="active">المحادثة</button><button id="tab-docs">الوثائق والنظام</button></div>
+      </header>
+      <section id="chat-view" class="view">
+        <div id="messages" class="messages">
+          <div class="welcome"><div class="welcome-icon">✦</div><h2>ما الذي تريد معرفته؟</h2><p>ابحث في محتوى الوثائق المفهرسة، وستظهر مصادر كل إجابة أسفلها.</p>
+            <div class="suggestions"><button data-question="لخص أهم النقاط في الوثائق المفهرسة">لخص أهم النقاط</button><button data-question="ما القرارات المذكورة في الوثائق؟">ما القرارات المذكورة؟</button></div>
+          </div>
+        </div>
+        <form id="ask-form" class="composer"><textarea id="question" rows="2" maxlength="2000" placeholder="اكتب سؤالك هنا..." required></textarea><button type="submit" id="send" aria-label="إرسال">➤</button></form>
+        <p class="note">الإجابات قد تتأثر بجودة النص المستخرج؛ تحقق من المصدر قبل اعتماد معلومة مهمة.</p>
+      </section>
+      <section id="docs-view" class="view hidden">
+        <div class="section-title"><div><h2>حالة الخدمات</h2><p>تأكد من اتصال الخدمات المحلية قبل الفهرسة أو السؤال.</p></div><button id="refresh">تحديث</button></div>
+        <div class="status-grid" id="statuses"></div>
+        <div class="section-title"><div><h2>فهرسة وثيقة</h2><p>أدخل رقم الوثيقة من Laserfiche. قد تستغرق الصفحات المصورة وقتًا أطول.</p></div></div>
+        <form id="ingest-form" class="ingest"><input id="entry-id" type="number" min="1" placeholder="Entry ID مثل 618" required><button type="submit" id="ingest">بدء الفهرسة</button></form>
+        <div id="ingest-result" class="feedback" role="status"></div>
+        <div class="section-title"><div><h2>الوثائق المفهرسة</h2><p>تظهر الوثائق التي يمكن للاتصال الحالي قراءتها.</p></div><button id="reload-docs">تحديث القائمة</button></div>
+        <div id="documents" class="documents"></div>
+      </section>
+    </main>
+  </div>
+  <script src="/app.js" defer></script>
+</body>
+</html>
