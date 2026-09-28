@@ -81,7 +81,7 @@ function renderMessages() {
     const welcome = el('div', 'welcome');
     welcome.innerHTML = '<div class="welcome-icon">✦</div><h2>ما الذي تريد معرفته؟</h2><p>ابحث في محتوى الوثائق المفهرسة، وستظهر مصادر كل إجابة أسفلها.</p>';
     const suggestions = el('div', 'suggestions');
-    for (const question of ['ما تصنيف الوثيقة 618؟', 'ما اسم الوثيقة 618 وموعد تسليمها؟', 'لخص أهم النقاط في الوثائق المفهرسة']) {
+    for (const question of ['ما الوثائق المتعلقة بالتشغيل والصيانة؟', 'ما مواعيد التسليم المذكورة في حقول الوثائق؟', 'لخص أهم النقاط في الوثائق المفهرسة']) {
       const button = el('button', '', question);
       button.onclick = () => { $('question').value = question; $('question').focus(); };
       suggestions.append(button);
@@ -314,7 +314,6 @@ $('scan-start').onclick = async () => {
       scan.seenFolders = [...seenFolders];
       scan.seenDocuments = [...seenDocuments];
       saveScan(); renderScan();
-      if (scan.documentsDone && scan.documentsDone % 10 === 0) loadDocuments();
     }
   } finally {
     scanning = false;
