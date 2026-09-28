@@ -38,9 +38,10 @@
 - Require grounded answers and an explicit "not found" response when evidence
   is insufficient.
 
-## 7. Single-chat interface — implemented on the feature branch
+## 7. Single-chat interface — local prototype implemented
 
-- Login, Chat, History, and Admin only; no dashboard.
+- Chat, browser-local History, and document ingestion/status views; no dashboard.
+- Interactive per-user Laserfiche login remains for deployment after local integration.
 - Arabic and English support.
 - Answers show clickable Laserfiche evidence.
 
