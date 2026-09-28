@@ -8,6 +8,7 @@ public interface IOcrTextCorrectionService
 {
     Task<OcrTextCorrectionResult> CorrectAsync(
         string text,
+        ReadOnlyMemory<byte> sourceImage,
         CancellationToken cancellationToken = default);
 }
 

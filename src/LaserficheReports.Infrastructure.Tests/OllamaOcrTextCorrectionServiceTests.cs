@@ -10,7 +10,7 @@ namespace LaserficheReports.Infrastructure.Tests;
 public sealed class OllamaOcrTextCorrectionServiceTests
 {
     [Fact]
-    public async Task CorrectAsync_RejectsUnverifiedArabicCorrection()
+    public async Task CorrectAsync_AcceptsConservativeImageVerifiedArabicCorrection()
     {
         var handler = new StubHandler(_ => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
         {
@@ -21,12 +21,14 @@ public sealed class OllamaOcrTextCorrectionServiceTests
         }));
         var service = CreateService(handler);
 
-        var result = await service.CorrectAsync("قرار الجلس الإدارة رقم 27 بتاريخ 1448/03/27");
+        var result = await service.CorrectAsync(
+            "قرار الجلس الإدارة رقم 27 بتاريخ 1448/03/27",
+            new byte[] { 1, 2, 3 });
 
-        Assert.False(result.WasCorrected);
-        Assert.Equal("قرار الجلس الإدارة رقم 27 بتاريخ 1448/03/27", result.Text);
-        Assert.Equal("visual-verification-required", result.Diagnostic);
-        Assert.Equal("qwen2.5:7b", result.Model);
+        Assert.True(result.WasCorrected);
+        Assert.Equal("قرار مجلس الإدارة رقم 27 بتاريخ 1448/03/27", result.Text);
+        Assert.Null(result.Diagnostic);
+        Assert.Equal("qwen2.5vl:3b", result.Model);
     }
 
     [Fact]
@@ -40,7 +42,7 @@ public sealed class OllamaOcrTextCorrectionServiceTests
         var service = CreateService(handler);
         const string original = "لائحة المنطقة الاقتصادية الخاصة بجازان";
 
-        var result = await service.CorrectAsync(original);
+        var result = await service.CorrectAsync(original, new byte[] { 1, 2, 3 });
 
         Assert.False(result.WasCorrected);
         Assert.Equal(original, result.Text);
@@ -67,6 +69,28 @@ public sealed class OllamaOcrTextCorrectionServiceTests
         Assert.Equal("visual-verification-required", error);
     }
 
+    [Fact]
+    public void ValidateCorrection_AcceptsLimitedImageVerifiedSpellingChanges()
+    {
+        var error = OllamaOcrTextCorrectionService.ValidateCorrection(
+            "الجهة العنية والوثيقة العتمدة رقم 27",
+            "الجهة المعنية والوثيقة المعتمدة رقم 27",
+            hasVisualEvidence: true);
+
+        Assert.Null(error);
+    }
+
+    [Fact]
+    public void ValidateCorrection_RejectsChangedLatinIdentifier()
+    {
+        var error = OllamaOcrTextCorrectionService.ValidateCorrection(
+            "النافذة الرقمية OSS رقم 27",
+            "النافذة الرقمية OS5 رقم 27",
+            hasVisualEvidence: true);
+
+        Assert.Equal("latin-identifiers-changed", error);
+    }
+
     [Theory]
     [InlineData("محمد رقم ١٢", "محمود رقم ١٢", "visual-verification-required")]
     [InlineData("رقم ١٢", "رقم 12", "numbers-or-dates-changed")]
@@ -85,7 +109,7 @@ public sealed class OllamaOcrTextCorrectionServiceTests
             Microsoft.Extensions.Options.Options.Create(new LocalAiOptions
             {
                 OcrCorrectionEnabled = true,
-                OcrCorrectionModel = "qwen2.5:7b"
+                OcrCorrectionModel = "qwen2.5vl:3b"
             }),
             NullLogger<OllamaOcrTextCorrectionService>.Instance);
     }

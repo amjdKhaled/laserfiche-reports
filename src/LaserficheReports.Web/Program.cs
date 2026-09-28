@@ -1,7 +1,10 @@
 using LaserficheReports.Application.Interfaces;
+using LaserficheReports.Domain.Entities;
 using LaserficheReports.Domain.Exceptions;
 using LaserficheReports.Infrastructure.Configuration;
 using LaserficheReports.Infrastructure.Extensions;
+using LaserficheReports.Web;
+using Npgsql;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -50,6 +53,21 @@ builder.Services.AddSession(options =>
     options.IdleTimeout = TimeSpan.FromHours(8);
 });
 builder.Services.AddLaserficheInfrastructure(builder.Configuration);
+builder.Services.AddScoped<ReportsChatService>();
+builder.Services.AddHttpClient("ReportsGraph", client =>
+{
+    var baseUrl = builder.Configuration["ReportsGraph:BaseUrl"] ?? "http://127.0.0.1:8766";
+    var uri = new Uri(baseUrl);
+    if (uri.Scheme != Uri.UriSchemeHttp ||
+        uri.Host is not ("127.0.0.1" or "localhost" or "::1"))
+        throw new InvalidOperationException("ReportsGraph:BaseUrl must be local HTTP.");
+    client.BaseAddress = new Uri(uri.AbsoluteUri.TrimEnd('/') + "/");
+    client.Timeout = TimeSpan.FromMinutes(15);
+}).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+{
+    AllowAutoRedirect = false,
+    UseProxy = false
+});
 
 var app = builder.Build();
 
@@ -61,14 +79,150 @@ app.Logger.LogInformation(
     !string.IsNullOrWhiteSpace(builder.Configuration["Laserfiche:ServerUrl"]),
     builder.Configuration["Laserfiche:RepositoryId"] ?? "(missing)");
 
+// This single-machine prototype uses the configured Laserfiche credential.
+// Never serve its document index to a remote browser.
+app.Use(async (context, next) =>
+{
+    var address = context.Connection.RemoteIpAddress;
+    if (address is null || !System.Net.IPAddress.IsLoopback(
+        address.IsIPv4MappedToIPv6 ? address.MapToIPv4() : address))
+    {
+        context.Response.StatusCode = StatusCodes.Status403Forbidden;
+        return;
+    }
+    if (HttpMethods.IsPost(context.Request.Method) &&
+        context.Request.Headers.TryGetValue("Origin", out var origin))
+    {
+        if (!Uri.TryCreate(origin.ToString(), UriKind.Absolute, out var source) ||
+            source.Host is not ("127.0.0.1" or "localhost" or "::1") ||
+            source.Scheme != context.Request.Scheme ||
+            source.Port != context.Request.Host.Port)
+        {
+            context.Response.StatusCode = StatusCodes.Status403Forbidden;
+            return;
+        }
+    }
+    await next();
+});
 app.UseSession();
+app.UseDefaultFiles();
+app.UseStaticFiles();
 
-app.MapGet("/", () => Results.Ok(new
+app.MapGet("/api/app/status", (IConfiguration config) => Results.Ok(new
 {
     application = "Laserfiche Reports",
     mode = "local-only",
-    phase = 1
+    ocrEnabled = config.GetValue("Ocr:Enabled", true)
 }));
+
+app.MapGet("/api/session/status", async (ISessionCredentialStore sessions,
+    CancellationToken cancellationToken) =>
+{
+    var credential = await sessions.TryGetAsync(cancellationToken);
+    return Results.Ok(new { authenticated = credential is not null, username = credential?.Username });
+});
+
+app.MapPost("/api/session/login", async (LoginRequest request, IRepositoryContext repositories,
+    ILaserficheAuthService auth, ISessionCredentialStore sessions,
+    HttpContext httpContext,
+    CancellationToken cancellationToken) =>
+{
+    if (string.IsNullOrWhiteSpace(request.Username) || request.Username.Length > 256 ||
+        request.Password is null)
+        return Results.BadRequest(new { error = "Enter a Laserfiche username and password." });
+    await auth.InvalidateCurrentSessionTokensAsync();
+    await sessions.ClearAsync(cancellationToken);
+    httpContext.Session.SetString("AuthenticationScopeMethod", "Reports");
+    httpContext.Session.SetString("AuthenticationScopeSubject", httpContext.Session.Id);
+    var repository = await repositories.GetActiveRepositoryAsync(cancellationToken);
+    if (!await auth.TryAuthenticateAsync(repository, request.Username, request.Password, cancellationToken))
+    {
+        await auth.InvalidateCurrentSessionTokensAsync();
+        httpContext.Session.Remove("AuthenticationScopeMethod");
+        httpContext.Session.Remove("AuthenticationScopeSubject");
+        return Results.Unauthorized();
+    }
+    await sessions.StoreAsync(request.Username, request.Password, cancellationToken);
+    return Results.Ok(new { authenticated = true, repository = repository.RepositoryId });
+});
+
+app.MapPost("/api/session/logout", async (ISessionCredentialStore sessions,
+    ILaserficheAuthService auth, HttpContext httpContext, CancellationToken cancellationToken) =>
+{
+    await auth.InvalidateCurrentSessionTokensAsync();
+    await sessions.ClearAsync(cancellationToken);
+    httpContext.Session.Remove("AuthenticationScopeMethod");
+    httpContext.Session.Remove("AuthenticationScopeSubject");
+    return Results.Ok(new { authenticated = false });
+});
+
+app.MapGet("/api/graph/status", async (IHttpClientFactory factory, CancellationToken cancellationToken) =>
+{
+    try
+    {
+        using var response = await factory.CreateClient("ReportsGraph").GetAsync("health", cancellationToken);
+        return response.IsSuccessStatusCode
+            ? Results.Ok(new { status = "ready", engine = "LangGraph" })
+            : Results.Json(new { status = "unavailable" }, statusCode: 503);
+    }
+    catch (HttpRequestException)
+    {
+        return Results.Json(new { status = "unavailable" }, statusCode: 503);
+    }
+});
+
+app.MapGet("/api/reports/documents", async (int? page, string? search, ReportsChatService chat,
+    ISessionCredentialStore sessions, CancellationToken cancellationToken) =>
+{
+    if (await sessions.TryGetAsync(cancellationToken) is null) return Results.Unauthorized();
+    if (page is < 1 or > 1_000_000 || search?.Length > 200)
+        return Results.BadRequest(new { error = "Invalid page or search query." });
+    return Results.Ok(await chat.ListAsync(page ?? 1, search, cancellationToken));
+});
+
+// One complete folder at a time keeps the user-specific Laserfiche session
+// attached to every request and lets a client checkpoint a large repository scan.
+app.MapGet("/api/reports/repository/folders/{folderId:int}/children", async (
+    int folderId, ILaserficheEntryService entries, IRepositoryContext repositories,
+    ISessionCredentialStore sessions, CancellationToken cancellationToken) =>
+{
+    if (await sessions.TryGetAsync(cancellationToken) is null) return Results.Unauthorized();
+    if (folderId < 0) return Results.BadRequest(new { error = "Folder ID cannot be negative." });
+    var rootId = folderId == 0
+        ? await entries.GetRootEntryIdAsync(cancellationToken)
+        : folderId;
+    var children = await entries.GetAllFolderChildrenAsync(rootId, cancellationToken);
+    var repository = await repositories.GetActiveRepositoryAsync(cancellationToken);
+    return Results.Ok(new
+    {
+        repositoryId = repository.RepositoryId,
+        folderId = rootId,
+        folders = children.Where(entry => entry.EntryType == LFEntryType.Folder)
+            .Select(entry => new { id = entry.Id, name = entry.Name }),
+        documents = children.Where(entry => entry.EntryType == LFEntryType.Document)
+            .Select(entry => new { id = entry.Id, name = entry.Name,
+                modified = entry.LastModifiedTime })
+    });
+});
+
+app.MapPost("/api/reports/chat", async (ChatQuestion request, ReportsChatService chat,
+    ISessionCredentialStore sessions, CancellationToken cancellationToken) =>
+{
+    if (await sessions.TryGetAsync(cancellationToken) is null) return Results.Unauthorized();
+    try
+    {
+        return Results.Ok(await chat.AskAsync(request.Question, cancellationToken));
+    }
+    catch (ArgumentException exception)
+    {
+        return Results.BadRequest(new { error = exception.Message });
+    }
+    catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException)
+    {
+        return Results.Json(new { error = "Local LangGraph or Ollama is unavailable.",
+            detail = exception.Message }, statusCode: 503);
+    }
+});
 
 app.MapGet("/api/laserfiche/status", async (
     ILaserficheRepositoryService repositories,
@@ -90,9 +244,11 @@ app.MapGet("/api/laserfiche/documents/{entryId:int}/pages/{pageNumber:int}/image
     int entryId,
     int pageNumber,
     ILaserficheDocumentService documents,
+    ISessionCredentialStore sessions,
     HttpContext httpContext,
     CancellationToken cancellationToken) =>
 {
+    if (await sessions.TryGetAsync(cancellationToken) is null) return Results.Unauthorized();
     if (entryId <= 0 || pageNumber <= 0)
     {
         return Results.BadRequest(new { error = "Entry ID and page number must be positive." });
@@ -120,8 +276,10 @@ app.MapGet("/api/laserfiche/documents/{entryId:int}/pages/{pageNumber:int}/image
 app.MapPost("/api/ingestion/laserfiche/{entryId:int}", async (
     int entryId,
     ILaserficheDocumentIngestionService ingestion,
+    ISessionCredentialStore sessions,
     CancellationToken cancellationToken) =>
 {
+    if (await sessions.TryGetAsync(cancellationToken) is null) return Results.Unauthorized();
     if (entryId <= 0)
     {
         return Results.BadRequest(new { error = "Entry ID must be positive." });
@@ -138,6 +296,37 @@ app.MapPost("/api/ingestion/laserfiche/{entryId:int}", async (
         {
             error = "local_ocr_unavailable",
             message = exception.Message,
+            preservedExistingIndex = true
+        }, statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+    catch (PostgresException exception) when (
+        exception.SqlState == "XX000" &&
+        exception.MessageText.Contains("ENOIDENTIFIER", StringComparison.OrdinalIgnoreCase))
+    {
+        return Results.Json(new
+        {
+            error = "supabase_tenant_identifier_missing",
+            message = "The Supabase pooler username must include its tenant identifier, for example Username=postgres.YOUR_POOLER_TENANT_ID.",
+            preservedExistingIndex = true
+        }, statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+    catch (PostgresException exception)
+    {
+        return Results.Json(new
+        {
+            error = "supabase_write_failed",
+            message = exception.MessageText,
+            sqlState = exception.SqlState,
+            preservedExistingIndex = true
+        }, statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+    catch (NpgsqlException exception)
+    {
+        return Results.Json(new
+        {
+            error = "supabase_database_unavailable",
+            message = "The local Supabase/PostgreSQL database is unavailable. Check Supabase:PostgresConnectionString and the database service.",
+            databaseError = exception.Message,
             preservedExistingIndex = true
         }, statusCode: StatusCodes.Status503ServiceUnavailable);
     }
@@ -175,6 +364,72 @@ app.MapGet("/api/ocr/status", async (
     }
 });
 
+app.MapGet("/api/database/status", async (
+    IConfiguration configuration,
+    CancellationToken cancellationToken) =>
+{
+    var connectionString = configuration["Supabase:PostgresConnectionString"];
+    if (string.IsNullOrWhiteSpace(connectionString))
+    {
+        return Results.Json(new
+        {
+            status = "unavailable",
+            error = "supabase_connection_string_missing"
+        }, statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+
+    try
+    {
+        var settings = new NpgsqlConnectionStringBuilder(connectionString);
+        await using var connection = new NpgsqlConnection(connectionString);
+        await connection.OpenAsync(cancellationToken);
+        await using var command = new NpgsqlCommand("SELECT 1;", connection);
+        await command.ExecuteScalarAsync(cancellationToken);
+
+        return Results.Ok(new
+        {
+            status = "ready",
+            host = settings.Host,
+            port = settings.Port,
+            database = settings.Database,
+            username = settings.Username
+        });
+    }
+    catch (PostgresException exception) when (
+        exception.SqlState == "XX000" &&
+        exception.MessageText.Contains("ENOIDENTIFIER", StringComparison.OrdinalIgnoreCase))
+    {
+        return Results.Json(new
+        {
+            status = "unavailable",
+            error = "supabase_tenant_identifier_missing",
+            message = "Use Username=postgres.YOUR_POOLER_TENANT_ID in appsettings.Local.json."
+        }, statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+    catch (PostgresException exception)
+    {
+        return Results.Json(new
+        {
+            status = "unavailable",
+            error = "supabase_connection_failed",
+            message = exception.MessageText,
+            sqlState = exception.SqlState
+        }, statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+    catch (Exception exception) when (exception is NpgsqlException or ArgumentException)
+    {
+        return Results.Json(new
+        {
+            status = "unavailable",
+            error = "supabase_connection_failed",
+            message = exception.Message
+        }, statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+});
+
 app.MapHealthChecks("/health");
 
 app.Run();
+
+internal sealed record ChatQuestion(string Question);
+internal sealed record LoginRequest(string Username, string Password);

@@ -56,6 +56,24 @@ public sealed class LaserficheDocumentIngestionServiceTests
     }
 
     [Fact]
+    public void BuildSearchChunks_IndexesMetadataBeforePageTextWithProvenance()
+    {
+        var entry = new LFEntry { Id = 618, Name = "Arabic regulation", FullPath = @"\SCAN\Arabic regulation" };
+        LFFieldValue[] fields = [new() { FieldName = "موعد التسليم", Value = "2026-09-21" }];
+        LaserficheDocumentIngestionService.IndexedPageText[] pages = [new(1, "أحكام عامة", "ocr")];
+
+        var chunks = LaserficheDocumentIngestionService.BuildSearchChunks(entry, fields, pages, 500, 40);
+
+        Assert.Equal(2, chunks.Count);
+        Assert.Equal("laserfiche-metadata", chunks[0].Source);
+        Assert.Contains("موعد التسليم: 2026-09-21", chunks[0].Content);
+        Assert.Equal("ocr", chunks[1].Source);
+        using var metadata = JsonDocument.Parse(LaserficheDocumentIngestionService.BuildChunkMetadata(
+            "testemployee", entry, 635, chunks[0], chunks.Count, "nomic-embed-text-v2-moe", 768));
+        Assert.Equal(JsonValueKind.Null, metadata.RootElement.GetProperty("page_number").ValueKind);
+    }
+
+    [Fact]
     public void BuildIndexedContent_AppendsLaserficheTextInPageOrder()
     {
         var entry = new LFEntry { Name = "Document A", FullPath = @"\HR\Document A" };
@@ -166,13 +184,13 @@ public sealed class LaserficheDocumentIngestionServiceTests
             [],
             ocrCorrectionAttemptCount: 1,
             ocrCorrectedPageCount: 1,
-            ocrCorrectionModel: "qwen2.5:7b");
+            ocrCorrectionModel: "qwen2.5vl:3b");
 
         using var document = JsonDocument.Parse(json);
         var root = document.RootElement;
         Assert.Equal(1, root.GetProperty("ocr_correction_attempt_count").GetInt32());
         Assert.Equal(1, root.GetProperty("ocr_corrected_page_count").GetInt32());
-        Assert.Equal("qwen2.5:7b", root.GetProperty("ocr_correction_model").GetString());
+        Assert.Equal("qwen2.5vl:3b", root.GetProperty("ocr_correction_model").GetString());
     }
 
     [Fact]

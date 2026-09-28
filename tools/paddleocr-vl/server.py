@@ -390,11 +390,6 @@ class OcrRuntime:
             use_doc_orientation_classify=True,
             use_doc_unwarping=False,
             use_textline_orientation=True,
-            use_seal_recognition=False,
-            use_table_recognition=True,
-            use_formula_recognition=False,
-            use_chart_recognition=False,
-            format_block_content=True,
             text_det_limit_side_len=text_det_limit_side_len,
         )
         self._morphology = ArabicMorphologyScorer(use_camel_tools)

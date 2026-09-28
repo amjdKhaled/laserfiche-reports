@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Laserfiche Reports</title>
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/login.css">
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand"><span class="mark">◈</span><div><strong>Laserfiche Reports</strong><small>تقارير المستندات المحلية</small></div></div>
+      <button class="new-chat" id="new-chat">＋ محادثة جديدة</button>
+      <div class="side-heading">المحادثات الأخيرة</div>
+      <div id="history" class="history"></div>
+      <div class="side-footer"><span class="privacy-dot"></span> البيانات تبقى على جهازك</div>
+    </aside>
+    <main class="main">
+      <header class="topbar">
+        <div><h1>اسأل وثائقك</h1><p>ابحث في حقول Laserfiche ومحتوى الصفحات، مع مصدر لكل إجابة</p></div>
+        <div class="top-actions"><div class="tabs"><button id="tab-chat" class="active">المحادثة</button><button id="tab-docs">الوثائق والنظام</button></div><button id="logout" class="logout">تسجيل الخروج</button></div>
+      </header>
+      <section id="chat-view" class="view">
+        <div id="messages" class="messages">
+          <div class="welcome"><div class="welcome-icon">✦</div><h2>معلومات وثائقك في مكان واحد</h2><p>اسأل عن التصنيف والمواعيد والحقول، أو ابحث داخل الصفحات المفهرسة. تظهر المصادر مع كل إجابة.</p>
+            <div class="suggestions"><button data-question="لخص أهم النقاط في الوثائق المفهرسة">لخص أهم النقاط</button><button data-question="ما القرارات المذكورة في الوثائق؟">ما القرارات المذكورة؟</button></div>
+          </div>
+        </div>
+        <form id="ask-form" class="composer"><textarea id="question" rows="2" maxlength="2000" placeholder="اكتب سؤالك هنا..." required></textarea><button type="submit" id="send" aria-label="إرسال">➤</button></form>
+        <p class="note">الإجابات قد تتأثر بجودة النص المستخرج؛ تحقق من المصدر قبل اعتماد معلومة مهمة.</p>
+      </section>
+      <section id="docs-view" class="view hidden">
+        <div class="section-title"><div><h2>حالة الخدمات</h2><p>تأكد من اتصال الخدمات المحلية قبل الفهرسة أو السؤال.</p></div><button id="refresh">تحديث</button></div>
+        <div class="status-grid" id="statuses"></div>
+        <div class="section-title"><div><h2>فهرسة وثيقة محددة</h2><p>أدخل أي Entry ID. تُفهرس حقول Laserfiche حتى عندما يكون OCR مؤجلاً.</p></div></div>
+        <form id="ingest-form" class="ingest"><input id="entry-id" type="number" min="1" placeholder="Entry ID مثل 618" required><button type="submit" id="ingest">بدء الفهرسة</button></form>
+        <div id="ingest-result" class="feedback" role="status"></div>
+        <div class="scan-panel">
+          <div class="section-title"><div><h2>فهرسة المستودع بالكامل</h2><p>يمر على جميع المجلدات والوثائق التي يتيحها حساب Laserfiche الحالي. يمكنك إيقافه واستئنافه.</p></div></div>
+          <div class="scan-actions"><button id="scan-start" type="button">بدء الفهرسة الشاملة</button><button id="scan-pause" type="button" disabled>إيقاف مؤقت</button><button id="scan-reset" type="button">فحص جديد</button></div>
+          <div id="scan-progress" class="scan-progress" role="status">لم تبدأ الفهرسة الشاملة بعد.</div>
+          <div id="scan-errors" class="scan-errors"></div>
+        </div>
+        <div class="section-title"><div><h2>الوثائق المفهرسة</h2><p>تظهر الوثائق التي يمكن للاتصال الحالي قراءتها.</p></div><button id="reload-docs">تحديث القائمة</button></div>
+        <div class="docs-toolbar"><input id="document-search" type="search" placeholder="ابحث باسم الوثيقة أو المسار أو حقول Laserfiche" aria-label="بحث الوثائق"><button id="search-docs" type="button">بحث</button></div>
+        <div id="documents" class="documents"></div>
+        <div class="docs-pager"><button id="previous-docs" type="button">السابق</button><span id="documents-page">صفحة 1</span><button id="next-docs" type="button">التالي</button></div>
+      </section>
+    </main>
+  </div>
+  <div id="login-layer" class="login-layer hidden">
+    <form id="login-form" class="login-card">
+      <div class="welcome-icon">◈</div>
+      <h2>الدخول إلى Laserfiche Reports</h2>
+      <p>استخدم حساب Laserfiche للوصول إلى الوثائق المسموح لك بها.</p>
+      <label for="username">اسم المستخدم</label>
+      <input id="username" type="text" autocomplete="username" required>
+      <label for="password">كلمة المرور</label>
+      <input id="password" type="password" autocomplete="current-password" required>
+      <button id="login-submit" type="submit">تسجيل الدخول</button>
+      <div id="login-error" role="alert"></div>
+    </form>
+  </div>
+  <script src="/app.js" defer></script>
+</body>
+</html>
