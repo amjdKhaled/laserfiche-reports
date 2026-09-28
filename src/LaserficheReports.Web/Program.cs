@@ -78,6 +78,31 @@ app.Logger.LogInformation(
     !string.IsNullOrWhiteSpace(builder.Configuration["Laserfiche:ServerUrl"]),
     builder.Configuration["Laserfiche:RepositoryId"] ?? "(missing)");
 
+// This single-machine prototype uses the configured Laserfiche credential.
+// Never serve its document index to a remote browser.
+app.Use(async (context, next) =>
+{
+    var address = context.Connection.RemoteIpAddress;
+    if (address is null || !System.Net.IPAddress.IsLoopback(
+        address.IsIPv4MappedToIPv6 ? address.MapToIPv4() : address))
+    {
+        context.Response.StatusCode = StatusCodes.Status403Forbidden;
+        return;
+    }
+    if (HttpMethods.IsPost(context.Request.Method) &&
+        context.Request.Headers.TryGetValue("Origin", out var origin))
+    {
+        if (!Uri.TryCreate(origin.ToString(), UriKind.Absolute, out var source) ||
+            source.Host is not ("127.0.0.1" or "localhost" or "::1") ||
+            source.Scheme != context.Request.Scheme ||
+            source.Port != context.Request.Host.Port)
+        {
+            context.Response.StatusCode = StatusCodes.Status403Forbidden;
+            return;
+        }
+    }
+    await next();
+});
 app.UseSession();
 app.UseDefaultFiles();
 app.UseStaticFiles();
