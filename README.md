@@ -16,7 +16,7 @@ Fully local, on-premise AI reporting and chat for Laserfiche.
 3. Split extracted text into chunks.
 4. Create embeddings locally and store them in Supabase PostgreSQL/pgvector.
 5. Retrieve evidence for a user's question.
-6. Generate an Arabic/English answer through a local Ollama or LM Studio model.
+6. Generate an Arabic/English answer through local Ollama with LangChain and LangGraph.
 7. Show the answer and its Laserfiche document evidence in one chat interface.
 
 ## Repository layout
@@ -42,14 +42,16 @@ never committed.
 2. Local Supabase schema and one-document ingestion.
 3. Local Arabic OCR fallback through non-generative PP-OCRv5. (implemented)
 4. Chunking and local embeddings. (implemented)
-5. Vector retrieval and local LLM answering.
-6. Single-chat UI.
-7. Local LangGraph orchestration and explicit batch synchronization.
+5. Vector retrieval and local LLM answering. (implemented on the feature branch)
+6. Single-chat UI. (implemented on the feature branch)
+7. Local LangGraph orchestration and explicit batch synchronization. (implemented on the feature branch)
 
 ## Run the chat interface (Windows)
 
 This branch adds a local chat and document interface at
 `http://127.0.0.1:5187/`. The existing `public.documents` table is reused.
+The web host accepts loopback requests only while it uses local Laserfiche
+credentials. LangGraph and Ollama also bind to loopback.
 OCR can be deferred: set `Ocr:Enabled` to `false` in your private
 `appsettings.Local.json`, and first ask questions about documents that
 already have stored chunks and embeddings.
