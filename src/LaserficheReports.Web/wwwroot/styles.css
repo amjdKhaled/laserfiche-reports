@@ -8,3 +8,17 @@
 .source-text{max-height:240px;overflow:auto;white-space:pre-wrap;line-height:1.7;color:#2b4354;margin:7px 0;padding:10px;background:#fff;border:1px solid #deebeb;border-radius:7px}
 .source-link{display:inline-block;margin:4px 0;color:#126a81}
 .source:not([open])>:not(summary){display:none}
+.scan-panel{background:#fff;border:1px solid #dae7ed;border-radius:16px;padding:22px;margin:0 0 28px;box-shadow:0 9px 26px #183b5610}
+.scan-actions{display:flex;gap:10px;margin:16px 0}
+.scan-actions button{border:0;border-radius:10px;padding:10px 17px;background:#148f7e;color:white;cursor:pointer;font:inherit}
+.scan-actions button+button{background:#e8eff3;color:#315168}
+.scan-actions button:disabled{opacity:.45;cursor:default}
+.scan-progress{color:#315168;line-height:1.8;font-size:13px}
+.scan-errors{color:#ac4938;max-height:180px;overflow:auto;font-size:12px;line-height:1.75;margin-top:10px}
+.scan-errors strong{display:block;margin-bottom:5px}
+.docs-toolbar{display:flex;gap:9px;margin-bottom:13px}
+.docs-toolbar input{flex:1;min-width:0;border:1px solid #d7e2ec;background:white;border-radius:10px;padding:11px;font:inherit}
+.docs-toolbar button,.docs-pager button{font:inherit;border:1px solid #d5e1eb;border-radius:9px;background:white;color:#205b69;padding:8px 14px;cursor:pointer}
+.docs-pager{display:flex;align-items:center;justify-content:center;gap:16px;margin:18px 0;color:#576f80}
+.docs-pager button:disabled{opacity:.4;cursor:default}
+.deferred{color:#637c93}

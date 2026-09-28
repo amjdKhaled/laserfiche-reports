@@ -2,6 +2,12 @@ const $ = id => document.getElementById(id);
 let storeKey = 'laserfiche-reports-chat-v1';
 let chats = [];
 let active = null;
+let scan = null;
+let scanning = false;
+let pauseScan = false;
+let scanKey = '';
+let documentsPage = 1;
+let hasMoreDocuments = false;
 const save = () => localStorage.setItem(storeKey, JSON.stringify(chats.slice(0, 30)));
 function el(tag, className, value) {
   const node = document.createElement(tag);
@@ -13,17 +19,25 @@ async function api(url, options) {
   const response = await fetch(url, options);
   const body = await response.json().catch(() => ({}));
   if (response.status === 401 && url !== '/api/session/login') $('login-layer').classList.remove('hidden');
-  if (!response.ok) throw new Error(body.detail || body.message || body.error || `HTTP ${response.status}`);
+  if (!response.ok) {
+    const error = new Error(body.detail || body.message || body.error || `HTTP ${response.status}`);
+    error.status = response.status;
+    throw error;
+  }
   return body;
 }
 function openSession(username) {
   storeKey = `laserfiche-reports-chat-v1:${username.toLowerCase()}`;
+  scanKey = `laserfiche-reports-scan-v1:${username.toLowerCase()}`;
   try { chats = JSON.parse(localStorage.getItem(storeKey) || '[]'); }
   catch { chats = []; }
+  try { scan = JSON.parse(localStorage.getItem(scanKey) || 'null'); }
+  catch { scan = null; }
   active = null;
   $('login-layer').classList.add('hidden');
   renderHistory();
   renderMessages();
+  renderScan();
 }
 $('login-form').onsubmit = async event => {
   event.preventDefault();
@@ -40,10 +54,13 @@ $('login-form').onsubmit = async event => {
   finally { $('login-submit').disabled = false; }
 };
 $('logout').onclick = async () => {
+  if (scanning) return;
   try { await api('/api/session/logout', { method: 'POST' }); }
   finally {
     localStorage.removeItem(storeKey);
     chats = []; active = null;
+    pauseScan = true;
+    scan = null;
     $('login-layer').classList.remove('hidden');
     renderHistory(); renderMessages();
   }
@@ -135,28 +152,40 @@ $('question').onkeydown = event => {
   if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); $('ask-form').requestSubmit(); }
 };
 async function refreshStatuses() {
-  const services = [['Laserfiche', '/api/laserfiche/status'], ['Supabase', '/api/database/status'], ['LangGraph', '/api/graph/status'], ['OCR (اختياري)', '/api/ocr/status']];
+  const appStatus = await api('/api/app/status').catch(() => ({}));
+  const services = [['Laserfiche', '/api/laserfiche/status'], ['Supabase', '/api/database/status'],
+    ['LangGraph', '/api/graph/status'], ['OCR', '/api/ocr/status']];
   $('statuses').replaceChildren();
-  await Promise.all(services.map(async ([name, url]) => {
+  const cards = services.map(([name]) => {
+    const card = el('div', 'status-card');
+    card.append(el('strong', '', name));
+    $('statuses').append(card);
+    return card;
+  });
+  await Promise.all(services.map(async ([name, url], index) => {
+    const deferred = name === 'OCR' && appStatus.ocrEnabled === false;
     let healthy = false;
-    try {
+    try { if (!deferred) {
       const response = await fetch(url);
       const data = await response.json();
       healthy = response.ok && data.status !== 'unavailable' && data.isConnected !== false && data.authenticationSucceeded !== false;
-    } catch { /* rendered as unavailable */ }
-    const card = el('div', 'status-card');
-    card.append(el('strong', '', name));
-    card.append(el('span', healthy ? 'ok' : 'bad', healthy ? 'متصل' : 'غير متصل'));
-    $('statuses').append(card);
+    } } catch { /* rendered as unavailable */ }
+    cards[index].append(el('span', deferred ? 'deferred' : healthy ? 'ok' : 'bad',
+      deferred ? 'مؤجل' : healthy ? 'متصل' : 'غير متصل'));
   }));
 }
 async function loadDocuments() {
   $('documents').replaceChildren(el('div', 'empty', 'جاري تحميل الوثائق...'));
   try {
-    const documents = await api('/api/reports/documents');
+    const search = $('document-search').value.trim();
+    const result = await api(`/api/reports/documents?page=${documentsPage}&search=${encodeURIComponent(search)}`);
     $('documents').replaceChildren();
-    if (!documents.length) $('documents').append(el('div', 'empty', 'لا توجد وثائق مفهرسة متاحة للاتصال الحالي.'));
-    documents.forEach(doc => {
+    hasMoreDocuments = result.hasMore;
+    $('previous-docs').disabled = documentsPage === 1;
+    $('next-docs').disabled = !hasMoreDocuments;
+    $('documents-page').textContent = `صفحة ${documentsPage}`;
+    if (!result.items.length) $('documents').append(el('div', 'empty', 'لا توجد وثائق مفهرسة متاحة لهذه الصفحة أو البحث.'));
+    result.items.forEach(doc => {
       const row = el('div', 'doc'), detail = el('div');
       detail.append(el('strong', '', `${doc.name} · #${doc.entryId}`));
       detail.append(el('small', '', doc.path));
@@ -168,6 +197,12 @@ async function loadDocuments() {
 }
 $('refresh').onclick = refreshStatuses;
 $('reload-docs').onclick = loadDocuments;
+$('search-docs').onclick = () => { documentsPage = 1; loadDocuments(); };
+$('document-search').onkeydown = event => {
+  if (event.key === 'Enter') { event.preventDefault(); documentsPage = 1; loadDocuments(); }
+};
+$('previous-docs').onclick = () => { if (documentsPage > 1) { documentsPage--; loadDocuments(); } };
+$('next-docs').onclick = () => { if (hasMoreDocuments) { documentsPage++; loadDocuments(); } };
 $('ingest-form').onsubmit = async event => {
   event.preventDefault();
   $('ingest').disabled = true;
@@ -178,6 +213,115 @@ $('ingest-form').onsubmit = async event => {
     loadDocuments();
   } catch (error) { $('ingest-result').textContent = `فشلت الفهرسة: ${error.message}`; }
   finally { $('ingest').disabled = false; }
+};
+
+function newScan() {
+  return { folders: [0], documents: [], seenFolders: [], seenDocuments: [],
+    foldersDone: 0, documentsDone: 0, chunks: 0, failed: [], repositoryId: '', current: '', notice: '' };
+}
+function saveScan() {
+  try { localStorage.setItem(scanKey, JSON.stringify(scan)); }
+  catch { $('scan-progress').textContent = 'تعذر حفظ نقطة الاستئناف في المتصفح. اترك الصفحة مفتوحة حتى تنتهي العملية.'; }
+}
+function renderScan() {
+  $('scan-start').disabled = scanning;
+  $('scan-reset').disabled = scanning;
+  $('logout').disabled = scanning;
+  $('scan-start').textContent = scan?.folders?.length || scan?.documents?.length || scan?.failed?.length
+    ? 'استئناف الفهرسة' : 'بدء الفهرسة الشاملة';
+  $('scan-pause').disabled = !scanning;
+  if (!scan) {
+    $('scan-progress').textContent = 'لم تبدأ الفهرسة الشاملة بعد.';
+    $('scan-errors').replaceChildren();
+    return;
+  }
+  $('scan-progress').textContent =
+    `${scanning ? 'جارية' : 'متوقفة'} · ${scan.foldersDone} مجلد · ${scan.documentsDone} وثيقة · ` +
+    `${scan.chunks} مقطع · ${scan.folders.length} مجلد و${scan.documents.length} وثيقة في الانتظار` +
+    (scan.current ? ` · الآن: ${scan.current}` : '') +
+    (scan.notice ? ` · ${scan.notice}` : '');
+  $('scan-errors').replaceChildren();
+  if (scan.failed.length) {
+    $('scan-errors').append(el('strong', '', `${scan.failed.length} إخفاق؛ يمكنك الاستئناف لإعادة المحاولة:`));
+    scan.failed.slice(-10).forEach(item => $('scan-errors').append(el('div', '',
+      `${item.type === 'folder' ? 'مجلد' : 'وثيقة'} #${item.id}: ${item.message}`)));
+  }
+}
+$('scan-pause').onclick = () => { pauseScan = true; $('scan-pause').disabled = true; };
+$('scan-reset').onclick = () => {
+  if (scanning) return;
+  scan = null;
+  localStorage.removeItem(scanKey);
+  renderScan();
+};
+$('scan-start').onclick = async () => {
+  if (scanning) return;
+  if (!scan || (!scan.folders.length && !scan.documents.length && !scan.failed.length)) scan = newScan();
+  else if (!scan.folders.length && !scan.documents.length && scan.failed.length) {
+    scan.failed.forEach(item => (item.type === 'folder' ? scan.folders : scan.documents).push(item.id));
+    scan.failed = [];
+  }
+  pauseScan = false;
+  scanning = true;
+  scan.notice = '';
+  renderScan();
+  const seenFolders = new Set(scan.seenFolders);
+  const seenDocuments = new Set(scan.seenDocuments);
+  try {
+    while (!pauseScan && (scan.folders.length || scan.documents.length)) {
+      if (scan.documents.length) {
+        const id = scan.documents[0];
+        scan.current = `فهرسة الوثيقة ${id}`; renderScan();
+        try {
+          const result = await api(`/api/ingestion/laserfiche/${id}`, { method: 'POST' });
+          scan.chunks += result.chunkCount || 0;
+          scan.documentsDone++;
+        } catch (error) {
+          if (error.status === 401) { pauseScan = true; break; }
+          if (error.status === 503) {
+            pauseScan = true;
+            scan.notice = `الخدمة المطلوبة غير متاحة: ${error.message}. عالج الاتصال ثم استأنف.`;
+            break;
+          }
+          scan.failed.push({ type: 'document', id, message: error.message });
+        }
+        scan.documents.shift();
+      } else {
+        const id = scan.folders[0];
+        scan.current = `فحص المجلد ${id || 'الجذر'}`; renderScan();
+        try {
+          const result = await api(`/api/reports/repository/folders/${id}/children`);
+          if (scan.repositoryId && scan.repositoryId.toLowerCase() !== result.repositoryId.toLowerCase()) {
+            pauseScan = true;
+            scan.notice = 'تغيّر المستودع؛ اضغط فحص جديد لبدء فهرسة المستودع الحالي.';
+            saveScan(); renderScan();
+            break;
+          }
+          scan.repositoryId = result.repositoryId;
+          for (const folder of result.folders) {
+            if (!seenFolders.has(folder.id)) { seenFolders.add(folder.id); scan.folders.push(folder.id); }
+          }
+          for (const doc of result.documents) {
+            if (!seenDocuments.has(doc.id)) { seenDocuments.add(doc.id); scan.documents.push(doc.id); }
+          }
+          scan.foldersDone++;
+        } catch (error) {
+          if (error.status === 401) { pauseScan = true; break; }
+          scan.failed.push({ type: 'folder', id, message: error.message });
+        }
+        scan.folders.shift();
+      }
+      scan.seenFolders = [...seenFolders];
+      scan.seenDocuments = [...seenDocuments];
+      saveScan(); renderScan();
+      if (scan.documentsDone && scan.documentsDone % 10 === 0) loadDocuments();
+    }
+  } finally {
+    scanning = false;
+    scan.current = '';
+    saveScan(); renderScan();
+    loadDocuments();
+  }
 };
 api('/api/session/status').then(session => {
   if (session.authenticated && session.username) openSession(session.username);

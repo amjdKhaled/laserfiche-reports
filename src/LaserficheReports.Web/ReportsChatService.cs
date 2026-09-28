@@ -13,6 +13,7 @@ internal sealed record Evidence(int EntryId, string DocumentName, string Path, i
 internal sealed record ChatResult(string Answer, IReadOnlyList<Evidence> Sources);
 internal sealed record IndexedDocument(int EntryId, string Name, string Path, string Status,
     int ChunkCount, string? TextSource);
+internal sealed record IndexedDocumentPage(IReadOnlyList<IndexedDocument> Items, int Page, bool HasMore);
 
 /// <summary>Retrieves project-owned rows and verifies each document against the live repository.</summary>
 internal sealed class ReportsChatService(
@@ -25,8 +26,10 @@ internal sealed class ReportsChatService(
     private string ConnectionString => configuration["Supabase:PostgresConnectionString"]
         ?? throw new InvalidOperationException("Supabase:PostgresConnectionString is missing.");
 
-    public async Task<IReadOnlyList<IndexedDocument>> ListAsync(CancellationToken cancellationToken)
+    public async Task<IndexedDocumentPage> ListAsync(int page, string? search, CancellationToken cancellationToken)
     {
+        if (page < 1 || page > 1_000_000) throw new ArgumentOutOfRangeException(nameof(page));
+        if (search?.Length > 200) throw new ArgumentException("Search is too long.", nameof(search));
         var repository = await repositories.GetActiveRepositoryAsync(cancellationToken);
         var result = new List<IndexedDocument>();
         await using var connection = new NpgsqlConnection(ConnectionString);
@@ -39,10 +42,16 @@ internal sealed class ReportsChatService(
             where metadata ->> 'source' = 'laserfiche-reports'
               and metadata ->> 'record_type' = 'document-metadata'
               and lower(metadata ->> 'repository_id') = lower(@repository)
-            order by id desc limit 100
+              and (@search is null or metadata ->> 'document_name' ilike @search
+                   or metadata ->> 'full_path' ilike @search
+                   or (metadata -> 'fields')::text ilike @search)
+            order by id desc limit 51 offset @offset
             """;
         await using var command = new NpgsqlCommand(sql, connection);
         command.Parameters.AddWithValue("repository", repository.RepositoryId);
+        command.Parameters.Add(new NpgsqlParameter("search", NpgsqlTypes.NpgsqlDbType.Text)
+            { Value = string.IsNullOrWhiteSpace(search) ? DBNull.Value : $"%{search.Trim()}%" });
+        command.Parameters.AddWithValue("offset", (page - 1) * 50);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         var candidates = new List<IndexedDocument>();
         while (await reader.ReadAsync(cancellationToken))
@@ -55,11 +64,11 @@ internal sealed class ReportsChatService(
                 reader.IsDBNull(5) ? null : reader.GetString(5)));
         }
         // Never expose an indexed document that the active repository credential cannot read.
-        foreach (var candidate in candidates)
+        foreach (var candidate in candidates.Take(50))
         {
             if (await CanReadAsync(candidate.EntryId, cancellationToken)) result.Add(candidate);
         }
-        return result;
+        return new IndexedDocumentPage(result, page, candidates.Count > 50);
     }
 
     public async Task<ChatResult> AskAsync(string question, CancellationToken cancellationToken)

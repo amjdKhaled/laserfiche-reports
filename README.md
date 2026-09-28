@@ -44,7 +44,7 @@ never committed.
 4. Chunking and local embeddings. (implemented)
 5. Vector retrieval and local LLM answering. (implemented on the feature branch)
 6. Single-chat UI. (implemented on the feature branch)
-7. Local LangGraph orchestration and explicit batch synchronization. (implemented on the feature branch)
+7. Local LangGraph orchestration and complete repository discovery. (implemented on the feature branch)
 
 ## Run the chat interface (Windows)
 
@@ -91,6 +91,15 @@ For a short demo, leave OCR disabled and index Entry `618` from **Documents & sy
 Ask “ما تصنيف الوثيقة 618؟” or “ما موعد تسليم الوثيقة 618؟”; expand a source
 to see the exact Laserfiche field text used in the answer. A page source links
 to its original image. Answers require the local LangGraph and Ollama services.
+To index every document accessible to the current Laserfiche account, use
+**فهرسة المستودع بالكامل** in the same tab. The browser walks the repository
+folder tree, indexes documents one at a time, checkpoints after every item,
+and shows failures for retry. Keep that browser tab open while it runs; if it
+closes, sign in again and resume. A new scan restarts discovery. Indexing a
+large repository can take hours, especially when OCR is enabled. Documents
+that cannot be read are excluded from the index; a failed folder is reported
+explicitly rather than silently counted as complete. The indexed document
+list supports search and paging beyond the first 100 rows.
 The **Documents & system** tab shows
 database, repository, graph, and optional OCR status. Its ingestion form
 indexes a chosen Entry ID. Verify the services from another PowerShell window:
@@ -99,7 +108,18 @@ indexes a chosen Entry ID. Verify the services from another PowerShell window:
 powershell -ExecutionPolicy Bypass -File .\scripts\check-local.ps1
 ```
 
-To process several known documents using LangGraph:
+To process every accessible document from a command line LangGraph batch:
+
+```powershell
+$env:LF_USERNAME = "YOUR_LASERFICHE_USERNAME"
+$env:LF_PASSWORD = "YOUR_LASERFICHE_PASSWORD"
+powershell -ExecutionPolicy Bypass -File .\tools\reports-graph\sync.ps1 -All
+```
+
+The command recursively discovers the root and all child folders, rejects
+incomplete folder listings, de-duplicates document IDs, and reports ingestion
+failures. It needs the web application running and uses a separate authenticated
+local session. To process several known documents instead:
 
 ```powershell
 $env:LF_USERNAME = "YOUR_LASERFICHE_USERNAME"
@@ -107,10 +127,9 @@ $env:LF_PASSWORD = "YOUR_LASERFICHE_PASSWORD"
 powershell -ExecutionPolicy Bypass -File .\tools\reports-graph\sync.ps1 -EntryIds 618,609
 ```
 
-The sync command can run from Windows Task Scheduler if periodic refresh of
-those explicit IDs is needed. Discovery of all changed Laserfiche entries,
-enterprise SSO, and production-wide deployment still need design and
-validation. Browser login uses session-specific Laserfiche credentials, and
+The sync command can run from Windows Task Scheduler for a full rescan or
+selected IDs. Change-only synchronization, enterprise SSO, and production-wide
+deployment still need design and validation. Browser login uses session-specific Laserfiche credentials, and
 retrieved entries are checked against the live repository before display.
 The web service accepts loopback requests only. Chat history stays in each
 browser's local storage; no new history table is created.

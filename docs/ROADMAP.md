@@ -26,13 +26,13 @@
 - Generate 768-dimensional embeddings locally with the existing `nomic-embed-text-v2-moe` model. (complete)
 - Store source-labelled chunk rows and embeddings in the existing `documents` table. (complete)
 
-## 5. Retrieval — current
+## 5. Retrieval — implemented for the local demo
 
 - Embed the user's question locally.
 - Retrieve the best chunks with repository and permission filters.
 - Return document name, Entry ID, path, page, and similarity as evidence.
 
-## 6. Local answer generation
+## 6. Local answer generation — implemented for the local demo
 
 - Send only the retrieved evidence to Ollama or LM Studio on localhost.
 - Require grounded answers and an explicit "not found" response when evidence
@@ -46,11 +46,12 @@
 - Arabic and English support.
 - Answers show clickable Laserfiche evidence.
 
-## 8. LangGraph orchestration — explicit Entry ID batch implemented
+## 8. LangGraph orchestration — repository traversal and batch implemented
 
 - Use local LangGraph to prepare evidence, call Ollama, and return an answer.
-- Run the local sync graph for explicitly selected Entry IDs (optionally through Windows Task Scheduler).
-- Incremental discovery of changed entries remains to be implemented before production scheduling.
+- Run the local sync graph for selected Entry IDs or discover all accessible documents recursively.
+- The browser interface supports resumable full scans and shows failed folders/documents.
+- Change-only discovery remains to be implemented for large production repositories.
 
 ## 9. Security and portability
 

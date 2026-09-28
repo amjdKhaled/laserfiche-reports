@@ -36,8 +36,16 @@
         <div class="section-title"><div><h2>فهرسة وثيقة</h2><p>ابدأ برقم 618 للتجربة العربية. تُفهرس حقول Laserfiche حتى عندما يكون OCR مؤجلاً.</p></div></div>
         <form id="ingest-form" class="ingest"><input id="entry-id" type="number" min="1" placeholder="Entry ID مثل 618" required><button type="submit" id="ingest">بدء الفهرسة</button></form>
         <div id="ingest-result" class="feedback" role="status"></div>
+        <div class="scan-panel">
+          <div class="section-title"><div><h2>فهرسة المستودع بالكامل</h2><p>يمر على جميع المجلدات والوثائق التي يتيحها حساب Laserfiche الحالي. يمكنك إيقافه واستئنافه.</p></div></div>
+          <div class="scan-actions"><button id="scan-start" type="button">بدء الفهرسة الشاملة</button><button id="scan-pause" type="button" disabled>إيقاف مؤقت</button><button id="scan-reset" type="button">فحص جديد</button></div>
+          <div id="scan-progress" class="scan-progress" role="status">لم تبدأ الفهرسة الشاملة بعد.</div>
+          <div id="scan-errors" class="scan-errors"></div>
+        </div>
         <div class="section-title"><div><h2>الوثائق المفهرسة</h2><p>تظهر الوثائق التي يمكن للاتصال الحالي قراءتها.</p></div><button id="reload-docs">تحديث القائمة</button></div>
+        <div class="docs-toolbar"><input id="document-search" type="search" placeholder="ابحث باسم الوثيقة أو المسار أو حقول Laserfiche" aria-label="بحث الوثائق"><button id="search-docs" type="button">بحث</button></div>
         <div id="documents" class="documents"></div>
+        <div class="docs-pager"><button id="previous-docs" type="button">السابق</button><span id="documents-page">صفحة 1</span><button id="next-docs" type="button">التالي</button></div>
       </section>
     </main>
   </div>

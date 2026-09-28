@@ -1,6 +1,9 @@
 import unittest
+import io
+import json
 
 from server import NO_EVIDENCE, build_graph, validate_request
+from sync import discover_all
 
 
 class FakeModel:
@@ -39,6 +42,27 @@ class GraphTests(unittest.TestCase):
     def test_rejects_excessive_evidence(self):
         with self.assertRaises(ValueError):
             validate_request({"question": "سؤال", "evidence": [{"entryId": 1, "text": "x"}] * 9})
+
+    def test_discovery_walks_all_folders_and_deduplicates_documents(self):
+        class Opener:
+            def open(self, url, timeout):
+                folder = int(url.rsplit("/", 2)[-2])
+                data = {
+                    0: {"repositoryId": "TestEmployee", "folders": [{"id": 10}, {"id": 20}], "documents": [{"id": 618}]},
+                    10: {"repositoryId": "testemployee", "folders": [{"id": 20}], "documents": [{"id": 608}]},
+                    20: {"repositoryId": "TestEmployee", "folders": [], "documents": [{"id": 618}, {"id": 609}]},
+                }[folder]
+                return io.BytesIO(json.dumps(data).encode())
+
+        self.assertEqual(discover_all("http://127.0.0.1:5187", Opener()), [608, 609, 618])
+
+    def test_discovery_rejects_incomplete_folder_listing(self):
+        class Opener:
+            def open(self, url, timeout):
+                return io.BytesIO(b'{"repositoryId":"TestEmployee","folders":[]}')
+
+        with self.assertRaisesRegex(ValueError, "Incomplete folder"):
+            discover_all("http://127.0.0.1:5187", Opener())
 
 
 if __name__ == "__main__":

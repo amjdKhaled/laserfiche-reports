@@ -1,4 +1,5 @@
 using LaserficheReports.Application.Interfaces;
+using LaserficheReports.Domain.Entities;
 using LaserficheReports.Domain.Exceptions;
 using LaserficheReports.Infrastructure.Configuration;
 using LaserficheReports.Infrastructure.Extensions;
@@ -107,7 +108,12 @@ app.UseSession();
 app.UseDefaultFiles();
 app.UseStaticFiles();
 
-app.MapGet("/api/app/status", () => Results.Ok(new { application = "Laserfiche Reports", mode = "local-only" }));
+app.MapGet("/api/app/status", (IConfiguration config) => Results.Ok(new
+{
+    application = "Laserfiche Reports",
+    mode = "local-only",
+    ocrEnabled = config.GetValue("Ocr:Enabled", true)
+}));
 
 app.MapGet("/api/session/status", async (ISessionCredentialStore sessions,
     CancellationToken cancellationToken) =>
@@ -165,11 +171,39 @@ app.MapGet("/api/graph/status", async (IHttpClientFactory factory, CancellationT
     }
 });
 
-app.MapGet("/api/reports/documents", async (ReportsChatService chat,
+app.MapGet("/api/reports/documents", async (int? page, string? search, ReportsChatService chat,
     ISessionCredentialStore sessions, CancellationToken cancellationToken) =>
-    await sessions.TryGetAsync(cancellationToken) is null
-        ? Results.Unauthorized()
-        : Results.Ok(await chat.ListAsync(cancellationToken)));
+{
+    if (await sessions.TryGetAsync(cancellationToken) is null) return Results.Unauthorized();
+    if (page is < 1 or > 1_000_000 || search?.Length > 200)
+        return Results.BadRequest(new { error = "Invalid page or search query." });
+    return Results.Ok(await chat.ListAsync(page ?? 1, search, cancellationToken));
+});
+
+// One complete folder at a time keeps the user-specific Laserfiche session
+// attached to every request and lets a client checkpoint a large repository scan.
+app.MapGet("/api/reports/repository/folders/{folderId:int}/children", async (
+    int folderId, ILaserficheEntryService entries, IRepositoryContext repositories,
+    ISessionCredentialStore sessions, CancellationToken cancellationToken) =>
+{
+    if (await sessions.TryGetAsync(cancellationToken) is null) return Results.Unauthorized();
+    if (folderId < 0) return Results.BadRequest(new { error = "Folder ID cannot be negative." });
+    var rootId = folderId == 0
+        ? await entries.GetRootEntryIdAsync(cancellationToken)
+        : folderId;
+    var children = await entries.GetAllFolderChildrenAsync(rootId, cancellationToken);
+    var repository = await repositories.GetActiveRepositoryAsync(cancellationToken);
+    return Results.Ok(new
+    {
+        repositoryId = repository.RepositoryId,
+        folderId = rootId,
+        folders = children.Where(entry => entry.EntryType == LFEntryType.Folder)
+            .Select(entry => new { id = entry.Id, name = entry.Name }),
+        documents = children.Where(entry => entry.EntryType == LFEntryType.Document)
+            .Select(entry => new { id = entry.Id, name = entry.Name,
+                modified = entry.LastModifiedTime })
+    });
+});
 
 app.MapPost("/api/reports/chat", async (ChatQuestion request, ReportsChatService chat,
     ISessionCredentialStore sessions, CancellationToken cancellationToken) =>
