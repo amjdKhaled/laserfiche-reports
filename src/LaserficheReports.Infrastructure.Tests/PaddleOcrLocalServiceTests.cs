@@ -44,7 +44,7 @@ public sealed class PaddleOcrLocalServiceTests
         var service = new PaddleOcrLocalService(
             new StubHttpClientFactory(new HttpClient(new StubHandler(_ =>
                 throw new InvalidOperationException("OCR should not be called.")))),
-            Options.Create(new PaddleOcrOptions()),
+            Microsoft.Extensions.Options.Options.Create(new PaddleOcrOptions()),
             NullLogger<PaddleOcrLocalService>.Instance);
         await using var image = new MemoryStream([0x89, 0x50, 0x4E, 0x47]);
         Assert.Null(await service.TryExtractTextAsync(image));
