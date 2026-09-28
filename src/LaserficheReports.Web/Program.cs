@@ -171,6 +171,24 @@ app.MapGet("/api/graph/status", async (IHttpClientFactory factory, CancellationT
     }
 });
 
+app.MapGet("/api/embeddings/status", async (ITextEmbeddingService embeddings,
+    IConfiguration configuration, CancellationToken cancellationToken) =>
+{
+    try
+    {
+        var prefix = configuration["LocalAI:QueryEmbeddingPrefix"] ?? "search_query: ";
+        var result = await embeddings.CreateEmbeddingsAsync([prefix + "health"], cancellationToken);
+        return Results.Ok(new { status = "ready", model = configuration["LocalAI:EmbeddingModel"],
+            dimensions = result[0].Length });
+    }
+    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+    catch (Exception exception)
+    {
+        app.Logger.LogWarning(exception, "Local embedding readiness check failed.");
+        return Results.Json(new { status = "unavailable", error = "ollama_embedding_unavailable" }, statusCode: 503);
+    }
+});
+
 app.MapGet("/api/reports/documents", async (int? page, string? search, ReportsChatService chat,
     ISessionCredentialStore sessions, CancellationToken cancellationToken) =>
 {
