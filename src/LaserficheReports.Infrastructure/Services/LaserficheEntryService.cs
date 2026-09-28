@@ -70,30 +70,16 @@ internal sealed class LaserficheEntryService : ILaserficheEntryService
         var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
         var contentType = response.Content.Headers.ContentType?.ToString() ?? "(missing)";
 
-        // Keep this complete diagnostic immediately after the HTTP response and
-        // before any deserialization. The fields endpoint has multiple response
-        // shapes across Repository API v1 builds, so a DTO parse must never be
-        // allowed to hide a successful response that contains field data.
-        _logger.LogInformation(
-            "===== ENTRY FIELDS RAW RESPONSE =====\n" +
-            "Repository: {Repository}\n" +
-            "EntryId: {EntryId}\n" +
-            "URL: {Url}\n" +
-            "HTTP Status: {Status}\n" +
-            "Content-Type: {ContentType}\n" +
-            "Raw Body:\n{Body}\n" +
-            "=======================================",
-            repo.RepositoryId,
-            entryId,
-            url,
-            (int)response.StatusCode,
-            contentType,
-            body);
+        // A full repository scan can read thousands of field responses. Keep
+        // diagnostics but never write field values or raw document metadata to logs.
+        _logger.LogDebug(
+            "Entry fields response. Repository={Repository}; EntryId={EntryId}; HTTP={Status}; ContentType={ContentType}; Bytes={Bytes}.",
+            repo.RepositoryId, entryId, (int)response.StatusCode, contentType, body.Length);
 
         if (!response.IsSuccessStatusCode)
         {
             throw new LaserficheException(
-                $"Laserfiche API returned HTTP {(int)response.StatusCode} for {url}. Body: {body}",
+                $"Laserfiche API returned HTTP {(int)response.StatusCode} for entry fields of {entryId}.",
                 (int)response.StatusCode);
         }
 

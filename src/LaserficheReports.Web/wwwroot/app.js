@@ -154,7 +154,7 @@ $('question').onkeydown = event => {
 async function refreshStatuses() {
   const appStatus = await api('/api/app/status').catch(() => ({}));
   const services = [['Laserfiche', '/api/laserfiche/status'], ['Supabase', '/api/database/status'],
-    ['LangGraph', '/api/graph/status'], ['OCR', '/api/ocr/status']];
+    ['Ollama Embeddings', '/api/embeddings/status'], ['LangGraph', '/api/graph/status'], ['OCR', '/api/ocr/status']];
   $('statuses').replaceChildren();
   const cards = services.map(([name]) => {
     const card = el('div', 'status-card');

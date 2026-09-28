@@ -3,6 +3,7 @@ $ErrorActionPreference = "Stop"
 $checks = @(
     @{ Name = "Web"; Url = "$BaseUrl/api/app/status" },
     @{ Name = "Database"; Url = "$BaseUrl/api/database/status" },
+    @{ Name = "Embeddings"; Url = "$BaseUrl/api/embeddings/status" },
     @{ Name = "LangGraph"; Url = "$BaseUrl/api/graph/status" },
     @{ Name = "Laserfiche"; Url = "$BaseUrl/api/laserfiche/status" }
 )
