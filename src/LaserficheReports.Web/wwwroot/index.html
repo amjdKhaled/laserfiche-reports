@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Laserfiche Reports</title>
   <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/login.css">
 </head>
 <body>
   <div class="shell">
@@ -18,7 +19,7 @@
     <main class="main">
       <header class="topbar">
         <div><h1>اسأل وثائقك</h1><p>إجابات مستندة إلى وثائق Laserfiche المفهرسة</p></div>
-        <div class="tabs"><button id="tab-chat" class="active">المحادثة</button><button id="tab-docs">الوثائق والنظام</button></div>
+        <div class="top-actions"><div class="tabs"><button id="tab-chat" class="active">المحادثة</button><button id="tab-docs">الوثائق والنظام</button></div><button id="logout" class="logout">تسجيل الخروج</button></div>
       </header>
       <section id="chat-view" class="view">
         <div id="messages" class="messages">
@@ -39,6 +40,19 @@
         <div id="documents" class="documents"></div>
       </section>
     </main>
+  </div>
+  <div id="login-layer" class="login-layer hidden">
+    <form id="login-form" class="login-card">
+      <div class="welcome-icon">◈</div>
+      <h2>الدخول إلى Laserfiche Reports</h2>
+      <p>استخدم حساب Laserfiche للوصول إلى الوثائق المسموح لك بها.</p>
+      <label for="username">اسم المستخدم</label>
+      <input id="username" type="text" autocomplete="username" required>
+      <label for="password">كلمة المرور</label>
+      <input id="password" type="password" autocomplete="current-password" required>
+      <button id="login-submit" type="submit">تسجيل الدخول</button>
+      <div id="login-error" role="alert"></div>
+    </form>
   </div>
   <script src="/app.js" defer></script>
 </body>

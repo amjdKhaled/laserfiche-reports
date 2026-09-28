@@ -41,7 +41,8 @@
 ## 7. Single-chat interface — local prototype implemented
 
 - Chat, browser-local History, and document ingestion/status views; no dashboard.
-- Interactive per-user Laserfiche login remains for deployment after local integration.
+- Interactive repository-password login uses isolated ASP.NET sessions.
+- Enterprise SSO and multi-machine deployment remain to be validated.
 - Arabic and English support.
 - Answers show clickable Laserfiche evidence.
 

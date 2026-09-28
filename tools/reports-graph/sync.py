@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Run a LangGraph batch to ingest explicitly selected Laserfiche Entry IDs."""
 import argparse
+import http.cookiejar
 import json
+import os
 from typing import TypedDict
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.request import HTTPCookieProcessor, Request, build_opener
 
 from langgraph.graph import END, START, StateGraph
 
@@ -14,14 +16,14 @@ class State(TypedDict, total=False):
     results: list[dict]
 
 
-def create_sync_graph(base_url: str):
+def create_sync_graph(base_url: str, opener):
     def ingest(state: State):
         results = []
         for entry_id in state["entry_ids"]:
             request = Request(f"{base_url}/api/ingestion/laserfiche/{entry_id}",
                               data=b"", method="POST")
             try:
-                with urlopen(request, timeout=3600) as response:
+                with opener.open(request, timeout=3600) as response:
                     result = json.load(response)
                     results.append({"entryId": entry_id, "status": "ok",
                                     "ingestionStatus": result.get("ingestionStatus"),
@@ -43,7 +45,21 @@ def main():
     args = parser.parse_args()
     if any(entry_id < 1 for entry_id in args.entry_ids):
         parser.error("Entry IDs must be positive.")
-    result = create_sync_graph("http://127.0.0.1:5187").invoke({"entry_ids": args.entry_ids})
+    username = os.environ.get("LF_USERNAME")
+    password = os.environ.get("LF_PASSWORD")
+    if not username or password is None:
+        parser.error("Set LF_USERNAME and LF_PASSWORD in this PowerShell session.")
+    base_url = "http://127.0.0.1:5187"
+    opener = build_opener(HTTPCookieProcessor(http.cookiejar.CookieJar()))
+    login = Request(f"{base_url}/api/session/login",
+                    data=json.dumps({"username": username, "password": password}).encode(),
+                    headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        with opener.open(login, timeout=30):
+            pass
+    except (HTTPError, URLError) as error:
+        parser.error(f"Laserfiche login failed: {error}")
+    result = create_sync_graph(base_url, opener).invoke({"entry_ids": args.entry_ids})
     print(json.dumps(result["results"], ensure_ascii=False, indent=2))
     if any(item["status"] == "failed" for item in result["results"]):
         raise SystemExit(1)

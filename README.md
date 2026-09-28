@@ -84,21 +84,24 @@ $env:ASPNETCORE_URLS = "http://127.0.0.1:5187"
 dotnet run --project .\src\LaserficheReports.Web
 ```
 
-Open `http://127.0.0.1:5187/`. The **Documents & system** tab shows
+Open `http://127.0.0.1:5187/` and sign in with your Laserfiche account.
+The **Documents & system** tab shows
 database, repository, graph, and optional OCR status. Its ingestion form
 indexes a chosen Entry ID. To process several known documents using LangGraph:
 
 ```powershell
+$env:LF_USERNAME = "YOUR_LASERFICHE_USERNAME"
+$env:LF_PASSWORD = "YOUR_LASERFICHE_PASSWORD"
 powershell -ExecutionPolicy Bypass -File .\tools\reports-graph\sync.ps1 -EntryIds 618,609
 ```
 
 The sync command can run from Windows Task Scheduler if periodic refresh of
 those explicit IDs is needed. Discovery of all changed Laserfiche entries,
-per-user login and access control, and production-wide deployment still need
-design and validation. The current credential configuration governs which
-Laserfiche entries can be read. Do not expose this service on a network with
-shared administrator credentials. Browser chat history stays in that browser's
-local storage; no new history table is created.
+enterprise SSO, and production-wide deployment still need design and
+validation. Browser login uses session-specific Laserfiche credentials, and
+retrieved entries are checked against the live repository before display.
+The web service accepts loopback requests only. Chat history stays in each
+browser's local storage; no new history table is created.
 
 The detailed implementation sequence is documented in `docs/ROADMAP.md`.
 
@@ -233,11 +236,9 @@ $env:LF_PASSWORD = "YOUR_LASERFICHE_PASSWORD"
 dotnet run --project .\src\LaserficheReports.Web
 ```
 
-In a second PowerShell window, use the address printed by `dotnet run`:
-
-```powershell
-Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:5187/api/ingestion/laserfiche/618" -TimeoutSec 1800
-```
+Open the browser interface, sign in to Laserfiche, and use the
+**Documents & system** tab to ingest Entry `618`. The API requires that
+browser's authenticated session.
 
 The ingestion request saves the document identity, metadata, and searchable
 page text. It prefers text already available in Laserfiche and runs local OCR

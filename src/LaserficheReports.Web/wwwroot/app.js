@@ -1,6 +1,6 @@
 const $ = id => document.getElementById(id);
-const storeKey = 'laserfiche-reports-chat-v1';
-let chats = JSON.parse(localStorage.getItem(storeKey) || '[]');
+let storeKey = 'laserfiche-reports-chat-v1';
+let chats = [];
 let active = null;
 const save = () => localStorage.setItem(storeKey, JSON.stringify(chats.slice(0, 30)));
 function el(tag, className, value) {
@@ -12,9 +12,42 @@ function el(tag, className, value) {
 async function api(url, options) {
   const response = await fetch(url, options);
   const body = await response.json().catch(() => ({}));
+  if (response.status === 401 && url !== '/api/session/login') $('login-layer').classList.remove('hidden');
   if (!response.ok) throw new Error(body.detail || body.message || body.error || `HTTP ${response.status}`);
   return body;
 }
+function openSession(username) {
+  storeKey = `laserfiche-reports-chat-v1:${username.toLowerCase()}`;
+  try { chats = JSON.parse(localStorage.getItem(storeKey) || '[]'); }
+  catch { chats = []; }
+  active = null;
+  $('login-layer').classList.add('hidden');
+  renderHistory();
+  renderMessages();
+}
+$('login-form').onsubmit = async event => {
+  event.preventDefault();
+  $('login-submit').disabled = true;
+  $('login-error').textContent = '';
+  try {
+    const username = $('username').value.trim();
+    await api('/api/session/login', { method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password: $('password').value }) });
+    $('password').value = '';
+    openSession(username);
+  } catch (error) { $('login-error').textContent = `تعذر تسجيل الدخول: ${error.message}`; }
+  finally { $('login-submit').disabled = false; }
+};
+$('logout').onclick = async () => {
+  try { await api('/api/session/logout', { method: 'POST' }); }
+  finally {
+    localStorage.removeItem(storeKey);
+    chats = []; active = null;
+    $('login-layer').classList.remove('hidden');
+    renderHistory(); renderMessages();
+  }
+};
 function renderHistory() {
   $('history').replaceChildren();
   chats.forEach(chat => {
@@ -138,4 +171,7 @@ $('ingest-form').onsubmit = async event => {
   } catch (error) { $('ingest-result').textContent = `فشلت الفهرسة: ${error.message}`; }
   finally { $('ingest').disabled = false; }
 };
-renderHistory(); renderMessages();
+api('/api/session/status').then(session => {
+  if (session.authenticated && session.username) openSession(session.username);
+  else $('login-layer').classList.remove('hidden');
+}).catch(() => $('login-layer').classList.remove('hidden'));

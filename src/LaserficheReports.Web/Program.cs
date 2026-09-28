@@ -109,6 +109,47 @@ app.UseStaticFiles();
 
 app.MapGet("/api/app/status", () => Results.Ok(new { application = "Laserfiche Reports", mode = "local-only" }));
 
+app.MapGet("/api/session/status", async (ISessionCredentialStore sessions,
+    CancellationToken cancellationToken) =>
+{
+    var credential = await sessions.TryGetAsync(cancellationToken);
+    return Results.Ok(new { authenticated = credential is not null, username = credential?.Username });
+});
+
+app.MapPost("/api/session/login", async (LoginRequest request, IRepositoryContext repositories,
+    ILaserficheAuthService auth, ISessionCredentialStore sessions,
+    HttpContext httpContext,
+    CancellationToken cancellationToken) =>
+{
+    if (string.IsNullOrWhiteSpace(request.Username) || request.Username.Length > 256 ||
+        request.Password is null)
+        return Results.BadRequest(new { error = "Enter a Laserfiche username and password." });
+    await auth.InvalidateCurrentSessionTokensAsync();
+    await sessions.ClearAsync(cancellationToken);
+    httpContext.Session.SetString("AuthenticationScopeMethod", "Reports");
+    httpContext.Session.SetString("AuthenticationScopeSubject", httpContext.Session.Id);
+    var repository = await repositories.GetActiveRepositoryAsync(cancellationToken);
+    if (!await auth.TryAuthenticateAsync(repository, request.Username, request.Password, cancellationToken))
+    {
+        await auth.InvalidateCurrentSessionTokensAsync();
+        httpContext.Session.Remove("AuthenticationScopeMethod");
+        httpContext.Session.Remove("AuthenticationScopeSubject");
+        return Results.Unauthorized();
+    }
+    await sessions.StoreAsync(request.Username, request.Password, cancellationToken);
+    return Results.Ok(new { authenticated = true, repository = repository.RepositoryId });
+});
+
+app.MapPost("/api/session/logout", async (ISessionCredentialStore sessions,
+    ILaserficheAuthService auth, HttpContext httpContext, CancellationToken cancellationToken) =>
+{
+    await auth.InvalidateCurrentSessionTokensAsync();
+    await sessions.ClearAsync(cancellationToken);
+    httpContext.Session.Remove("AuthenticationScopeMethod");
+    httpContext.Session.Remove("AuthenticationScopeSubject");
+    return Results.Ok(new { authenticated = false });
+});
+
 app.MapGet("/api/graph/status", async (IHttpClientFactory factory, CancellationToken cancellationToken) =>
 {
     try
@@ -124,12 +165,16 @@ app.MapGet("/api/graph/status", async (IHttpClientFactory factory, CancellationT
     }
 });
 
-app.MapGet("/api/reports/documents", async (ReportsChatService chat, CancellationToken cancellationToken) =>
-    Results.Ok(await chat.ListAsync(cancellationToken)));
+app.MapGet("/api/reports/documents", async (ReportsChatService chat,
+    ISessionCredentialStore sessions, CancellationToken cancellationToken) =>
+    await sessions.TryGetAsync(cancellationToken) is null
+        ? Results.Unauthorized()
+        : Results.Ok(await chat.ListAsync(cancellationToken)));
 
 app.MapPost("/api/reports/chat", async (ChatQuestion request, ReportsChatService chat,
-    CancellationToken cancellationToken) =>
+    ISessionCredentialStore sessions, CancellationToken cancellationToken) =>
 {
+    if (await sessions.TryGetAsync(cancellationToken) is null) return Results.Unauthorized();
     try
     {
         return Results.Ok(await chat.AskAsync(request.Question, cancellationToken));
@@ -165,9 +210,11 @@ app.MapGet("/api/laserfiche/documents/{entryId:int}/pages/{pageNumber:int}/image
     int entryId,
     int pageNumber,
     ILaserficheDocumentService documents,
+    ISessionCredentialStore sessions,
     HttpContext httpContext,
     CancellationToken cancellationToken) =>
 {
+    if (await sessions.TryGetAsync(cancellationToken) is null) return Results.Unauthorized();
     if (entryId <= 0 || pageNumber <= 0)
     {
         return Results.BadRequest(new { error = "Entry ID and page number must be positive." });
@@ -195,8 +242,10 @@ app.MapGet("/api/laserfiche/documents/{entryId:int}/pages/{pageNumber:int}/image
 app.MapPost("/api/ingestion/laserfiche/{entryId:int}", async (
     int entryId,
     ILaserficheDocumentIngestionService ingestion,
+    ISessionCredentialStore sessions,
     CancellationToken cancellationToken) =>
 {
+    if (await sessions.TryGetAsync(cancellationToken) is null) return Results.Unauthorized();
     if (entryId <= 0)
     {
         return Results.BadRequest(new { error = "Entry ID must be positive." });
@@ -349,3 +398,4 @@ app.MapHealthChecks("/health");
 app.Run();
 
 internal sealed record ChatQuestion(string Question);
+internal sealed record LoginRequest(string Username, string Password);
