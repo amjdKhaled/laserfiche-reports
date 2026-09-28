@@ -28,6 +28,14 @@ class GraphTests(unittest.TestCase):
         self.assertIn("[1]", result["answer"])
         self.assertIn("قرار مجلس الإدارة", model.calls[0][1].content)
 
+    def test_laserfiche_field_source_is_identified_separately(self):
+        model = FakeModel()
+        build_graph(model).invoke({"question": "ما تصنيف الوثيقة 618؟", "evidence": [
+            {"entryId": 618, "textSource": "laserfiche-metadata",
+             "text": "التصنيف الرئيسي للوثيقة: وثائق التشغيل والصيانة"}
+        ]})
+        self.assertIn("Laserfiche metadata", model.calls[0][1].content)
+
     def test_rejects_excessive_evidence(self):
         with self.assertRaises(ValueError):
             validate_request({"question": "سؤال", "evidence": [{"entryId": 1, "text": "x"}] * 9})

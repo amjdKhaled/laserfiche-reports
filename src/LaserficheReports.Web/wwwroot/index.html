@@ -18,12 +18,12 @@
     </aside>
     <main class="main">
       <header class="topbar">
-        <div><h1>اسأل وثائقك</h1><p>إجابات مستندة إلى وثائق Laserfiche المفهرسة</p></div>
+        <div><h1>اسأل وثائقك</h1><p>ابحث في حقول Laserfiche ومحتوى الصفحات، مع مصدر لكل إجابة</p></div>
         <div class="top-actions"><div class="tabs"><button id="tab-chat" class="active">المحادثة</button><button id="tab-docs">الوثائق والنظام</button></div><button id="logout" class="logout">تسجيل الخروج</button></div>
       </header>
       <section id="chat-view" class="view">
         <div id="messages" class="messages">
-          <div class="welcome"><div class="welcome-icon">✦</div><h2>ما الذي تريد معرفته؟</h2><p>ابحث في محتوى الوثائق المفهرسة، وستظهر مصادر كل إجابة أسفلها.</p>
+          <div class="welcome"><div class="welcome-icon">✦</div><h2>معلومات وثائقك في مكان واحد</h2><p>اسأل عن التصنيف والمواعيد والحقول، أو ابحث داخل الصفحات المفهرسة. تظهر المصادر مع كل إجابة.</p>
             <div class="suggestions"><button data-question="لخص أهم النقاط في الوثائق المفهرسة">لخص أهم النقاط</button><button data-question="ما القرارات المذكورة في الوثائق؟">ما القرارات المذكورة؟</button></div>
           </div>
         </div>
@@ -33,7 +33,7 @@
       <section id="docs-view" class="view hidden">
         <div class="section-title"><div><h2>حالة الخدمات</h2><p>تأكد من اتصال الخدمات المحلية قبل الفهرسة أو السؤال.</p></div><button id="refresh">تحديث</button></div>
         <div class="status-grid" id="statuses"></div>
-        <div class="section-title"><div><h2>فهرسة وثيقة</h2><p>أدخل رقم الوثيقة من Laserfiche. قد تستغرق الصفحات المصورة وقتًا أطول.</p></div></div>
+        <div class="section-title"><div><h2>فهرسة وثيقة</h2><p>ابدأ برقم 618 للتجربة العربية. تُفهرس حقول Laserfiche حتى عندما يكون OCR مؤجلاً.</p></div></div>
         <form id="ingest-form" class="ingest"><input id="entry-id" type="number" min="1" placeholder="Entry ID مثل 618" required><button type="submit" id="ingest">بدء الفهرسة</button></form>
         <div id="ingest-result" class="feedback" role="status"></div>
         <div class="section-title"><div><h2>الوثائق المفهرسة</h2><p>تظهر الوثائق التي يمكن للاتصال الحالي قراءتها.</p></div><button id="reload-docs">تحديث القائمة</button></div>

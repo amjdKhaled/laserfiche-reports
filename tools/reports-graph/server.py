@@ -33,8 +33,9 @@ def format_context(state: State) -> dict:
     for index, item in enumerate(state["evidence"][:8], 1):
         entry_id = item["entryId"]
         page = item.get("pageNumber")
+        origin = "Laserfiche metadata" if item.get("textSource") == "laserfiche-metadata" else f"page {page or '?'}"
         blocks.append(
-            f"[{index}] Entry {entry_id}; page {page or '?'}; "
+            f"[{index}] Entry {entry_id}; {origin}; "
             f"document {item.get('documentName', '')}\n{item['text'][:2500]}"
         )
     return {"context": "\n\n".join(blocks)}

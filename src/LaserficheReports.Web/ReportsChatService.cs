@@ -1,5 +1,6 @@
 using System.Net.Http.Json;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using LaserficheReports.Application.Interfaces;
 using LaserficheReports.Domain.Entities;
 using LaserficheReports.Domain.Exceptions;
@@ -8,7 +9,7 @@ using Npgsql;
 namespace LaserficheReports.Web;
 
 internal sealed record Evidence(int EntryId, string DocumentName, string Path, int? PageNumber,
-    float Similarity, string Text);
+    float Similarity, string Text, string TextSource);
 internal sealed record ChatResult(string Answer, IReadOnlyList<Evidence> Sources);
 internal sealed record IndexedDocument(int EntryId, string Name, string Path, string Status,
     int ChunkCount, string? TextSource);
@@ -67,6 +68,10 @@ internal sealed class ReportsChatService(
             throw new ArgumentException("Question must contain 1 to 2000 characters.", nameof(question));
 
         var repository = await repositories.GetActiveRepositoryAsync(cancellationToken);
+        // An explicit document number narrows evidence before vector ranking.
+        var requestedEntry = Regex.Match(question, @"(?:وثيق[ةه]|مستند|entry|#)\s*#?\s*(\d+)",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        var entryFilter = requestedEntry.Success ? requestedEntry.Groups[1].Value : null;
         var prefix = configuration["LocalAI:QueryEmbeddingPrefix"] ?? "search_query: ";
         var vector = (await embeddings.CreateEmbeddingsAsync(
             [prefix + question.Trim()], cancellationToken))[0];
@@ -84,13 +89,18 @@ internal sealed class ReportsChatService(
                   and metadata ->> 'source' = 'laserfiche-reports'
                   and lower(metadata ->> 'repository_id') = lower(@repository)
                   and metadata ->> 'record_type' = 'document-chunk'
+                  and (@entryId is null or metadata ->> 'entry_id' = @entryId)
                   and (1 - (embedding OPERATOR(extensions.<=>) cast(@embedding as extensions.vector))) >= 0.25
-                order by embedding OPERATOR(extensions.<=>) cast(@embedding as extensions.vector)
+                order by case when @entryId is not null and metadata ->> 'text_source' = 'laserfiche-metadata'
+                              then 0 else 1 end,
+                         embedding OPERATOR(extensions.<=>) cast(@embedding as extensions.vector)
                 limit 16
                 """;
             await using var command = new NpgsqlCommand(sql, connection);
             command.Parameters.AddWithValue("embedding", literal);
             command.Parameters.AddWithValue("repository", repository.RepositoryId);
+            command.Parameters.Add(new NpgsqlParameter("entryId", NpgsqlTypes.NpgsqlDbType.Text)
+                { Value = (object?)entryFilter ?? DBNull.Value });
             await using var reader = await command.ExecuteReaderAsync(cancellationToken);
             while (await reader.ReadAsync(cancellationToken))
             {
@@ -103,7 +113,8 @@ internal sealed class ReportsChatService(
                 candidates.Add(new Evidence(entryId,
                     root.TryGetProperty("document_name", out var name) ? name.GetString() ?? "" : "",
                     root.TryGetProperty("full_path", out var path) ? path.GetString() ?? "" : "",
-                    page, reader.GetFloat(2), reader.GetString(0)));
+                    page, reader.GetFloat(2), reader.GetString(0),
+                    root.TryGetProperty("text_source", out var source) ? source.GetString() ?? "" : ""));
             }
         }
 

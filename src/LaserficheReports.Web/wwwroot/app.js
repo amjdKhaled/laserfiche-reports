@@ -64,7 +64,7 @@ function renderMessages() {
     const welcome = el('div', 'welcome');
     welcome.innerHTML = '<div class="welcome-icon">✦</div><h2>ما الذي تريد معرفته؟</h2><p>ابحث في محتوى الوثائق المفهرسة، وستظهر مصادر كل إجابة أسفلها.</p>';
     const suggestions = el('div', 'suggestions');
-    for (const question of ['لخص أهم النقاط في الوثائق المفهرسة', 'ما القرارات المذكورة في الوثائق؟']) {
+    for (const question of ['ما تصنيف الوثيقة 618؟', 'ما اسم الوثيقة 618 وموعد تسليمها؟', 'لخص أهم النقاط في الوثائق المفهرسة']) {
       const button = el('button', '', question);
       button.onclick = () => { $('question').value = question; $('question').focus(); };
       suggestions.append(button);
@@ -79,12 +79,19 @@ function renderMessages() {
       if (message.sources?.length) {
         const sources = el('div', 'sources');
         message.sources.forEach((source, index) => {
-          const a = el('a', 'source', `[${index + 1}] ${source.documentName || 'وثيقة'} · صفحة ${source.pageNumber || '—'}`);
-          a.href = source.pageNumber ? `/api/laserfiche/documents/${source.entryId}/pages/${source.pageNumber}/image` : '#';
-          a.target = '_blank';
-          a.rel = 'noopener';
-          if (!source.pageNumber) a.onclick = event => event.preventDefault();
-          sources.append(a);
+          const isMetadata = source.textSource === 'laserfiche-metadata';
+          const card = el('details', 'source');
+          card.append(el('summary', '',
+            `[${index + 1}] ${source.documentName || 'وثيقة'} · ${isMetadata ? 'بيانات Laserfiche' : `صفحة ${source.pageNumber || '—'}`}`));
+          card.append(el('small', 'source-path', source.path || `Entry ${source.entryId}`));
+          card.append(el('p', 'source-text', source.text || ''));
+          if (source.pageNumber) {
+            const link = el('a', 'source-link', 'عرض صورة الصفحة ↗');
+            link.href = `/api/laserfiche/documents/${source.entryId}/pages/${source.pageNumber}/image`;
+            link.target = '_blank'; link.rel = 'noopener';
+            card.append(link);
+          }
+          sources.append(card);
         });
         item.append(sources);
       }
@@ -153,7 +160,8 @@ async function loadDocuments() {
       const row = el('div', 'doc'), detail = el('div');
       detail.append(el('strong', '', `${doc.name} · #${doc.entryId}`));
       detail.append(el('small', '', doc.path));
-      row.append(detail, el('span', 'tag', `${doc.chunkCount} مقطع · ${doc.status}`));
+      const status = doc.status === 'metadata-indexed' ? 'بيانات مفهرسة' : doc.status === 'content-indexed' ? 'محتوى وبيانات مفهرسة' : doc.status;
+      row.append(detail, el('span', 'tag', `${doc.chunkCount} مقطع · ${status}`));
       $('documents').append(row);
     });
   } catch (error) { $('documents').replaceChildren(el('div', 'empty', error.message)); }

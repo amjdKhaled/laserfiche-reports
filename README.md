@@ -53,8 +53,10 @@ This branch adds a local chat and document interface at
 The web host accepts loopback requests only while it uses local Laserfiche
 credentials. LangGraph and Ollama also bind to loopback.
 OCR can be deferred: set `Ocr:Enabled` to `false` in your private
-`appsettings.Local.json`, and first ask questions about documents that
-already have stored chunks and embeddings.
+`appsettings.Local.json`. Ingestion still embeds the document name, path,
+template, dates and populated Laserfiche metadata fields for RAG. Reindexing
+an existing document in this mode updates its metadata evidence without
+deleting its existing OCR page chunks.
 
 1. Run local Supabase and Ollama. Ensure `nomic-embed-text-v2-moe` and
    `qwen2.5:7b` are installed in Ollama.
@@ -85,6 +87,10 @@ dotnet run --project .\src\LaserficheReports.Web
 ```
 
 Open `http://127.0.0.1:5187/` and sign in with your Laserfiche account.
+For a short demo, leave OCR disabled and index Entry `618` from **Documents & system**.
+Ask “ما تصنيف الوثيقة 618؟” or “ما موعد تسليم الوثيقة 618؟”; expand a source
+to see the exact Laserfiche field text used in the answer. A page source links
+to its original image. Answers require the local LangGraph and Ollama services.
 The **Documents & system** tab shows
 database, repository, graph, and optional OCR status. Its ingestion form
 indexes a chosen Entry ID. Verify the services from another PowerShell window:
@@ -248,11 +254,12 @@ browser's authenticated session.
 
 The ingestion request saves the document identity, metadata, and searchable
 page text. It prefers text already available in Laserfiche and runs local OCR
-only for missing pages. It then splits every page into overlapping chunks and
-uses the local Ollama `nomic-embed-text-v2-moe` model to create 768-dimensional
+only for missing pages. It splits metadata and page text into distinct chunks
+and uses the local Ollama `nomic-embed-text-v2-moe` model to create 768-dimensional
 embeddings. The document row keeps `embedding = NULL`; its `document-chunk`
-rows contain the vectors used by retrieval. Running the request again refreshes
-the same document row and replaces only that document's project-owned chunks.
+rows contain the vectors used by retrieval. Running with OCR enabled replaces
+this document's project-owned chunks. Running with OCR disabled and no native
+page text refreshes only metadata chunks, preserving existing page evidence.
 
 To verify that the application can retrieve document content as well as
 metadata, stream page 1 to a local file:

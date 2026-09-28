@@ -56,6 +56,24 @@ public sealed class LaserficheDocumentIngestionServiceTests
     }
 
     [Fact]
+    public void BuildSearchChunks_IndexesMetadataBeforePageTextWithProvenance()
+    {
+        var entry = new LFEntry { Id = 618, Name = "Arabic regulation", FullPath = @"\SCAN\Arabic regulation" };
+        LFFieldValue[] fields = [new() { FieldName = "موعد التسليم", Value = "2026-09-21" }];
+        LaserficheDocumentIngestionService.IndexedPageText[] pages = [new(1, "أحكام عامة", "ocr")];
+
+        var chunks = LaserficheDocumentIngestionService.BuildSearchChunks(entry, fields, pages, 500, 40);
+
+        Assert.Equal(2, chunks.Count);
+        Assert.Equal("laserfiche-metadata", chunks[0].Source);
+        Assert.Contains("موعد التسليم: 2026-09-21", chunks[0].Content);
+        Assert.Equal("ocr", chunks[1].Source);
+        using var metadata = JsonDocument.Parse(LaserficheDocumentIngestionService.BuildChunkMetadata(
+            "testemployee", entry, 635, chunks[0], chunks.Count, "nomic-embed-text-v2-moe", 768));
+        Assert.Equal(JsonValueKind.Null, metadata.RootElement.GetProperty("page_number").ValueKind);
+    }
+
+    [Fact]
     public void BuildIndexedContent_AppendsLaserficheTextInPageOrder()
     {
         var entry = new LFEntry { Name = "Document A", FullPath = @"\HR\Document A" };
