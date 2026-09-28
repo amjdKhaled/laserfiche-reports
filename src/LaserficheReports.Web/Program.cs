@@ -112,7 +112,7 @@ app.MapGet("/api/app/status", (IConfiguration config) => Results.Ok(new
 {
     application = "Laserfiche Reports",
     mode = "local-only",
-    ocrEnabled = config.GetValue("Ocr:Enabled", true)
+    ocrEnabled = config.GetValue("Ocr:Enabled", false)
 }));
 
 app.MapGet("/api/session/status", async (ISessionCredentialStore sessions,

@@ -52,8 +52,9 @@ This branch adds a local chat and document interface at
 `http://127.0.0.1:5187/`. The existing `public.documents` table is reused.
 The web host accepts loopback requests only while it uses local Laserfiche
 credentials. LangGraph and Ollama also bind to loopback.
-OCR can be deferred: set `Ocr:Enabled` to `false` in your private
-`appsettings.Local.json`. Ingestion still embeds the document name, path,
+OCR is disabled by default for repository-wide indexing. A private
+`appsettings.Local.json` or environment override can explicitly enable it later.
+Ingestion still embeds the document name, path,
 template, dates and populated Laserfiche metadata fields for RAG. Reindexing
 an existing document in this mode updates its metadata evidence without
 deleting its existing OCR page chunks.
@@ -164,7 +165,7 @@ Set the local repository and PostgreSQL connection in
     "PostgresConnectionString": "Host=localhost;Port=5432;Database=postgres;Username=postgres.YOUR_POOLER_TENANT_ID;Password=YOUR_LOCAL_PASSWORD;SSL Mode=Disable"
   },
   "Ocr": {
-    "Enabled": true,
+    "Enabled": false,
     "BaseUrl": "http://127.0.0.1:8765",
     "TimeoutSeconds": 1800,
     "MinimumTextLength": 3,
