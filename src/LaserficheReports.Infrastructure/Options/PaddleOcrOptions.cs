@@ -4,7 +4,7 @@ public sealed class PaddleOcrOptions
 {
     public const string SectionName = "Ocr";
 
-    public bool Enabled { get; init; } = true;
+    public bool Enabled { get; init; } = false;
     public string BaseUrl { get; init; } = "http://127.0.0.1:8765";
     public int TimeoutSeconds { get; init; } = 1800;
     public int MinimumTextLength { get; init; } = 3;

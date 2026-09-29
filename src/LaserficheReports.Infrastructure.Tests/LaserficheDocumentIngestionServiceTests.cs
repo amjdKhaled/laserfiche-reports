@@ -8,6 +8,33 @@ namespace LaserficheReports.Infrastructure.Tests;
 public sealed class LaserficheDocumentIngestionServiceTests
 {
     [Fact]
+    public void CanReuseIndex_RequiresAnUnchangedDocumentAndMetadataChunk()
+    {
+        var entry = new LFEntry
+        {
+            Id = 618, Name = "لائحة جازان", FullPath = @"\SCAN\لائحة جازان",
+            FolderPath = @"\SCAN", PageCount = 1,
+            LastModifiedTime = new DateTimeOffset(2026, 9, 20, 0, 0, 0, TimeSpan.Zero)
+        };
+        LFFieldValue[] fields = [new() { FieldDefinitionId = 42, FieldName = "التصنيف", Value = "لوائح" }];
+        using var document = JsonDocument.Parse(LaserficheDocumentIngestionService.BuildMetadata(
+            "testemployee", entry, fields, chunkCount: 1, embeddingModel: "nomic-embed-text-v2-moe"));
+        var metadata = document.RootElement;
+
+        Assert.True(LaserficheDocumentIngestionService.CanReuseIndex(
+            entry, fields, metadata, true, "nomic-embed-text-v2-moe"));
+        Assert.False(LaserficheDocumentIngestionService.CanReuseIndex(
+            entry, fields, metadata, false, "nomic-embed-text-v2-moe"));
+        Assert.False(LaserficheDocumentIngestionService.CanReuseIndex(
+            entry, [fields[0] with { Value = "عقود" }], metadata, true, "nomic-embed-text-v2-moe"));
+        Assert.False(LaserficheDocumentIngestionService.CanReuseIndex(
+            entry with { LastModifiedTime = entry.LastModifiedTime.Value.AddDays(1) },
+            fields, metadata, true, "nomic-embed-text-v2-moe"));
+        Assert.False(LaserficheDocumentIngestionService.CanReuseIndex(
+            entry, fields, metadata, true, "different-model"));
+    }
+
+    [Fact]
     public void BuildMetadata_PreservesLaserficheIdentityAndFields()
     {
         var entry = new LFEntry
@@ -53,6 +80,24 @@ public sealed class LaserficheDocumentIngestionServiceTests
         Assert.Contains("Document: Document A", content);
         Assert.Contains("Department: HR", content);
         Assert.DoesNotContain("Empty:", content);
+    }
+
+    [Fact]
+    public void BuildSearchChunks_IndexesMetadataBeforePageTextWithProvenance()
+    {
+        var entry = new LFEntry { Id = 618, Name = "Arabic regulation", FullPath = @"\SCAN\Arabic regulation" };
+        LFFieldValue[] fields = [new() { FieldName = "موعد التسليم", Value = "2026-09-21" }];
+        LaserficheDocumentIngestionService.IndexedPageText[] pages = [new(1, "أحكام عامة", "ocr")];
+
+        var chunks = LaserficheDocumentIngestionService.BuildSearchChunks(entry, fields, pages, 500, 40);
+
+        Assert.Equal(2, chunks.Count);
+        Assert.Equal("laserfiche-metadata", chunks[0].Source);
+        Assert.Contains("موعد التسليم: 2026-09-21", chunks[0].Content);
+        Assert.Equal("ocr", chunks[1].Source);
+        using var metadata = JsonDocument.Parse(LaserficheDocumentIngestionService.BuildChunkMetadata(
+            "testemployee", entry, 635, chunks[0], chunks.Count, "nomic-embed-text-v2-moe", 768));
+        Assert.Equal(JsonValueKind.Null, metadata.RootElement.GetProperty("page_number").ValueKind);
     }
 
     [Fact]
