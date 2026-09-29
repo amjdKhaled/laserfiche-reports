@@ -2,7 +2,7 @@ import unittest
 import io
 import json
 
-from server import NO_EVIDENCE, build_graph, validate_request
+from server import INDEX_SYSTEM, NO_EVIDENCE, build_graph, validate_request
 from sync import discover_all
 
 
@@ -39,6 +39,31 @@ class GraphTests(unittest.TestCase):
              "text": "التصنيف الرئيسي للوثيقة: وثائق التشغيل والصيانة"}
         ]})
         self.assertIn("Laserfiche metadata", model.calls[0][1].content)
+
+    def test_whole_index_summary_uses_all_group_counts_and_named_examples(self):
+        model = FakeModel()
+        request = validate_request({
+            "mode": "index_summary", "question": "لخص أهم النقاط في الوثائق المفهرسة",
+            "totalDocuments": 3, "contentDocuments": 1, "metadataOnlyDocuments": 2,
+            "groups": [
+                {"category": "موارد بشرية", "count": 2,
+                 "examples": [{"entryId": 454, "documentName": "طلب إجازة-123", "detail": "نوع الوثيقة: إجازة"}]},
+                {"category": "تشغيل وصيانة", "count": 1,
+                 "examples": [{"entryId": 618, "documentName": "document_removed", "detail": ""}]},
+            ],
+        })
+        build_graph(model).invoke(request)
+        self.assertEqual(model.calls[0][0].content, INDEX_SYSTEM)
+        self.assertIn("الإجمالي: 3 وثيقة", model.calls[0][1].content)
+        self.assertIn("طلب إجازة-123 (ID 454)", model.calls[0][1].content)
+        self.assertIn("تشغيل وصيانة: 1 وثيقة", model.calls[0][1].content)
+
+    def test_index_summary_rejects_incomplete_coverage(self):
+        with self.assertRaisesRegex(ValueError, "counts do not match"):
+            validate_request({"mode": "index_summary", "question": "لخص الوثائق المفهرسة",
+                              "totalDocuments": 3, "contentDocuments": 1,
+                              "metadataOnlyDocuments": 2,
+                              "groups": [{"category": "موارد بشرية", "count": 2, "examples": []}]})
 
     def test_rejects_excessive_evidence(self):
         with self.assertRaises(ValueError):

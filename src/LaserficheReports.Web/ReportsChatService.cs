@@ -17,7 +17,9 @@ internal sealed record IndexedDocument(int EntryId, string Name, string Path, st
     int ChunkCount, string? TextSource);
 internal sealed record IndexedDocumentPage(IReadOnlyList<IndexedDocument> Items, int Page, bool HasMore);
 internal sealed record IndexOverviewDocument(int EntryId, string Name, string Path,
-    string Template, string Status, string TextSource, IReadOnlyList<string> Highlights);
+    string Template, string Status, string TextSource, string Category, IReadOnlyList<string> Highlights);
+internal sealed record IndexSummaryExample(int EntryId, string DocumentName, string Detail);
+internal sealed record IndexSummaryGroup(string Category, int Count, IReadOnlyList<IndexSummaryExample> Examples);
 
 /// <summary>Retrieves project-owned rows and verifies each document against the live repository.</summary>
 internal sealed class ReportsChatService(
@@ -222,8 +224,9 @@ internal sealed class ReportsChatService(
             {
                 if (!int.TryParse(reader.GetString(0), out var entryId)) continue;
                 string Read(int index) => reader.IsDBNull(index) ? "" : reader.GetString(index);
+                var (category, highlights) = ReadFields(Read(6));
                 candidates.Add(new IndexOverviewDocument(entryId, Read(1), Read(2), Read(3),
-                    Read(4), Read(5), ReadHighlights(Read(6))));
+                    Read(4), Read(5), category, highlights));
             }
         }
 
@@ -244,53 +247,88 @@ internal sealed class ReportsChatService(
                 ? $"توجد أكثر من {visible.Count} وثيقة مفهرسة متاحة لك. افتح قسم الوثائق لاستعراض البقية."
                 : $"عدد الوثائق المفهرسة المتاحة لك في المستودع الحالي: {visible.Count} وثيقة.", []);
 
-        var summary = new StringBuilder();
-        summary.AppendLine(more
-            ? $"ملخص بيانات أول {visible.Count} وثيقة مفهرسة متاحة لك (يوجد المزيد في قسم الوثائق):"
-            : $"ملخص بيانات جميع الوثائق المفهرسة المتاحة لك ({visible.Count} وثيقة):");
+        var listRequested = Regex.IsMatch(question, @"اذكر|اعرض|اسرد|قائمة|أسماء|اسماء|جميع|كل",
+            RegexOptions.CultureInvariant) &&
+            !Regex.IsMatch(question, @"لخص|ملخص|أهم|اهم", RegexOptions.CultureInvariant);
+        if (listRequested)
+        {
+            var list = new StringBuilder();
+            list.AppendLine(more ? $"أول {visible.Count} وثيقة مفهرسة متاحة لك:" :
+                $"الوثائق المفهرسة المتاحة لك ({visible.Count}):");
+            foreach (var document in visible)
+                list.AppendLine($"- {document.Name} — ID {document.EntryId}");
+            if (more) list.AppendLine("توجد وثائق إضافية في قسم الوثائق.");
+            return new ChatResult(list.ToString().TrimEnd(), []);
+        }
+
         var contentCount = visible.Count(document => document.Status == "content-indexed");
         var metadataCount = visible.Count(document => document.Status == "metadata-indexed");
-        summary.AppendLine($"- تحتوي {contentCount} وثيقة على محتوى صفحات مفهرس، " +
-            $"و{metadataCount} وثيقة على بيانات Laserfiche فقط.");
-        if (visible.Count > contentCount + metadataCount)
-            summary.AppendLine($"- {visible.Count - contentCount - metadataCount} وثيقة بحالة فهرسة أخرى.");
-        var templates = visible.Where(document => !string.IsNullOrWhiteSpace(document.Template))
-            .GroupBy(document => document.Template).OrderByDescending(group => group.Count())
-            .ThenBy(group => group.Key).Take(8);
-        var templateSummary = string.Join("؛ ", templates.Select(group => $"{group.Key} ({group.Count()})"));
-        if (templateSummary.Length > 0) summary.AppendLine("- أبرز القوالب: " + templateSummary + ".");
-        summary.AppendLine("النقاط أدناه مستخرجة من أسماء الوثائق وحقول Laserfiche المفهرسة.");
-        summary.AppendLine();
-        summary.AppendLine("الوثائق وأبرز بياناتها:");
-        foreach (var document in visible)
+        var groups = visible.GroupBy(document => !string.IsNullOrWhiteSpace(document.Category)
+                ? document.Category : !string.IsNullOrWhiteSpace(document.Template)
+                    ? $"قالب {document.Template}" : "غير مصنف")
+            .OrderByDescending(group => group.Count()).ThenBy(group => group.Key)
+            .Select(group => new IndexSummaryGroup(Clip(group.Key, 200), group.Count(),
+                group.Take(2).Select(document => new IndexSummaryExample(document.EntryId,
+                    Clip(document.Name, 500), Clip(string.Join("؛ ", document.Highlights), 500)))
+                    .ToArray()))
+            .ToList();
+        if (groups.Count > 32)
         {
-            summary.Append($"- {document.Name} — ID {document.EntryId}");
-            if (document.Highlights.Count > 0)
-                summary.Append(" | " + string.Join("؛ ", document.Highlights));
-            summary.AppendLine();
+            var remaining = groups.Skip(31).Sum(group => group.Count);
+            groups = groups.Take(31).Append(new IndexSummaryGroup("تصنيفات أخرى", remaining, [])).ToList();
         }
-        var sources = visible.Select(document => new Evidence(document.EntryId, document.Name,
-            document.Path, null, 1, string.Join("\n", document.Highlights), "laserfiche-metadata"))
+
+        var client = clients.CreateClient("ReportsGraph");
+        var graphRequest = JsonSerializer.Serialize(new
+        {
+            mode = "index_summary", question = question.Trim(), totalDocuments = visible.Count,
+            contentDocuments = contentCount, metadataOnlyDocuments = metadataCount, groups
+        }, GraphJsonOptions);
+        using var content = new StringContent(graphRequest, Encoding.UTF8, "application/json");
+        using var response = await client.PostAsync("answer", content, cancellationToken);
+        if (!response.IsSuccessStatusCode)
+            throw new InvalidOperationException($"Local LangGraph returned HTTP {(int)response.StatusCode} during index summary.");
+        var graphResponse = await response.Content.ReadFromJsonAsync<GraphAnswer>(cancellationToken);
+        if (string.IsNullOrWhiteSpace(graphResponse?.Answer))
+            throw new InvalidOperationException("The local LangGraph service returned an empty index summary.");
+        var heading = more ? $"ملخص أول {visible.Count} وثيقة متاحة (توجد وثائق أخرى):" :
+            $"ملخص {visible.Count} وثيقة مفهرسة متاحة لك:";
+        var coverage = $"{contentCount} بمحتوى صفحات، و{metadataCount} ببيانات Laserfiche فقط.";
+        var sourceIds = groups.SelectMany(group => group.Examples.Take(1)).Take(8)
+            .Select(example => example.EntryId).ToHashSet();
+        var sources = visible.Where(document => sourceIds.Contains(document.EntryId))
+            .Select(document => new Evidence(document.EntryId, document.Name, document.Path,
+                null, 1, string.Join("\n", document.Highlights), "laserfiche-metadata"))
             .ToArray();
-        return new ChatResult(summary.ToString().TrimEnd(), sources);
+        return new ChatResult($"{heading}\n{coverage}\n\n{graphResponse.Answer.Trim()}", sources);
     }
 
-    private static IReadOnlyList<string> ReadHighlights(string json)
+    private static (string Category, IReadOnlyList<string> Highlights) ReadFields(string json)
     {
         using var fields = JsonDocument.Parse(json);
-        if (fields.RootElement.ValueKind != JsonValueKind.Array) return [];
-        return fields.RootElement.EnumerateArray()
+        if (fields.RootElement.ValueKind != JsonValueKind.Array) return ("", []);
+        var populated = fields.RootElement.EnumerateArray()
             .Where(field => field.ValueKind == JsonValueKind.Object &&
                 field.TryGetProperty("name", out var name) && name.ValueKind == JsonValueKind.String &&
                 field.TryGetProperty("value", out var value) && value.ValueKind == JsonValueKind.String &&
                 !string.IsNullOrWhiteSpace(value.GetString()))
             .Select(field => (Name: field.GetProperty("name").GetString() ?? "",
                 Value: field.GetProperty("value").GetString() ?? ""))
-            .OrderBy(field => Regex.IsMatch(field.Name, "موضوع|اسم الوثيقة|التصنيف|نوع الوثيقة|حالة الوثيقة") ? 0 : 1)
-            .Take(2)
-            .Select(field => $"{field.Name}: {field.Value[..Math.Min(field.Value.Length, 120)]}")
+            .DistinctBy(field => (Regex.Replace(field.Name, @"\s+", ""), field.Value.Trim()))
             .ToArray();
+        var category = populated.FirstOrDefault(field =>
+            Regex.Replace(field.Name, @"\s+", "").Contains("التصنيفالرئيسي")).Value ?? "";
+        var highlights = populated
+            .Where(field => !Regex.IsMatch(Regex.Replace(field.Name, @"\s+", ""),
+                "اسمالوثيقة|التصنيفالرئيسي"))
+            .OrderBy(field => Regex.IsMatch(field.Name, "نوع الوثيقة|حالة الوثيقة|موعد|تاريخ|الإدارة") ? 0 : 1)
+            .Take(2)
+            .Select(field => $"{Clip(field.Name, 80)}: {Clip(field.Value, 120)}")
+            .ToArray();
+        return (category, highlights);
     }
+
+    private static string Clip(string value, int max) => value[..Math.Min(value.Length, max)];
 
     private async Task<bool> CanReadAsync(int entryId, CancellationToken cancellationToken)
     {
