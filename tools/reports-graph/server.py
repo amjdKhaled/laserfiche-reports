@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_ollama import ChatOllama
 from langgraph.graph import END, START, StateGraph
+from request_body import RequestBodyError, read_request_body
 
 
 class State(TypedDict, total=False):
@@ -92,13 +93,14 @@ class Handler(BaseHTTPRequestHandler):
         if self.path != "/answer":
             return self.send_json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
         try:
-            length = int(self.headers.get("Content-Length", "0"))
-            if length < 1 or length > MAX_REQUEST_BYTES:
-                print(f"LangGraph rejected request: {length} bytes (limit {MAX_REQUEST_BYTES})", flush=True)
-                return self.send_json(HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
-                                      {"error": "request_too_large", "requestBytes": length,
-                                       "maxRequestBytes": MAX_REQUEST_BYTES})
-            payload = validate_request(json.loads(self.rfile.read(length).decode("utf-8")))
+            payload = validate_request(json.loads(
+                read_request_body(self.headers, self.rfile, MAX_REQUEST_BYTES).decode("utf-8")))
+        except RequestBodyError as error:
+            print(f"LangGraph rejected request: {error.error}; "
+                  f"size={error.request_bytes}; limit={MAX_REQUEST_BYTES}", flush=True)
+            return self.send_json(error.status, {"error": error.error,
+                                                 "requestBytes": error.request_bytes,
+                                                 "maxRequestBytes": MAX_REQUEST_BYTES})
         except (ValueError, UnicodeDecodeError, json.JSONDecodeError) as error:
             return self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
         try:

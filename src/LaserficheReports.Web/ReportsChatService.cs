@@ -1,4 +1,5 @@
 using System.Net.Http.Json;
+using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -161,8 +162,12 @@ internal sealed class ReportsChatService(
             item.TextSource,
             Text = item.Text[..Math.Min(item.Text.Length, 2500)]
         }).ToArray();
-        using var response = await client.PostAsJsonAsync("answer",
-            new { question = question.Trim(), evidence = graphEvidence }, GraphJsonOptions, cancellationToken);
+        // StringContent computes Content-Length; Python's local HTTP server needs
+        // request framing to read the JSON body.
+        var graphRequest = JsonSerializer.Serialize(
+            new { question = question.Trim(), evidence = graphEvidence }, GraphJsonOptions);
+        using var content = new StringContent(graphRequest, Encoding.UTF8, "application/json");
+        using var response = await client.PostAsync("answer", content, cancellationToken);
         if (!response.IsSuccessStatusCode)
             throw new InvalidOperationException(
                 $"Local LangGraph returned HTTP {(int)response.StatusCode}. Check the LangGraph terminal and Ollama model.");
