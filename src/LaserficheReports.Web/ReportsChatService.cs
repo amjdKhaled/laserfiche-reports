@@ -92,6 +92,8 @@ internal sealed class ReportsChatService(
         var requestedEntry = Regex.Match(question, @"(?:وثيق[ةه]|مستند|entry|#)\s*(?:رقم\s*)?#?\s*(\d+)",
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
         var entryFilter = requestedEntry.Success ? requestedEntry.Groups[1].Value : null;
+        if (entryFilter is null && TryGetListedFolder(question, out var folder))
+            return await ListFolderDocumentsAsync(repository.RepositoryId, folder, cancellationToken);
         if (entryFilter is null && IsWholeIndexQuestion(question))
             return await AnswerIndexOverviewAsync(repository.RepositoryId, question, cancellationToken);
         var prefix = configuration["LocalAI:QueryEmbeddingPrefix"] ?? "search_query: ";
@@ -196,6 +198,77 @@ internal sealed class ReportsChatService(
             RegexOptions.CultureInvariant) &&
         Regex.IsMatch(question, @"لخص|ملخص|أهم|اهم|جميع|كل|اذكر|اعرض|عدد|كم|ما\s*هي|ماهي",
             RegexOptions.CultureInvariant);
+
+    private static bool TryGetListedFolder(string question, out string folder)
+    {
+        folder = "";
+        if (!Regex.IsMatch(question, @"وثائق|مستندات|ملفات|الملفات|الوثائق|المستندات",
+                RegexOptions.CultureInvariant) ||
+            !Regex.IsMatch(question, @"اعط|أعط|اذكر|أذكر|اعرض|أعرض|اسرد|قائمة|ما\s*هي|ماهي|الموجود[ةه]|في|داخل",
+                RegexOptions.CultureInvariant))
+            return false;
+
+        var match = Regex.Match(question,
+            @"(?:مجلد|قسم|فولدر)\s+(?:الـ?\s*)?(?<folder>[\p{L}\p{N}_-]+)|(?:في|داخل|ضمن)\s+(?:الـ?\s*)?(?<folder>[A-Za-z][A-Za-z0-9_-]*)",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        if (!match.Success) return false;
+        folder = match.Groups["folder"].Value;
+        return folder.Length is > 0 and <= 80;
+    }
+
+    private async Task<ChatResult> ListFolderDocumentsAsync(string repositoryId, string folder,
+        CancellationToken cancellationToken)
+    {
+        const string sql = """
+            select distinct on (metadata ->> 'entry_id')
+                   metadata ->> 'entry_id', metadata ->> 'document_name',
+                   metadata ->> 'folder_path', metadata ->> 'full_path'
+            from public.documents
+            where metadata ->> 'source' = 'laserfiche-reports'
+              and metadata ->> 'record_type' = 'document-metadata'
+              and lower(metadata ->> 'repository_id') = lower(@repository)
+              and (strpos(lower(coalesce(metadata ->> 'folder_path', '')), lower(@folder)) > 0
+                   or strpos(lower(coalesce(metadata ->> 'full_path', '')), lower(@folder)) > 0)
+            order by metadata ->> 'entry_id', id desc
+            """;
+        var candidates = new List<(int Id, string Name, string Path)>();
+        await using (var connection = new NpgsqlConnection(ConnectionString))
+        {
+            await connection.OpenAsync(cancellationToken);
+            await using var command = new NpgsqlCommand(sql, connection);
+            command.Parameters.AddWithValue("repository", repositoryId);
+            command.Parameters.AddWithValue("folder", folder);
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                if (reader.IsDBNull(0) || !int.TryParse(reader.GetString(0), out var entryId)) continue;
+                var name = reader.IsDBNull(1) ? "" : reader.GetString(1);
+                var path = reader.IsDBNull(2) ? "" : reader.GetString(2);
+                var fullPath = reader.IsDBNull(3) ? "" : reader.GetString(3);
+                if (string.IsNullOrWhiteSpace(path))
+                {
+                    var lastSeparator = fullPath.LastIndexOfAny(['/', '\\']);
+                    path = lastSeparator < 0 ? "" : fullPath[..lastSeparator];
+                }
+                if (path.Split(['/', '\\'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                    .Any(part => part.Equals(folder, StringComparison.OrdinalIgnoreCase)))
+                    candidates.Add((entryId, name, path));
+            }
+        }
+
+        var visible = new List<(int Id, string Name, string Path)>();
+        foreach (var candidate in candidates.OrderBy(candidate => candidate.Id))
+        {
+            if (await CanReadAsync(candidate.Id, cancellationToken)) visible.Add(candidate);
+        }
+        if (visible.Count == 0)
+            return new ChatResult($"لا توجد وثائق مفهرسة متاحة لك داخل مجلد {folder}.", []);
+
+        var answer = new StringBuilder($"الوثائق المفهرسة داخل مجلد {folder} ({visible.Count}):\n");
+        for (var index = 0; index < visible.Count; index++)
+            answer.AppendLine($"{index + 1}. {visible[index].Name} — ID {visible[index].Id}");
+        return new ChatResult(answer.ToString().TrimEnd(), []);
+    }
 
     private async Task<ChatResult> AnswerIndexOverviewAsync(string repositoryId, string question,
         CancellationToken cancellationToken)
