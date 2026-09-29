@@ -217,7 +217,7 @@ $('ingest-form').onsubmit = async event => {
 
 function newScan() {
   return { folders: [0], documents: [], seenFolders: [], seenDocuments: [],
-    foldersDone: 0, documentsDone: 0, chunks: 0, failed: [], repositoryId: '', current: '', notice: '' };
+    foldersDone: 0, documentsDone: 0, skipped: 0, chunks: 0, failed: [], repositoryId: '', current: '', notice: '' };
 }
 function saveScan() {
   try { localStorage.setItem(scanKey, JSON.stringify(scan)); }
@@ -236,7 +236,7 @@ function renderScan() {
     return;
   }
   $('scan-progress').textContent =
-    `${scanning ? 'جارية' : 'متوقفة'} · ${scan.foldersDone} مجلد · ${scan.documentsDone} وثيقة · ` +
+    `${scanning ? 'جارية' : 'متوقفة'} · ${scan.foldersDone} مجلد · ${scan.documentsDone} وثيقة · ${scan.skipped || 0} دون تغيير · ` +
     `${scan.chunks} مقطع · ${scan.folders.length} مجلد و${scan.documents.length} وثيقة في الانتظار` +
     (scan.current ? ` · الآن: ${scan.current}` : '') +
     (scan.notice ? ` · ${scan.notice}` : '');
@@ -276,6 +276,7 @@ $('scan-start').onclick = async () => {
           const result = await api(`/api/ingestion/laserfiche/${id}`, { method: 'POST' });
           scan.chunks += result.chunkCount || 0;
           scan.documentsDone++;
+          if (result.wasSkipped) scan.skipped = (scan.skipped || 0) + 1;
         } catch (error) {
           if (error.status === 401) { pauseScan = true; break; }
           if (error.status === 503) {

@@ -85,6 +85,13 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
             .GetEntryFieldsAsync(entryId, cancellationToken)
             .ConfigureAwait(false);
 
+        if (!_ocrOptions.Enabled)
+        {
+            var current = await TryGetCurrentIndexAsync(repository.RepositoryId, entry, fields,
+                cancellationToken).ConfigureAwait(false);
+            if (current is not null) return current;
+        }
+
         IReadOnlyList<LFDocumentPage> discoveredPages = [];
         if (entry.PageCount is not > 0)
         {
@@ -480,6 +487,60 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
             new[] { new IndexedPageText(0, BuildMetadataContent(entry, fields), "laserfiche-metadata") }
                 .Concat(pages).ToArray(), size, overlap);
 
+    internal static bool CanReuseIndex(LFEntry entry, IReadOnlyList<LFFieldValue> fields,
+        JsonElement metadata, bool hasMetadataChunk, string embeddingModel)
+    {
+        if (!hasMetadataChunk || entry.LastModifiedTime is null ||
+            metadata.ValueKind != JsonValueKind.Object) return false;
+        static string? Read(JsonElement source, string key) =>
+            source.TryGetProperty(key, out var value) && value.ValueKind == JsonValueKind.String
+                ? value.GetString() : null;
+        static long? Number(JsonElement source, string key) =>
+            source.TryGetProperty(key, out var value) && value.ValueKind == JsonValueKind.Number &&
+            value.TryGetInt64(out var number) ? number : null;
+        if (!metadata.TryGetProperty("last_modified_time", out var modified) ||
+            modified.ValueKind != JsonValueKind.String ||
+            !modified.TryGetDateTimeOffset(out var indexedModified) ||
+            indexedModified != entry.LastModifiedTime.Value ||
+            Read(metadata, "document_name") != entry.Name ||
+            Read(metadata, "full_path") != entry.FullPath ||
+            Read(metadata, "folder_path") != entry.FolderPath ||
+            Read(metadata, "template_name") != entry.TemplateName ||
+            Number(metadata, "template_id") != entry.TemplateId ||
+            Number(metadata, "page_count") != entry.PageCount ||
+            Number(metadata, "file_size_bytes") != entry.FileSizeBytes ||
+            Read(metadata, "creator") != entry.Creator ||
+            (entry.CreationTime is not null &&
+                (!metadata.TryGetProperty("creation_time", out var created) ||
+                 created.ValueKind != JsonValueKind.String ||
+                 !created.TryGetDateTimeOffset(out var indexedCreated) ||
+                 indexedCreated != entry.CreationTime.Value)) ||
+            (entry.CreationTime is null && Read(metadata, "creation_time") is not null) ||
+            Read(metadata, "embedding_model") != embeddingModel ||
+            Read(metadata, "embedding_status") != "complete" ||
+            !metadata.TryGetProperty("fields", out var indexedFields) ||
+            indexedFields.ValueKind != JsonValueKind.Array ||
+            indexedFields.GetArrayLength() != fields.Count)
+            return false;
+
+        for (var index = 0; index < fields.Count; index++)
+        {
+            var current = fields[index];
+            var stored = indexedFields[index];
+            if (stored.ValueKind != JsonValueKind.Object ||
+                !stored.TryGetProperty("id", out var id) || !id.TryGetInt32(out var fieldId) ||
+                !stored.TryGetProperty("is_multi_value", out var multi) ||
+                multi.ValueKind is not (JsonValueKind.True or JsonValueKind.False) ||
+                fieldId != current.FieldDefinitionId ||
+                Read(stored, "name") != current.FieldName ||
+                Read(stored, "value") != current.Value ||
+                Read(stored, "type") != current.FieldType ||
+                multi.GetBoolean() != current.IsMultiValue)
+                return false;
+        }
+        return true;
+    }
+
     internal static string BuildIndexedContent(
         LFEntry entry,
         IReadOnlyList<LFFieldValue> fields,
@@ -609,6 +670,51 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
         await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
         await using var command = new NpgsqlCommand("SELECT 1;", connection);
         await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<DocumentIngestionResult?> TryGetCurrentIndexAsync(
+        string repositoryId, LFEntry entry, IReadOnlyList<LFFieldValue> fields,
+        CancellationToken cancellationToken)
+    {
+        const string sql = """
+            select parent.id, parent.metadata::text,
+              exists(select 1 from public.documents chunk
+                where chunk.metadata ->> 'source' = 'laserfiche-reports'
+                  and chunk.metadata ->> 'record_type' = 'document-chunk'
+                  and lower(chunk.metadata ->> 'repository_id') = lower(@repository)
+                  and chunk.metadata ->> 'entry_id' = @entryId
+                  and chunk.metadata ->> 'text_source' = 'laserfiche-metadata')
+            from public.documents parent
+            where parent.metadata ->> 'source' = 'laserfiche-reports'
+              and parent.metadata ->> 'record_type' = 'document-metadata'
+              and lower(parent.metadata ->> 'repository_id') = lower(@repository)
+              and parent.metadata ->> 'entry_id' = @entryId
+            order by parent.id desc limit 1;
+            """;
+        await using var connection = new NpgsqlConnection(_options.PostgresConnectionString);
+        await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = new NpgsqlCommand(sql, connection);
+        command.Parameters.AddWithValue("repository", repositoryId);
+        command.Parameters.AddWithValue("entryId", entry.Id.ToString(CultureInfo.InvariantCulture));
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false)) return null;
+        using var document = JsonDocument.Parse(reader.GetString(1));
+        var metadata = document.RootElement;
+        if (!CanReuseIndex(entry, fields, metadata, reader.GetBoolean(2), _localAiOptions.EmbeddingModel))
+            return null;
+        static int Count(JsonElement value, string key) =>
+            value.TryGetProperty(key, out var count) && count.ValueKind == JsonValueKind.Number &&
+            count.TryGetInt32(out var parsed) ? parsed : 0;
+        var status = metadata.TryGetProperty("ingestion_status", out var state) &&
+            state.ValueKind == JsonValueKind.String ? state.GetString() : null;
+        var result = new DocumentIngestionResult(reader.GetInt64(0), entry.Id, repositoryId,
+            entry.Name, fields.Count, false, status ?? "metadata-indexed",
+            Count(metadata, "chunk_count"), _localAiOptions.EmbeddingModel,
+            Count(metadata, "detected_page_count"), 0, Count(metadata, "ocr_text_page_count"),
+            0, 0, null, "Unchanged Laserfiche metadata and modification time; existing index reused.", true);
+        _logger.LogInformation("Skipped unchanged Laserfiche Entry {EntryId} in {RepositoryId}.",
+            entry.Id, repositoryId);
+        return result;
     }
 
     private async Task<DocumentIngestionResult> RefreshMetadataChunksAsync(
