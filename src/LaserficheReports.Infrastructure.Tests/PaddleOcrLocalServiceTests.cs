@@ -39,6 +39,18 @@ public sealed class PaddleOcrLocalServiceTests
     }
 
     [Fact]
+    public async Task TryExtractTextAsync_DefaultConfigurationDefersOcr()
+    {
+        var service = new PaddleOcrLocalService(
+            new StubHttpClientFactory(new HttpClient(new StubHandler(_ =>
+                throw new InvalidOperationException("OCR should not be called.")))),
+            Microsoft.Extensions.Options.Options.Create(new PaddleOcrOptions()),
+            NullLogger<PaddleOcrLocalService>.Instance);
+        await using var image = new MemoryStream([0x89, 0x50, 0x4E, 0x47]);
+        Assert.Null(await service.TryExtractTextAsync(image));
+    }
+
+    [Fact]
     public void ValidateResponseIdentity_RejectsOldGenerativeWorker()
     {
         var exception = Assert.Throws<LocalOcrException>(() =>
@@ -114,7 +126,7 @@ public sealed class PaddleOcrLocalServiceTests
         };
         return new PaddleOcrLocalService(
             new StubHttpClientFactory(client),
-            Microsoft.Extensions.Options.Options.Create(new PaddleOcrOptions()),
+            Microsoft.Extensions.Options.Options.Create(new PaddleOcrOptions { Enabled = true }),
             NullLogger<PaddleOcrLocalService>.Instance);
     }
 

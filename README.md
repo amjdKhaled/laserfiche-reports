@@ -6,7 +6,7 @@ Fully local, on-premise AI reporting and chat for Laserfiche.
 
 - Reuse the proven Laserfiche Repository API integration from `amjdKhaled/Asset-Manager-1zip`.
 - Keep Laserfiche as the source of truth.
-- Run the web application, n8n, Supabase/PostgreSQL with pgvector, OCR, and the LLM on the same machine.
+- Run the web application, LangGraph, Supabase/PostgreSQL with pgvector, and Ollama on the same machine.
 - Never send documents, metadata, prompts, embeddings, or credentials to a cloud service.
 
 ## Planned local flow
@@ -16,7 +16,7 @@ Fully local, on-premise AI reporting and chat for Laserfiche.
 3. Split extracted text into chunks.
 4. Create embeddings locally and store them in Supabase PostgreSQL/pgvector.
 5. Retrieve evidence for a user's question.
-6. Generate an Arabic/English answer through a local Ollama or LM Studio model.
+6. Generate an Arabic/English answer through local Ollama with LangChain and LangGraph.
 7. Show the answer and its Laserfiche document evidence in one chat interface.
 
 ## Repository layout
@@ -42,9 +42,98 @@ never committed.
 2. Local Supabase schema and one-document ingestion.
 3. Local Arabic OCR fallback through non-generative PP-OCRv5. (implemented)
 4. Chunking and local embeddings. (implemented)
-5. Vector retrieval and local LLM answering.
-6. Single-chat UI.
-7. n8n automation and incremental synchronization.
+5. Vector retrieval and local LLM answering. (implemented on the feature branch)
+6. Single-chat UI. (implemented on the feature branch)
+7. Local LangGraph orchestration and complete repository discovery. (implemented on the feature branch)
+
+## Run the chat interface (Windows)
+
+This branch adds a local chat and document interface at
+`http://127.0.0.1:5187/`. The existing `public.documents` table is reused.
+The web host accepts loopback requests only while it uses local Laserfiche
+credentials. LangGraph and Ollama also bind to loopback.
+OCR is disabled by default for repository-wide indexing. A private
+`appsettings.Local.json` or environment override can explicitly enable it later.
+Ingestion still embeds the document name, path,
+template, dates and populated Laserfiche metadata fields for RAG. Reindexing
+an existing document in this mode updates its metadata evidence without
+deleting its existing OCR page chunks.
+
+1. Run local Supabase and Ollama. Ensure `nomic-embed-text-v2-moe` and
+   `qwen2.5:7b` are installed in Ollama.
+2. Copy `src/LaserficheReports.Web/appsettings.Local.example.json` to
+   `src/LaserficheReports.Web/appsettings.Local.json` and enter your existing
+   Laserfiche and local PostgreSQL details. Do not commit the private file.
+3. Apply the database migrations if they have not already been applied:
+   `powershell -ExecutionPolicy Bypass -File .\scripts\apply-database.ps1`.
+4. Set up the small Python graph environment once:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\reports-graph\setup.ps1
+```
+
+5. In a dedicated PowerShell window start the answer graph:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\reports-graph\start.ps1 -Model qwen2.5:7b
+```
+
+6. In another PowerShell window start .NET:
+
+```powershell
+$env:LF_USERNAME = "YOUR_LASERFICHE_USERNAME"
+$env:LF_PASSWORD = "YOUR_LASERFICHE_PASSWORD"
+$env:ASPNETCORE_URLS = "http://127.0.0.1:5187"
+dotnet run --project .\src\LaserficheReports.Web
+```
+
+Open `http://127.0.0.1:5187/` and sign in with your Laserfiche account.
+For a short demo, leave OCR disabled and index Entry `618` from **Documents & system**.
+Ask “ما تصنيف الوثيقة 618؟” or “ما موعد تسليم الوثيقة 618؟”; expand a source
+to see the exact Laserfiche field text used in the answer. A page source links
+to its original image. Answers require the local LangGraph and Ollama services.
+To index every document accessible to the current Laserfiche account, use
+**فهرسة المستودع بالكامل** in the same tab. The browser walks the repository
+folder tree, indexes documents one at a time, checkpoints after every item,
+and shows failures for retry. Keep that browser tab open while it runs; if it
+closes, sign in again and resume. A new scan restarts discovery. Indexing a
+large repository can take hours, especially when OCR is enabled. Documents
+that cannot be read are excluded from the index; a failed folder is reported
+explicitly rather than silently counted as complete. The indexed document
+list supports search and paging beyond the first 100 rows.
+The **Documents & system** tab shows
+database, repository, graph, and optional OCR status. Its ingestion form
+indexes a chosen Entry ID. Verify the services from another PowerShell window:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\check-local.ps1
+```
+
+To process every accessible document from a command line LangGraph batch:
+
+```powershell
+$env:LF_USERNAME = "YOUR_LASERFICHE_USERNAME"
+$env:LF_PASSWORD = "YOUR_LASERFICHE_PASSWORD"
+powershell -ExecutionPolicy Bypass -File .\tools\reports-graph\sync.ps1 -All
+```
+
+The command recursively discovers the root and all child folders, rejects
+incomplete folder listings, de-duplicates document IDs, and reports ingestion
+failures. It needs the web application running and uses a separate authenticated
+local session. To process several known documents instead:
+
+```powershell
+$env:LF_USERNAME = "YOUR_LASERFICHE_USERNAME"
+$env:LF_PASSWORD = "YOUR_LASERFICHE_PASSWORD"
+powershell -ExecutionPolicy Bypass -File .\tools\reports-graph\sync.ps1 -EntryIds 618,609
+```
+
+The sync command can run from Windows Task Scheduler for a full rescan or
+selected IDs. Change-only synchronization, enterprise SSO, and production-wide
+deployment still need design and validation. Browser login uses session-specific Laserfiche credentials, and
+retrieved entries are checked against the live repository before display.
+The web service accepts loopback requests only. Chat history stays in each
+browser's local storage; no new history table is created.
 
 The detailed implementation sequence is documented in `docs/ROADMAP.md`.
 
@@ -76,7 +165,7 @@ Set the local repository and PostgreSQL connection in
     "PostgresConnectionString": "Host=localhost;Port=5432;Database=postgres;Username=postgres.YOUR_POOLER_TENANT_ID;Password=YOUR_LOCAL_PASSWORD;SSL Mode=Disable"
   },
   "Ocr": {
-    "Enabled": true,
+    "Enabled": false,
     "BaseUrl": "http://127.0.0.1:8765",
     "TimeoutSeconds": 1800,
     "MinimumTextLength": 3,
@@ -179,19 +268,18 @@ $env:LF_PASSWORD = "YOUR_LASERFICHE_PASSWORD"
 dotnet run --project .\src\LaserficheReports.Web
 ```
 
-In a second PowerShell window, use the address printed by `dotnet run`:
-
-```powershell
-Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:5187/api/ingestion/laserfiche/618" -TimeoutSec 1800
-```
+Open the browser interface, sign in to Laserfiche, and use the
+**Documents & system** tab to ingest Entry `618`. The API requires that
+browser's authenticated session.
 
 The ingestion request saves the document identity, metadata, and searchable
 page text. It prefers text already available in Laserfiche and runs local OCR
-only for missing pages. It then splits every page into overlapping chunks and
-uses the local Ollama `nomic-embed-text-v2-moe` model to create 768-dimensional
+only for missing pages. It splits metadata and page text into distinct chunks
+and uses the local Ollama `nomic-embed-text-v2-moe` model to create 768-dimensional
 embeddings. The document row keeps `embedding = NULL`; its `document-chunk`
-rows contain the vectors used by retrieval. Running the request again refreshes
-the same document row and replaces only that document's project-owned chunks.
+rows contain the vectors used by retrieval. Running with OCR enabled replaces
+this document's project-owned chunks. Running with OCR disabled and no native
+page text refreshes only metadata chunks, preserving existing page evidence.
 
 To verify that the application can retrieve document content as well as
 metadata, stream page 1 to a local file:

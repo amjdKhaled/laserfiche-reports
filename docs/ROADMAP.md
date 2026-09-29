@@ -26,29 +26,32 @@
 - Generate 768-dimensional embeddings locally with the existing `nomic-embed-text-v2-moe` model. (complete)
 - Store source-labelled chunk rows and embeddings in the existing `documents` table. (complete)
 
-## 5. Retrieval — current
+## 5. Retrieval — implemented for the local demo
 
 - Embed the user's question locally.
 - Retrieve the best chunks with repository and permission filters.
 - Return document name, Entry ID, path, page, and similarity as evidence.
 
-## 6. Local answer generation
+## 6. Local answer generation — implemented for the local demo
 
 - Send only the retrieved evidence to Ollama or LM Studio on localhost.
 - Require grounded answers and an explicit "not found" response when evidence
   is insufficient.
 
-## 7. Single-chat interface
+## 7. Single-chat interface — local prototype implemented
 
-- Login, Chat, History, and Admin only; no dashboard.
+- Chat, browser-local History, and document ingestion/status views; no dashboard.
+- Interactive repository-password login uses isolated ASP.NET sessions.
+- Enterprise SSO and multi-machine deployment remain to be validated.
 - Arabic and English support.
 - Answers show clickable Laserfiche evidence.
 
-## 8. n8n automation
+## 8. LangGraph orchestration — repository traversal and batch implemented
 
-- Use local n8n for scheduled and incremental ingestion.
-- n8n does not sit in the path of every chat question.
-- Retry failed ingestion jobs and refresh documents changed in Laserfiche.
+- Use local LangGraph to prepare evidence, call Ollama, and return an answer.
+- Run the local sync graph for selected Entry IDs or discover all accessible documents recursively.
+- The browser interface supports resumable full scans and shows failed folders/documents.
+- Change-only discovery remains to be implemented for large production repositories.
 
 ## 9. Security and portability
 
