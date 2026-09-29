@@ -91,7 +91,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
         try:
             length = int(self.headers.get("Content-Length", "0"))
-            if length < 1 or length > 100_000:
+            if length < 1 or length > 256_000:
                 return self.send_json(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, {"error": "request_too_large"})
             payload = validate_request(json.loads(self.rfile.read(length).decode("utf-8")))
         except (ValueError, UnicodeDecodeError, json.JSONDecodeError) as error:

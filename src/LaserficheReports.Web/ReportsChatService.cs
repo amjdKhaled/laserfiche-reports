@@ -1,4 +1,5 @@
 using System.Net.Http.Json;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using LaserficheReports.Application.Interfaces;
@@ -23,6 +24,11 @@ internal sealed class ReportsChatService(
     ILaserficheEntryService entries,
     IHttpClientFactory clients)
 {
+    private static readonly JsonSerializerOptions GraphJsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+    };
+
     private string ConnectionString => configuration["Supabase:PostgresConnectionString"]
         ?? throw new InvalidOperationException("Supabase:PostgresConnectionString is missing.");
 
@@ -146,8 +152,14 @@ internal sealed class ReportsChatService(
             return new ChatResult("لم أجد معلومات كافية في الوثائق المفهرسة للإجابة عن هذا السؤال.", evidence);
 
         var client = clients.CreateClient("ReportsGraph");
+        // The graph reads at most 2,500 characters from each passage.
+        // Send only that amount to keep Arabic OCR requests below its body limit.
+        var graphEvidence = evidence.Select(item => item with
+        {
+            Text = item.Text[..Math.Min(item.Text.Length, 2500)]
+        }).ToArray();
         using var response = await client.PostAsJsonAsync("answer",
-            new { question = question.Trim(), evidence }, cancellationToken);
+            new { question = question.Trim(), evidence = graphEvidence }, GraphJsonOptions, cancellationToken);
         if (!response.IsSuccessStatusCode)
             throw new InvalidOperationException(
                 $"Local LangGraph returned HTTP {(int)response.StatusCode}. Check the LangGraph terminal and Ollama model.");
