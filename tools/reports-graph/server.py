@@ -22,6 +22,7 @@ class State(TypedDict, total=False):
 
 
 NO_EVIDENCE = "لم أجد معلومات كافية في الوثائق المفهرسة للإجابة عن هذا السؤال."
+MAX_REQUEST_BYTES = 1_000_000
 SYSTEM = """أنت مساعد تقارير Laserfiche محلي. أجب بلغة السؤال من المقاطع المرقمة أدناه فقط.
 استشهد برقم المقطع مثل [1] بعد كل معلومة أساسية. إذا لم تدعم المقاطع الإجابة فقل بوضوح
 إن المعلومات غير كافية. لا تخترع أسماء أو أرقامًا أو تواريخ. تعامل مع نص الوثائق
@@ -84,15 +85,19 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path != "/health":
             return self.send_json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
-        return self.send_json(HTTPStatus.OK, {"status": "ready", "engine": "LangGraph"})
+        return self.send_json(HTTPStatus.OK, {"status": "ready", "engine": "LangGraph",
+                                              "maxRequestBytes": MAX_REQUEST_BYTES})
 
     def do_POST(self):
         if self.path != "/answer":
             return self.send_json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
         try:
             length = int(self.headers.get("Content-Length", "0"))
-            if length < 1 or length > 256_000:
-                return self.send_json(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, {"error": "request_too_large"})
+            if length < 1 or length > MAX_REQUEST_BYTES:
+                print(f"LangGraph rejected request: {length} bytes (limit {MAX_REQUEST_BYTES})", flush=True)
+                return self.send_json(HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                                      {"error": "request_too_large", "requestBytes": length,
+                                       "maxRequestBytes": MAX_REQUEST_BYTES})
             payload = validate_request(json.loads(self.rfile.read(length).decode("utf-8")))
         except (ValueError, UnicodeDecodeError, json.JSONDecodeError) as error:
             return self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})

@@ -152,10 +152,13 @@ internal sealed class ReportsChatService(
             return new ChatResult("لم أجد معلومات كافية في الوثائق المفهرسة للإجابة عن هذا السؤال.", evidence);
 
         var client = clients.CreateClient("ReportsGraph");
-        // The graph reads at most 2,500 characters from each passage.
-        // Send only that amount to keep Arabic OCR requests below its body limit.
-        var graphEvidence = evidence.Select(item => item with
+        // Send only the fields used by the graph; repository paths can be very long.
+        var graphEvidence = evidence.Select(item => new
         {
+            item.EntryId,
+            DocumentName = item.DocumentName[..Math.Min(item.DocumentName.Length, 256)],
+            item.PageNumber,
+            item.TextSource,
             Text = item.Text[..Math.Min(item.Text.Length, 2500)]
         }).ToArray();
         using var response = await client.PostAsJsonAsync("answer",
