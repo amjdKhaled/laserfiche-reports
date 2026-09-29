@@ -78,7 +78,7 @@ internal sealed class ReportsChatService(
 
         var repository = await repositories.GetActiveRepositoryAsync(cancellationToken);
         // An explicit document number narrows evidence before vector ranking.
-        var requestedEntry = Regex.Match(question, @"(?:وثيق[ةه]|مستند|entry|#)\s*#?\s*(\d+)",
+        var requestedEntry = Regex.Match(question, @"(?:وثيق[ةه]|مستند|entry|#)\s*(?:رقم\s*)?#?\s*(\d+)",
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
         var entryFilter = requestedEntry.Success ? requestedEntry.Groups[1].Value : null;
         var prefix = configuration["LocalAI:QueryEmbeddingPrefix"] ?? "search_query: ";
@@ -99,7 +99,8 @@ internal sealed class ReportsChatService(
                   and lower(metadata ->> 'repository_id') = lower(@repository)
                   and metadata ->> 'record_type' = 'document-chunk'
                   and (@entryId is null or metadata ->> 'entry_id' = @entryId)
-                  and (1 - (embedding OPERATOR(extensions.<=>) cast(@embedding as extensions.vector))) >= 0.25
+                  and (@entryId is not null or
+                       (1 - (embedding OPERATOR(extensions.<=>) cast(@embedding as extensions.vector))) >= 0.25)
                 order by case when @entryId is not null and metadata ->> 'text_source' = 'laserfiche-metadata'
                               then 0 else 1 end,
                          embedding OPERATOR(extensions.<=>) cast(@embedding as extensions.vector)
@@ -115,9 +116,11 @@ internal sealed class ReportsChatService(
             {
                 using var metadata = JsonDocument.Parse(reader.GetString(1));
                 var root = metadata.RootElement;
-                if (!root.TryGetProperty("entry_id", out var id) || !id.TryGetInt32(out var entryId))
+                if (!root.TryGetProperty("entry_id", out var id) ||
+                    id.ValueKind != JsonValueKind.Number || !id.TryGetInt32(out var entryId))
                     continue;
-                int? page = root.TryGetProperty("page_number", out var p) && p.TryGetInt32(out var pageValue)
+                int? page = root.TryGetProperty("page_number", out var p) &&
+                    p.ValueKind == JsonValueKind.Number && p.TryGetInt32(out var pageValue)
                     ? pageValue : null;
                 candidates.Add(new Evidence(entryId,
                     root.TryGetProperty("document_name", out var name) ? name.GetString() ?? "" : "",
@@ -145,7 +148,9 @@ internal sealed class ReportsChatService(
         var client = clients.CreateClient("ReportsGraph");
         using var response = await client.PostAsJsonAsync("answer",
             new { question = question.Trim(), evidence }, cancellationToken);
-        response.EnsureSuccessStatusCode();
+        if (!response.IsSuccessStatusCode)
+            throw new InvalidOperationException(
+                $"Local LangGraph returned HTTP {(int)response.StatusCode}. Check the LangGraph terminal and Ollama model.");
         var graphResponse = await response.Content.ReadFromJsonAsync<GraphAnswer>(cancellationToken);
         if (string.IsNullOrWhiteSpace(graphResponse?.Answer))
             throw new InvalidOperationException("The local LangGraph service returned an empty answer.");

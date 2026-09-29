@@ -20,8 +20,10 @@ async function api(url, options) {
   const body = await response.json().catch(() => ({}));
   if (response.status === 401 && url !== '/api/session/login') $('login-layer').classList.remove('hidden');
   if (!response.ok) {
-    const error = new Error(body.detail || body.message || body.error || `HTTP ${response.status}`);
+    const error = new Error(body.detail || body.message || body.error ||
+      `HTTP ${response.status} — راجع سجل التطبيق لمعرفة السبب`);
     error.status = response.status;
+    error.diagnosticId = body.diagnosticId;
     throw error;
   }
   return body;
@@ -284,6 +286,11 @@ $('scan-start').onclick = async () => {
             scan.notice = `الخدمة المطلوبة غير متاحة: ${error.message}. عالج الاتصال ثم استأنف.`;
             break;
           }
+          if (error.status === 500 || error.status === 502) {
+            pauseScan = true;
+            scan.notice = `توقفت الفهرسة عند الوثيقة ${id}: ${error.message}${error.diagnosticId ? ` (رمز التشخيص ${error.diagnosticId})` : ''}. راجع سجل التطبيق ثم استأنف.`;
+            break;
+          }
           scan.failed.push({ type: 'document', id, message: error.message });
         }
         scan.documents.shift();
@@ -308,6 +315,11 @@ $('scan-start').onclick = async () => {
           scan.foldersDone++;
         } catch (error) {
           if (error.status === 401) { pauseScan = true; break; }
+          if (error.status >= 500) {
+            pauseScan = true;
+            scan.notice = `تعذر فحص المجلد ${id}: ${error.message}. راجع سجل التطبيق ثم استأنف.`;
+            break;
+          }
           scan.failed.push({ type: 'folder', id, message: error.message });
         }
         scan.folders.shift();

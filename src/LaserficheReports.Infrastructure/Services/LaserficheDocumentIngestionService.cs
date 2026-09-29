@@ -102,15 +102,17 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
                     .ConfigureAwait(false);
             }
             catch (LaserficheReports.Domain.Exceptions.LaserficheException exception)
-                when (exception.StatusCode == (int)System.Net.HttpStatusCode.NotFound)
+                when (exception.StatusCode is 404 or 405)
             {
-                // V2 does not expose a GET page collection on every installation.
+                // Some on-prem V2 installations do not expose GET for the page
+                // collection (404 or 405), even though entry metadata and the
+                // per-page text or Export routes can still be available.
                 // Electronic documents can also report pageCount=0 while the Export
                 // endpoint can still render their first page as PNG.
                 _logger.LogInformation(
-                    "Laserfiche did not expose a page collection for Entry {EntryId}; " +
-                    "the ingestion fallback will probe page 1 through Export.",
-                    entryId);
+                    "Laserfiche page collection unavailable for Entry {EntryId} (HTTP {StatusCode}); " +
+                    "probing page content and continuing with document metadata.",
+                    entryId, exception.StatusCode);
             }
         }
 
