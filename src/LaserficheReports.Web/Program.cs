@@ -235,10 +235,44 @@ app.MapPost("/api/reports/chat", async (ChatQuestion request, ReportsChatService
     {
         return Results.BadRequest(new { error = exception.Message });
     }
+    catch (LaserficheException exception)
+    {
+        app.Logger.LogWarning(exception, "Laserfiche access check failed during chat.");
+        return Results.Json(new { error = "laserfiche_unavailable",
+            message = "تعذر التحقق من صلاحية قراءة الوثائق في Laserfiche. تحقق من الاتصال ثم أعد المحاولة." },
+            statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+    catch (PostgresException exception)
+    {
+        app.Logger.LogError(exception, "Document search failed in PostgreSQL.");
+        return Results.Json(new { error = "document_search_failed", message = exception.MessageText,
+            sqlState = exception.SqlState }, statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+    catch (NpgsqlException exception)
+    {
+        app.Logger.LogError(exception, "Document database unavailable during chat.");
+        return Results.Json(new { error = "supabase_database_unavailable",
+            message = "قاعدة البيانات غير متاحة. تحقق من اتصال Supabase/PostgreSQL." },
+            statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
     catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException)
     {
+        app.Logger.LogWarning(exception, "LangGraph unavailable during chat.");
         return Results.Json(new { error = "Local LangGraph or Ollama is unavailable.",
             detail = exception.Message }, statusCode: 503);
+    }
+    catch (InvalidOperationException exception)
+    {
+        app.Logger.LogWarning(exception, "Embedding or LangGraph failed during chat.");
+        return Results.Json(new { error = "local_ai_unavailable", message = exception.Message },
+            statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+    catch (Exception exception) when (exception is not OperationCanceledException)
+    {
+        var diagnosticId = Guid.NewGuid().ToString("N")[..8];
+        app.Logger.LogError(exception, "Chat failed. DiagnosticId={DiagnosticId}", diagnosticId);
+        return Results.Json(new { error = "chat_failed", message = "تعذرت معالجة السؤال. راجع سجل التطبيق.", diagnosticId },
+            statusCode: StatusCodes.Status500InternalServerError);
     }
 });
 
@@ -347,6 +381,33 @@ app.MapPost("/api/ingestion/laserfiche/{entryId:int}", async (
             databaseError = exception.Message,
             preservedExistingIndex = true
         }, statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+    catch (LaserficheException exception)
+    {
+        app.Logger.LogWarning(exception, "Laserfiche ingestion failed for Entry {EntryId}.", entryId);
+        var status = exception.StatusCode switch
+        {
+            401 or 429 or >= 500 => StatusCodes.Status503ServiceUnavailable,
+            403 => StatusCodes.Status403Forbidden,
+            404 => StatusCodes.Status404NotFound,
+            _ => StatusCodes.Status422UnprocessableEntity
+        };
+        return Results.Json(new { error = "laserfiche_entry_failed",
+            message = $"Laserfiche رفض الوثيقة {entryId} (HTTP {exception.StatusCode}). تحقق من صلاحياتها أو من حالتها في المستودع.",
+            upstreamStatus = exception.StatusCode, preservedExistingIndex = true }, statusCode: status);
+    }
+    catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException or InvalidOperationException)
+    {
+        app.Logger.LogWarning(exception, "Local dependency failed during ingestion of Entry {EntryId}.", entryId);
+        return Results.Json(new { error = "ingestion_dependency_unavailable", message = exception.Message,
+            preservedExistingIndex = true }, statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+    catch (Exception exception) when (exception is not OperationCanceledException)
+    {
+        var diagnosticId = Guid.NewGuid().ToString("N")[..8];
+        app.Logger.LogError(exception, "Ingestion failed for Entry {EntryId}. DiagnosticId={DiagnosticId}", entryId, diagnosticId);
+        return Results.Json(new { error = "ingestion_failed", message = "تعذرت فهرسة الوثيقة. راجع سجل التطبيق.",
+            diagnosticId, preservedExistingIndex = true }, statusCode: StatusCodes.Status500InternalServerError);
     }
 });
 
