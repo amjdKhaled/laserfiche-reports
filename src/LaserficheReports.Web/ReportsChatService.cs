@@ -116,9 +116,11 @@ internal sealed class ReportsChatService(
             {
                 using var metadata = JsonDocument.Parse(reader.GetString(1));
                 var root = metadata.RootElement;
-                if (!root.TryGetProperty("entry_id", out var id) || !id.TryGetInt32(out var entryId))
+                if (!root.TryGetProperty("entry_id", out var id) ||
+                    id.ValueKind != JsonValueKind.Number || !id.TryGetInt32(out var entryId))
                     continue;
-                int? page = root.TryGetProperty("page_number", out var p) && p.TryGetInt32(out var pageValue)
+                int? page = root.TryGetProperty("page_number", out var p) &&
+                    p.ValueKind == JsonValueKind.Number && p.TryGetInt32(out var pageValue)
                     ? pageValue : null;
                 candidates.Add(new Evidence(entryId,
                     root.TryGetProperty("document_name", out var name) ? name.GetString() ?? "" : "",

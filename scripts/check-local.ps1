@@ -15,7 +15,11 @@ foreach ($check in $checks) {
         if ($result.status -eq "unavailable" -or $result.isConnected -eq $false -or
             $result.authenticationSucceeded -eq $false) { $ready = $false }
         if ($ready) {
-            Write-Host "$($check.Name): ready" -ForegroundColor Green
+            if ($check.Name -eq "Web" -and $result.processId) {
+                Write-Host "Web: ready (PID $($result.processId), started $($result.startedAtUtc))" -ForegroundColor Green
+            } else {
+                Write-Host "$($check.Name): ready" -ForegroundColor Green
+            }
         } else {
             Write-Host "$($check.Name): unavailable" -ForegroundColor Yellow
             $failed = $true

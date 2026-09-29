@@ -70,6 +70,7 @@ builder.Services.AddHttpClient("ReportsGraph", client =>
 });
 
 var app = builder.Build();
+var startedAtUtc = DateTimeOffset.UtcNow;
 
 app.Logger.LogInformation(
     "Local configuration: File={LocalSettingsPath}; Exists={LocalSettingsExists}; " +
@@ -112,7 +113,9 @@ app.MapGet("/api/app/status", (IConfiguration config) => Results.Ok(new
 {
     application = "Laserfiche Reports",
     mode = "local-only",
-    ocrEnabled = config.GetValue("Ocr:Enabled", false)
+    ocrEnabled = config.GetValue("Ocr:Enabled", false),
+    processId = Environment.ProcessId,
+    startedAtUtc
 }));
 
 app.MapGet("/api/session/status", async (ISessionCredentialStore sessions,
@@ -385,6 +388,20 @@ app.MapPost("/api/ingestion/laserfiche/{entryId:int}", async (
     catch (LaserficheException exception)
     {
         app.Logger.LogWarning(exception, "Laserfiche ingestion failed for Entry {EntryId}.", entryId);
+        var operation = exception.Message.Contains("entry fields", StringComparison.OrdinalIgnoreCase)
+            ? "entry_fields"
+            : exception.Message.Contains("Document pages", StringComparison.OrdinalIgnoreCase)
+                ? "document_pages"
+                : exception.Message.Contains("Page text", StringComparison.OrdinalIgnoreCase)
+                    ? "page_text"
+                    : "entry";
+        var operationLabel = operation switch
+        {
+            "entry_fields" => "حقول الوثيقة",
+            "document_pages" => "قائمة صفحات الوثيقة",
+            "page_text" => "نص الصفحة",
+            _ => "الوثيقة"
+        };
         var status = exception.StatusCode switch
         {
             401 or 429 or >= 500 => StatusCodes.Status503ServiceUnavailable,
@@ -393,8 +410,8 @@ app.MapPost("/api/ingestion/laserfiche/{entryId:int}", async (
             _ => StatusCodes.Status422UnprocessableEntity
         };
         return Results.Json(new { error = "laserfiche_entry_failed",
-            message = $"Laserfiche رفض الوثيقة {entryId} (HTTP {exception.StatusCode}). تحقق من صلاحياتها أو من حالتها في المستودع.",
-            upstreamStatus = exception.StatusCode, preservedExistingIndex = true }, statusCode: status);
+            message = $"تعذرت قراءة {operationLabel} {entryId} من Laserfiche (HTTP {exception.StatusCode}).",
+            operation, upstreamStatus = exception.StatusCode, preservedExistingIndex = true }, statusCode: status);
     }
     catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException or InvalidOperationException)
     {
