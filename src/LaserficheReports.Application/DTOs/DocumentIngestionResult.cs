@@ -17,4 +17,5 @@ public sealed record DocumentIngestionResult(
     int OcrCorrectionAttemptCount,
     int OcrCorrectedPageCount,
     string? OcrCorrectionModel,
-    string? ContentDiagnostic);
+    string? ContentDiagnostic,
+    bool WasSkipped = false);

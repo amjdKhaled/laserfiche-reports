@@ -8,6 +8,33 @@ namespace LaserficheReports.Infrastructure.Tests;
 public sealed class LaserficheDocumentIngestionServiceTests
 {
     [Fact]
+    public void CanReuseIndex_RequiresAnUnchangedDocumentAndMetadataChunk()
+    {
+        var entry = new LFEntry
+        {
+            Id = 618, Name = "لائحة جازان", FullPath = @"\SCAN\لائحة جازان",
+            FolderPath = @"\SCAN", PageCount = 1,
+            LastModifiedTime = new DateTimeOffset(2026, 9, 20, 0, 0, 0, TimeSpan.Zero)
+        };
+        LFFieldValue[] fields = [new() { FieldDefinitionId = 42, FieldName = "التصنيف", Value = "لوائح" }];
+        using var document = JsonDocument.Parse(LaserficheDocumentIngestionService.BuildMetadata(
+            "testemployee", entry, fields, chunkCount: 1, embeddingModel: "nomic-embed-text-v2-moe"));
+        var metadata = document.RootElement;
+
+        Assert.True(LaserficheDocumentIngestionService.CanReuseIndex(
+            entry, fields, metadata, true, "nomic-embed-text-v2-moe"));
+        Assert.False(LaserficheDocumentIngestionService.CanReuseIndex(
+            entry, fields, metadata, false, "nomic-embed-text-v2-moe"));
+        Assert.False(LaserficheDocumentIngestionService.CanReuseIndex(
+            entry, [fields[0] with { Value = "عقود" }], metadata, true, "nomic-embed-text-v2-moe"));
+        Assert.False(LaserficheDocumentIngestionService.CanReuseIndex(
+            entry with { LastModifiedTime = entry.LastModifiedTime.Value.AddDays(1) },
+            fields, metadata, true, "nomic-embed-text-v2-moe"));
+        Assert.False(LaserficheDocumentIngestionService.CanReuseIndex(
+            entry, fields, metadata, true, "different-model"));
+    }
+
+    [Fact]
     public void BuildMetadata_PreservesLaserficheIdentityAndFields()
     {
         var entry = new LFEntry
