@@ -220,46 +220,68 @@ internal sealed class ReportsChatService(
         CancellationToken cancellationToken)
     {
         const string sql = """
-            select distinct on (metadata ->> 'entry_id')
-                   metadata ->> 'entry_id', metadata ->> 'document_name',
-                   metadata ->> 'folder_path', metadata ->> 'full_path'
+            select distinct metadata ->> 'entry_id'
             from public.documents
             where metadata ->> 'source' = 'laserfiche-reports'
               and metadata ->> 'record_type' = 'document-metadata'
               and lower(metadata ->> 'repository_id') = lower(@repository)
-              and (strpos(lower(coalesce(metadata ->> 'folder_path', '')), lower(@folder)) > 0
-                   or strpos(lower(coalesce(metadata ->> 'full_path', '')), lower(@folder)) > 0)
-            order by metadata ->> 'entry_id', id desc
             """;
-        var candidates = new List<(int Id, string Name, string Path)>();
+        var indexedIds = new List<int>();
         await using (var connection = new NpgsqlConnection(ConnectionString))
         {
             await connection.OpenAsync(cancellationToken);
             await using var command = new NpgsqlCommand(sql, connection);
             command.Parameters.AddWithValue("repository", repositoryId);
-            command.Parameters.AddWithValue("folder", folder);
             await using var reader = await command.ExecuteReaderAsync(cancellationToken);
             while (await reader.ReadAsync(cancellationToken))
             {
-                if (reader.IsDBNull(0) || !int.TryParse(reader.GetString(0), out var entryId)) continue;
-                var name = reader.IsDBNull(1) ? "" : reader.GetString(1);
-                var path = reader.IsDBNull(2) ? "" : reader.GetString(2);
-                var fullPath = reader.IsDBNull(3) ? "" : reader.GetString(3);
-                if (string.IsNullOrWhiteSpace(path))
-                {
-                    var lastSeparator = fullPath.LastIndexOfAny(['/', '\\']);
-                    path = lastSeparator < 0 ? "" : fullPath[..lastSeparator];
-                }
-                if (path.Split(['/', '\\'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                    .Any(part => part.Equals(folder, StringComparison.OrdinalIgnoreCase)))
-                    candidates.Add((entryId, name, path));
+                if (!reader.IsDBNull(0) && int.TryParse(reader.GetString(0), out var entryId))
+                    indexedIds.Add(entryId);
             }
         }
 
-        var visible = new List<(int Id, string Name, string Path)>();
-        foreach (var candidate in candidates.OrderBy(candidate => candidate.Id))
+        var visible = new List<LFEntry>();
+        var parentNames = new Dictionary<int, string>();
+        foreach (var entryId in indexedIds.Order())
         {
-            if (await CanReadAsync(candidate.Id, cancellationToken)) visible.Add(candidate);
+            LFEntry document;
+            try
+            {
+                document = await entries.GetEntryAsync(entryId, cancellationToken);
+            }
+            catch (LaserficheException exception) when (exception.StatusCode is 403 or 404)
+            {
+                continue;
+            }
+            if (document.EntryType != LFEntryType.Document) continue;
+
+            var parentName = document.FolderPath.Split(['/', '\\'],
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).LastOrDefault();
+            if (string.IsNullOrWhiteSpace(parentName) && document.ParentId > 0)
+            {
+                if (!parentNames.TryGetValue(document.ParentId, out parentName))
+                {
+                    try
+                    {
+                        var parent = await entries.GetEntryAsync(document.ParentId, cancellationToken);
+                        parentName = parent.EntryType == LFEntryType.Folder ? parent.Name : "";
+                    }
+                    catch (LaserficheException exception) when (exception.StatusCode is 403 or 404)
+                    {
+                        parentName = "";
+                    }
+                    parentNames[document.ParentId] = parentName;
+                }
+            }
+            if (string.IsNullOrWhiteSpace(parentName))
+            {
+                var lastSeparator = document.FullPath.LastIndexOfAny(['/', '\\']);
+                if (lastSeparator > 0)
+                    parentName = document.FullPath[..lastSeparator].Split(['/', '\\'],
+                        StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).LastOrDefault();
+            }
+            if (string.Equals(parentName, folder, StringComparison.OrdinalIgnoreCase))
+                visible.Add(document);
         }
         if (visible.Count == 0)
             return new ChatResult($"لا توجد وثائق مفهرسة متاحة لك داخل مجلد {folder}.", []);
