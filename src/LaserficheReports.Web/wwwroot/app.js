@@ -101,7 +101,7 @@ function renderMessages() {
           const isMetadata = source.textSource === 'laserfiche-metadata';
           const card = el('details', 'source');
           card.append(el('summary', '',
-            `[${index + 1}] ${source.documentName || 'وثيقة'} · ${isMetadata ? 'بيانات Laserfiche' : `صفحة ${source.pageNumber || '—'}`}`));
+            `[${index + 1}] ${source.documentName || 'وثيقة'} · ID ${source.entryId} · ${isMetadata ? 'بيانات Laserfiche' : `صفحة ${source.pageNumber || '—'}`}`));
           card.append(el('small', 'source-path', source.path || `Entry ${source.entryId}`));
           card.append(el('p', 'source-text', source.text || ''));
           if (source.pageNumber) {

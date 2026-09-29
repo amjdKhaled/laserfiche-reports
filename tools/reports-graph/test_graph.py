@@ -30,6 +30,7 @@ class GraphTests(unittest.TestCase):
         result = build_graph(model).invoke(request)
         self.assertIn("[1]", result["answer"])
         self.assertIn("قرار مجلس الإدارة", model.calls[0][1].content)
+        self.assertIn("الوثيقة: لائحة؛ ID 618", model.calls[0][1].content)
 
     def test_laserfiche_field_source_is_identified_separately(self):
         model = FakeModel()
