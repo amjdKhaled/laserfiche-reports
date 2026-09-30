@@ -19,7 +19,9 @@
 
   <ItemGroup>
     <Compile Include="../LaserficheReports.Web/RepositorySummaryReport.cs" Link="RepositorySummaryReport.cs" />
+    <Compile Include="../LaserficheReports.Web/RepositoryFieldQuery.cs" Link="RepositoryFieldQuery.cs" />
+    <Compile Include="../LaserficheReports.Web/ReportsChatService.cs" Link="ReportsChatService.cs" />
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
 
 </Project>
-

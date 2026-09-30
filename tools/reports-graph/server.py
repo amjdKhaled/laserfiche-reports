@@ -13,6 +13,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_ollama import ChatOllama
 from langgraph.graph import END, START, StateGraph
 from request_body import RequestBodyError, read_request_body
+from verified_extract import extract
 
 
 class State(TypedDict, total=False):
@@ -25,6 +26,7 @@ class State(TypedDict, total=False):
     groups: list[dict]
     context: str
     answer: str
+    matches: list[dict]
 
 
 NO_EVIDENCE = "لم أجد معلومات كافية في الوثائق المفهرسة للإجابة عن هذا السؤال."
@@ -76,6 +78,8 @@ def format_context(state: State) -> dict:
 
 def build_graph(model):
     def answer(state: State) -> dict:
+        if state.get("mode") == "verified_extract":
+            return {"answer": "", "matches": extract(model, state["question"], state["evidence"], SystemMessage, HumanMessage)}
         if not state["context"]:
             return {"answer": NO_EVIDENCE}
         result = model.invoke([
@@ -135,6 +139,10 @@ def validate_request(payload):
             raise ValueError("Each passage requires a numeric entryId.")
         if not isinstance(item.get("text"), str) or len(item["text"]) > 8000:
             raise ValueError("Each passage requires text of at most 8000 characters.")
+    if payload.get("mode") == "verified_extract":
+        if not 1 <= len(evidence) <= 2 or any(len(item["text"]) > 2500 for item in evidence):
+            raise ValueError("Verified extraction accepts one or two bounded passages.")
+        return {"mode": "verified_extract", "question": question.strip(), "evidence": evidence}
     return {"question": question.strip(), "evidence": evidence}
 
 
@@ -163,7 +171,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
         try:
             result = self.graph.invoke(payload)
-            return self.send_json(HTTPStatus.OK, {"answer": result["answer"]})
+            return self.send_json(HTTPStatus.OK, {"matches": result["matches"]}
+                                  if payload.get("mode") == "verified_extract" else {"answer": result["answer"]})
         except Exception as error:
             print(f"LangGraph failed: {type(error).__name__}: {error}", flush=True)
             return self.send_json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "local_model_unavailable"})
@@ -192,7 +201,7 @@ def main():
     parsed = urlsplit(args.ollama_url)
     if parsed.scheme != "http" or parsed.hostname not in ("127.0.0.1", "localhost", "::1"):
         parser.error("Ollama URL must use local HTTP.")
-    model = ChatOllama(model=args.model, base_url=args.ollama_url, temperature=0)
+    model = ChatOllama(model=args.model, base_url=args.ollama_url, temperature=0, num_ctx=8192)
     Handler.graph = build_graph(model)
     print(f"LangGraph ready on http://127.0.0.1:{args.port}; model={args.model}", flush=True)
     ThreadingHTTPServer(("127.0.0.1", args.port), Handler).serve_forever()
@@ -200,3 +209,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

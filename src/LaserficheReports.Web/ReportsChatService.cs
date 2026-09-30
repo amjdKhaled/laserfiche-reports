@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Microsoft.Extensions.Configuration;
 using LaserficheReports.Application.Interfaces;
 using LaserficheReports.Domain.Entities;
 using LaserficheReports.Domain.Exceptions;
@@ -24,7 +25,6 @@ internal sealed record IndexSummaryGroup(string Category, int Count, IReadOnlyLi
 /// <summary>Retrieves project-owned rows and verifies each document against the live repository.</summary>
 internal sealed class ReportsChatService(
     IConfiguration configuration,
-    ITextEmbeddingService embeddings,
     IRepositoryContext repositories,
     ILaserficheEntryService entries,
     IHttpClientFactory clients)
@@ -86,113 +86,234 @@ internal sealed class ReportsChatService(
     {
         if (string.IsNullOrWhiteSpace(question) || question.Length > 2000)
             throw new ArgumentException("Question must contain 1 to 2000 characters.", nameof(question));
-
         var repository = await repositories.GetActiveRepositoryAsync(cancellationToken);
-        // An explicit document number narrows evidence before vector ranking.
-        var requestedEntry = Regex.Match(question, @"(?:وثيق[ةه]|مستند|entry|#)\s*(?:رقم\s*)?#?\s*(\d+)",
+        var requestedEntry = Regex.Match(question,
+            @"(?:وثيق[ةه]|مستند|ملف|entry|ID|#)\s*(?:(?:رقم|ID)\s*)?#?\s*(\d+)",
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-        var entryFilter = requestedEntry.Success ? requestedEntry.Groups[1].Value : null;
-        if (entryFilter is null && TryGetListedFolder(question, out var folder))
-            return await ListFolderDocumentsAsync(repository.RepositoryId, folder, cancellationToken);
-        if (entryFilter is null && IsWholeIndexQuestion(question))
+        int? entryId = requestedEntry.Success ? int.Parse(requestedEntry.Groups[1].Value) : null;
+        var folder = TryGetListedFolder(question, out var listedFolder) ? listedFolder : null;
+        var requestedName = Regex.Match(question,
+            "(?:وثيقة|مستند|ملف)\\s+[\"«](?<name>[^\"»]+)[\"»]");
+        var name = requestedName.Success ? requestedName.Groups["name"].Value : null;
+
+        if (RepositoryFieldQuery.TryParse(question, out var fieldQuery))
+            return await AnswerFieldQueryAsync(question, fieldQuery!, entryId, folder, name, cancellationToken);
+        if (!Regex.IsMatch(question, @"لخص|ملخص|المتعلقة|تحتوي|تخص|عن") &&
+            Regex.IsMatch(question, @"قائمة|أسماء|اسماء|(?:الوثائق|الملفات|المستندات)\s+(?:الموجود[ةه]|في|داخل)"))
+        {
+            var scope = await ReadScopeAsync(entryId, folder, name, cancellationToken);
+            var list = new StringBuilder($"النطاق: {ScopeLabel(entryId, folder, name)}. عدد الوثائق المتاحة: {scope.Documents.Count}.\n\n");
+            if (scope.DiscoveredCount != scope.Documents.Count)
+                list.AppendLine("القائمة غير مكتملة بسبب تغير الوصول أو الحذف أثناء الحصر.");
+            foreach (var document in scope.Documents)
+                list.AppendLine($"• {document.Entry.Name} — ID {document.Entry.Id}");
+            return new ChatResult(list.ToString().TrimEnd(), []);
+        }
+        if (entryId is null && folder is null && name is null && IsWholeIndexQuestion(question))
             return await AnswerIndexOverviewAsync(repository.RepositoryId, question, cancellationToken);
-        var prefix = configuration["LocalAI:QueryEmbeddingPrefix"] ?? "search_query: ";
-        var vector = (await embeddings.CreateEmbeddingsAsync(
-            [prefix + question.Trim()], cancellationToken))[0];
-        var literal = "[" + string.Join(",", vector.Select(v =>
-            v.ToString("R", System.Globalization.CultureInfo.InvariantCulture))) + "]";
-        var candidates = new List<Evidence>();
+        // Every other question scans the entire live scope; there is no global Top-K cap.
+        return await AnswerRepositoryQuestionAsync(repository.RepositoryId, question, entryId,
+            folder, name, cancellationToken);
+    }
+
+    private sealed record ScopedDocument(LFEntry Entry, IReadOnlyList<LFFieldValue> Fields);
+    private sealed record ScopeDocuments(IReadOnlyList<ScopedDocument> Documents, int DiscoveredCount);
+
+    private async Task<ScopeDocuments> ReadScopeAsync(int? entryId, string? folder, string? name,
+        CancellationToken cancellationToken)
+    {
+        var candidates = new Dictionary<int, LFEntry>();
+        var folders = new Dictionary<int, LFEntry>();
+        if (entryId.HasValue)
+        {
+            var entry = await entries.GetEntryAsync(entryId.Value, cancellationToken);
+            if (entry.EntryType == LFEntryType.Document) candidates[entry.Id] = entry;
+        }
+        else
+        {
+            var pending = new Queue<int>();
+            var visited = new HashSet<int>();
+            pending.Enqueue(await entries.GetRootEntryIdAsync(cancellationToken));
+            while (pending.TryDequeue(out var id))
+            {
+                if (!visited.Add(id)) continue;
+                foreach (var child in await entries.GetAllFolderChildrenAsync(id, cancellationToken))
+                {
+                    if (child.EntryType == LFEntryType.Folder)
+                    {
+                        folders[child.Id] = child;
+                        pending.Enqueue(child.Id);
+                    }
+                    else if (child.EntryType == LFEntryType.Document) candidates[child.Id] = child;
+                }
+            }
+        }
+        bool InFolder(LFEntry document)
+        {
+            if (folder is null) return true;
+            var parentId = document.ParentId;
+            var visited = new HashSet<int>();
+            while (folders.TryGetValue(parentId, out var parent) && visited.Add(parentId))
+            {
+                if (parent.Name.Equals(folder, StringComparison.OrdinalIgnoreCase)) return true;
+                parentId = parent.ParentId;
+            }
+            return document.FolderPath.Split(['/', '\\'],
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Any(part => part.Equals(folder, StringComparison.OrdinalIgnoreCase));
+        }
+        var scoped = candidates.Values.Where(document => InFolder(document) &&
+                (name is null || document.Name.Equals(name, StringComparison.OrdinalIgnoreCase)))
+            .OrderBy(document => document.Id).ToArray();
+        var visible = new List<ScopedDocument>();
+        foreach (var candidate in scoped)
+        {
+            try
+            {
+                var current = await entries.GetEntryAsync(candidate.Id, cancellationToken);
+                if (current.EntryType != LFEntryType.Document || !InFolder(current) ||
+                    (name is not null && !current.Name.Equals(name, StringComparison.OrdinalIgnoreCase))) continue;
+                var fields = await entries.GetEntryFieldsAsync(current.Id, cancellationToken);
+                visible.Add(new ScopedDocument(current, fields));
+            }
+            catch (LaserficheException exception) when (exception.StatusCode is 403 or 404)
+            {
+                // Never silently label a partial scan as complete.
+            }
+        }
+        return new ScopeDocuments(visible, scoped.Length);
+    }
+
+    private static string ScopeLabel(int? entryId, string? folder, string? name) =>
+        entryId.HasValue ? $"الوثيقة ID {entryId}" : folder is not null ? $"مجلد {folder}" :
+        name is not null ? $"الوثيقة {name}" : "كل المستودع المتاح لحسابك";
+
+    private async Task<ChatResult> AnswerFieldQueryAsync(string question, RepositoryFieldQuery query,
+        int? entryId, string? folder, string? name, CancellationToken cancellationToken)
+    {
+        var scope = await ReadScopeAsync(entryId, folder, name, cancellationToken);
+        var allFields = scope.Documents.SelectMany(document => document.Fields)
+            .Where(field => query.MatchesName(field.FieldName)).ToArray();
+        if (allFields.Length == 0)
+            return new ChatResult($"لم أجد الحقل المطلوب في {ScopeLabel(entryId, folder, name)}. لا يمكن تأكيد قائمة المطابقات.", []);
+        var longestName = allFields.Max(field => RepositoryFieldQuery.Normalize(field.FieldName).Length);
+        var targetFields = allFields.Where(field =>
+            RepositoryFieldQuery.Normalize(field.FieldName).Length == longestName).ToArray();
+        var targetName = targetFields[0].FieldName;
+        var targetKey = RepositoryFieldQuery.Normalize(targetName);
+        var matches = scope.Documents.Where(document => document.Fields.Any(field =>
+            RepositoryFieldQuery.Normalize(field.FieldName) == targetKey && query.MatchesValue(field.Value)))
+            .ToArray();
+        var answer = new StringBuilder($"النطاق: {ScopeLabel(entryId, folder, name)}. فحصت {scope.Documents.Count} وثيقة من بيانات Laserfiche الحالية.\n");
+        if (scope.Documents.Count != scope.DiscoveredCount)
+            answer.AppendLine($"القائمة غير مكتملة: تعذر فحص {scope.DiscoveredCount - scope.Documents.Count} وثيقة ظهرت أثناء الحصر.");
+        answer.AppendLine($"عدد المطابقات للحقل «{targetName}» = «{query.Value}»: {matches.Length}.\n");
+        foreach (var document in matches)
+        {
+            answer.AppendLine($"• {document.Entry.Name} — ID {document.Entry.Id}");
+            var values = document.Fields.Where(field =>
+                    RepositoryFieldQuery.Normalize(field.FieldName) == targetKey)
+                .Select(field => field.Value).Where(value => !string.IsNullOrWhiteSpace(value)).Distinct().ToArray();
+            answer.AppendLine($"  {targetName}: {string.Join(" / ", values)}");
+            if (values.Select(value => RepositoryFieldQuery.Normalize(value!)).Distinct().Count() > 1)
+                answer.AppendLine("  يوجد تعارض في قيم هذا الحقل؛ يلزم مراجعته.");
+        }
+        return new ChatResult(answer.ToString().TrimEnd(), []);
+    }
+
+    private sealed record VerifiedMatch(int SourceIndex, bool Relevant, string[] Quotes);
+    private sealed record VerifiedMatches(VerifiedMatch[] Matches);
+
+    private async Task<ChatResult> AnswerRepositoryQuestionAsync(string repositoryId, string question,
+        int? entryId, string? folder, string? name, CancellationToken cancellationToken)
+    {
+        var scope = await ReadScopeAsync(entryId, folder, name, cancellationToken);
+        if (scope.Documents.Count == 0)
+            return new ChatResult("لم أجد وثائق متاحة ضمن النطاق المحدد.", []);
+        var live = scope.Documents.ToDictionary(document => document.Entry.Id);
+        var evidence = new List<Evidence>();
+        void AddPassages(LFEntry entry, string text, int? page, string source)
+        {
+            // Split rather than truncate: every indexed passage is examined.
+            for (var offset = 0; offset < text.Length; offset += 2500)
+                evidence.Add(new Evidence(entry.Id, entry.Name, entry.FullPath, page, 1,
+                    text.Substring(offset, Math.Min(2500, text.Length - offset)), source));
+        }
+        foreach (var document in scope.Documents)
+        {
+            var metadata = string.Join("\n", document.Fields.Where(field => !string.IsNullOrWhiteSpace(field.Value))
+                .Select(field => $"{field.FieldName}: {field.Value}"));
+            AddPassages(document.Entry, "اسم الوثيقة: " + document.Entry.Name + "\n" + metadata,
+                null, "laserfiche-metadata");
+        }
         await using (var connection = new NpgsqlConnection(ConnectionString))
         {
             await connection.OpenAsync(cancellationToken);
             const string sql = """
-                select content, metadata,
-                       (1 - (embedding OPERATOR(extensions.<=>) cast(@embedding as extensions.vector)))::real as similarity
+                select content, metadata ->> 'entry_id', metadata ->> 'page_number',
+                       metadata ->> 'text_source'
                 from public.documents
-                where embedding is not null
-                  and metadata ->> 'source' = 'laserfiche-reports'
-                  and lower(metadata ->> 'repository_id') = lower(@repository)
+                where metadata ->> 'source' = 'laserfiche-reports'
                   and metadata ->> 'record_type' = 'document-chunk'
-                  and (@entryId is null or metadata ->> 'entry_id' = @entryId)
-                  and (@entryId is not null or
-                       (1 - (embedding OPERATOR(extensions.<=>) cast(@embedding as extensions.vector))) >= 0.25)
-                order by case when @entryId is not null and metadata ->> 'text_source' = 'laserfiche-metadata'
-                              then 0 else 1 end,
-                         embedding OPERATOR(extensions.<=>) cast(@embedding as extensions.vector)
-                limit 64
+                  and lower(metadata ->> 'repository_id') = lower(@repository)
+                  and coalesce(metadata ->> 'text_source', '') <> 'laserfiche-metadata'
+                order by metadata ->> 'entry_id', id
                 """;
             await using var command = new NpgsqlCommand(sql, connection);
-            command.Parameters.AddWithValue("embedding", literal);
-            command.Parameters.AddWithValue("repository", repository.RepositoryId);
-            command.Parameters.Add(new NpgsqlParameter("entryId", NpgsqlTypes.NpgsqlDbType.Text)
-                { Value = (object?)entryFilter ?? DBNull.Value });
+            command.Parameters.AddWithValue("repository", repositoryId);
             await using var reader = await command.ExecuteReaderAsync(cancellationToken);
             while (await reader.ReadAsync(cancellationToken))
             {
-                using var metadata = JsonDocument.Parse(reader.GetString(1));
-                var root = metadata.RootElement;
-                if (!root.TryGetProperty("entry_id", out var id) ||
-                    id.ValueKind != JsonValueKind.Number || !id.TryGetInt32(out var entryId))
-                    continue;
-                int? page = root.TryGetProperty("page_number", out var p) &&
-                    p.ValueKind == JsonValueKind.Number && p.TryGetInt32(out var pageValue)
-                    ? pageValue : null;
-                candidates.Add(new Evidence(entryId,
-                    root.TryGetProperty("document_name", out var name) ? name.GetString() ?? "" : "",
-                    root.TryGetProperty("full_path", out var path) ? path.GetString() ?? "" : "",
-                    page, reader.GetFloat(2), reader.GetString(0),
-                    root.TryGetProperty("text_source", out var source) ? source.GetString() ?? "" : ""));
+                if (reader.IsDBNull(1) || !int.TryParse(reader.GetString(1), out var id) ||
+                    !live.TryGetValue(id, out var document) || reader.IsDBNull(0)) continue;
+                int? page = !reader.IsDBNull(2) && int.TryParse(reader.GetString(2), out var number) ? number : null;
+                AddPassages(document.Entry, reader.GetString(0), page,
+                    reader.IsDBNull(3) ? "indexed-text" : reader.GetString(3));
             }
         }
-
-        var authorized = new HashSet<int>();
-        var denied = new HashSet<int>();
-        var evidence = new List<Evidence>();
-        var perDocument = new Dictionary<int, int>();
-        var maxPerDocument = entryFilter is null ? 1 : 8;
-        foreach (var candidate in candidates)
-        {
-            if (!authorized.Contains(candidate.EntryId) && !denied.Contains(candidate.EntryId))
-            {
-                if (await CanReadAsync(candidate.EntryId, cancellationToken)) authorized.Add(candidate.EntryId);
-                else denied.Add(candidate.EntryId);
-            }
-            if (authorized.Contains(candidate.EntryId) && evidence.Count < 8 &&
-                perDocument.GetValueOrDefault(candidate.EntryId) < maxPerDocument)
-            {
-                evidence.Add(candidate);
-                perDocument[candidate.EntryId] = perDocument.GetValueOrDefault(candidate.EntryId) + 1;
-            }
-        }
-        if (evidence.Count == 0)
-            return new ChatResult("لم أجد معلومات كافية في الوثائق المفهرسة للإجابة عن هذا السؤال.", evidence);
-
+        var findings = new Dictionary<int, List<string>>();
+        var sources = new List<Evidence>();
         var client = clients.CreateClient("ReportsGraph");
-        // Send only the fields used by the graph; repository paths can be very long.
-        var graphEvidence = evidence.Select(item => new
+        foreach (var batch in evidence.Chunk(2))
         {
-            item.EntryId,
-            DocumentName = item.DocumentName[..Math.Min(item.DocumentName.Length, 256)],
-            item.PageNumber,
-            item.TextSource,
-            Text = item.Text[..Math.Min(item.Text.Length, 2500)]
-        }).ToArray();
-        // StringContent computes Content-Length; Python's local HTTP server needs
-        // request framing to read the JSON body.
-        var graphRequest = JsonSerializer.Serialize(
-            new { question = question.Trim(), evidence = graphEvidence }, GraphJsonOptions);
-        using var content = new StringContent(graphRequest, Encoding.UTF8, "application/json");
-        using var response = await client.PostAsync("answer", content, cancellationToken);
-        if (!response.IsSuccessStatusCode)
-            throw new InvalidOperationException(
-                $"Local LangGraph returned HTTP {(int)response.StatusCode}. Check the LangGraph terminal and Ollama model.");
-        var graphResponse = await response.Content.ReadFromJsonAsync<GraphAnswer>(cancellationToken);
-        if (string.IsNullOrWhiteSpace(graphResponse?.Answer))
-            throw new InvalidOperationException("The local LangGraph service returned an empty answer.");
-        var coverage = entryFilter is null
-            ? $"نطاق الإجابة: {evidence.Select(item => item.EntryId).Distinct().Count()} وثائق مسترجعة من الفهرس؛ هذه نتائج بحث ولا تمثل حصرًا لكل المستودع.\n\n"
-            : "";
-        return new ChatResult(coverage + graphResponse.Answer, evidence);
+            var request = JsonSerializer.Serialize(new
+            {
+                mode = "verified_extract", question, evidence = batch.Select(item => new
+                { item.EntryId, item.DocumentName, item.PageNumber, item.TextSource, item.Text })
+            }, GraphJsonOptions);
+            using var content = new StringContent(request, Encoding.UTF8, "application/json");
+            using var response = await client.PostAsync("answer", content, cancellationToken);
+            response.EnsureSuccessStatusCode();
+            var result = await response.Content.ReadFromJsonAsync<VerifiedMatches>(cancellationToken);
+            if (result?.Matches is null || result.Matches.Length != batch.Length ||
+                !result.Matches.Select(match => match.SourceIndex).Order().SequenceEqual(Enumerable.Range(0, batch.Length)))
+                throw new InvalidOperationException("لم يؤكد النموذج فحص جميع المقاطع؛ لم تُعرض نتيجة جزئية.");
+            foreach (var match in result.Matches.Where(match => match.Relevant))
+            {
+                var source = batch[match.SourceIndex];
+                if (match.Quotes is null || match.Quotes.Length == 0 || match.Quotes.Any(quote =>
+                    string.IsNullOrWhiteSpace(quote) || !source.Text.Contains(quote, StringComparison.Ordinal)))
+                    throw new InvalidOperationException("أنتج النموذج معلومة غير مثبتة في المصدر؛ لم تُعرض النتيجة.");
+                if (!findings.TryGetValue(source.EntryId, out var quotes))
+                    findings[source.EntryId] = quotes = [];
+                quotes.AddRange(match.Quotes);
+                sources.Add(source);
+            }
+        }
+        var pages = evidence.Where(item => item.TextSource != "laserfiche-metadata")
+            .Select(item => item.EntryId).Distinct().Count();
+        var answer = new StringBuilder($"النطاق: {ScopeLabel(entryId, folder, name)}. فحصت بيانات {scope.Documents.Count} وثيقة وجميع مقاطع نص الصفحات المفهرسة المتاحة لـ {pages} منها.\n");
+        answer.AppendLine($"لا يتوفر نص صفحات مفهرس لـ {scope.Documents.Count - pages} وثيقة؛ لا يمكن تأكيد نتائج عن محتواها.\n");
+        if (scope.Documents.Count != scope.DiscoveredCount)
+            answer.AppendLine("التغطية غير مكتملة بسبب تعذر قراءة بعض الوثائق أثناء الحصر.");
+        if (findings.Count == 0) answer.AppendLine("لم أجد في البيانات والنصوص المتاحة معلومات تدعم الإجابة.");
+        foreach (var (id, quotes) in findings.OrderBy(pair => pair.Key))
+        {
+            answer.AppendLine($"• {live[id].Entry.Name} — ID {id}");
+            foreach (var quote in quotes.Distinct()) answer.AppendLine($"  {quote}");
+            answer.AppendLine();
+        }
+        return new ChatResult(answer.ToString().TrimEnd(), sources);
     }
 
     private static bool IsWholeIndexQuestion(string question) =>
