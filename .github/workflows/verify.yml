@@ -1,7 +1,7 @@
 name: Verify Reports
 on:
   push:
-    branches: [feature/reports-chat-langgraph]
+    branches: [feature/reports-chat-langgraph, fix/ocr-worker-memory-crash]
   pull_request:
 jobs:
   dotnet:

@@ -17,4 +17,9 @@
     <ProjectReference Include="..\LaserficheReports.Infrastructure\LaserficheReports.Infrastructure.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Compile Include="../LaserficheReports.Web/RepositorySummaryReport.cs" Link="RepositorySummaryReport.cs" />
+  </ItemGroup>
+
 </Project>
+

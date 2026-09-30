@@ -189,15 +189,14 @@ internal sealed class ReportsChatService(
         var graphResponse = await response.Content.ReadFromJsonAsync<GraphAnswer>(cancellationToken);
         if (string.IsNullOrWhiteSpace(graphResponse?.Answer))
             throw new InvalidOperationException("The local LangGraph service returned an empty answer.");
-        return new ChatResult(graphResponse.Answer, evidence);
+        var coverage = entryFilter is null
+            ? $"نطاق الإجابة: {evidence.Select(item => item.EntryId).Distinct().Count()} وثائق مسترجعة من الفهرس؛ هذه نتائج بحث ولا تمثل حصرًا لكل المستودع.\n\n"
+            : "";
+        return new ChatResult(coverage + graphResponse.Answer, evidence);
     }
 
     private static bool IsWholeIndexQuestion(string question) =>
-        Regex.IsMatch(question,
-            @"(?:الوثائق|المستندات)\s+(?:المفهرس[ةه]|الموجودة\s+في\s+الفهرس)|(?:وثيق[ةه]|مستند)\s+مفهرس[ةه]",
-            RegexOptions.CultureInvariant) &&
-        Regex.IsMatch(question, @"لخص|ملخص|أهم|اهم|جميع|كل|اذكر|اعرض|عدد|كم|ما\s*هي|ماهي",
-            RegexOptions.CultureInvariant);
+        ReportsQuestionScope.IsWholeRepository(question);
 
     private static bool TryGetListedFolder(string question, out string folder)
     {
@@ -295,107 +294,70 @@ internal sealed class ReportsChatService(
     private async Task<ChatResult> AnswerIndexOverviewAsync(string repositoryId, string question,
         CancellationToken cancellationToken)
     {
-        const string sql = """
-            select distinct on (metadata ->> 'entry_id')
-                   metadata ->> 'entry_id', metadata ->> 'document_name',
-                   metadata ->> 'full_path', metadata ->> 'template_name',
-                   metadata ->> 'ingestion_status', metadata ->> 'text_source',
-                   coalesce((metadata -> 'fields')::text, '[]')
-            from public.documents
-            where metadata ->> 'source' = 'laserfiche-reports'
-              and metadata ->> 'record_type' = 'document-metadata'
-              and lower(metadata ->> 'repository_id') = lower(@repository)
-            order by metadata ->> 'entry_id', id desc
-            limit 1001
-            """;
-        var candidates = new List<IndexOverviewDocument>();
+        // Counts and coverage come from a complete live folder traversal, never Top-K.
+        var currentDocuments = new Dictionary<int, LFEntry>();
+        var pendingFolders = new Queue<int>();
+        var visitedFolders = new HashSet<int>();
+        pendingFolders.Enqueue(await entries.GetRootEntryIdAsync(cancellationToken));
+        while (pendingFolders.TryDequeue(out var folderId))
+        {
+            if (!visitedFolders.Add(folderId)) continue;
+            var children = await entries.GetAllFolderChildrenAsync(folderId, cancellationToken);
+            foreach (var child in children)
+            {
+                if (child.EntryType == LFEntryType.Folder) pendingFolders.Enqueue(child.Id);
+                else if (child.EntryType == LFEntryType.Document) currentDocuments[child.Id] = child;
+            }
+        }
+
+        var indexStatuses = new Dictionary<int, string>();
         await using (var connection = new NpgsqlConnection(ConnectionString))
         {
             await connection.OpenAsync(cancellationToken);
+            const string sql = """
+                select distinct on (metadata ->> 'entry_id')
+                       metadata ->> 'entry_id', metadata ->> 'ingestion_status'
+                from public.documents
+                where metadata ->> 'source' = 'laserfiche-reports'
+                  and metadata ->> 'record_type' = 'document-metadata'
+                  and lower(metadata ->> 'repository_id') = lower(@repository)
+                order by metadata ->> 'entry_id', id desc
+                """;
             await using var command = new NpgsqlCommand(sql, connection);
             command.Parameters.AddWithValue("repository", repositoryId);
             await using var reader = await command.ExecuteReaderAsync(cancellationToken);
             while (await reader.ReadAsync(cancellationToken))
             {
-                if (!int.TryParse(reader.GetString(0), out var entryId)) continue;
-                string Read(int index) => reader.IsDBNull(index) ? "" : reader.GetString(index);
-                var (category, highlights) = ReadFields(Read(6));
-                candidates.Add(new IndexOverviewDocument(entryId, Read(1), Read(2), Read(3),
-                    Read(4), Read(5), category, highlights));
+                if (!reader.IsDBNull(0) && int.TryParse(reader.GetString(0), out var entryId))
+                    indexStatuses[entryId] = reader.IsDBNull(1) ? "" : reader.GetString(1);
             }
         }
 
-        var visible = new List<IndexOverviewDocument>();
-        foreach (var candidate in candidates.Take(1000))
+        var documents = new List<RepositorySummaryItem>();
+        foreach (var entryId in currentDocuments.Keys.Order())
         {
-            if (await CanReadAsync(candidate.EntryId, cancellationToken)) visible.Add(candidate);
+            LFEntry document;
+            IReadOnlyList<LFFieldValue> fields;
+            try
+            {
+                document = await entries.GetEntryAsync(entryId, cancellationToken);
+                if (document.EntryType != LFEntryType.Document) continue;
+                fields = await entries.GetEntryFieldsAsync(entryId, cancellationToken);
+            }
+            catch (LaserficheException exception) when (exception.StatusCode is 403 or 404)
+            {
+                // Permission changes or deletions during the scan cannot become evidence.
+                continue;
+            }
+            var (category, _) = ReadFields(JsonSerializer.Serialize(fields.Select(field =>
+                new { name = field.FieldName, value = field.Value })));
+            var detail = RepositorySummaryReport.SummarizeFields(fields
+                .Select(field => (field.FieldName, field.Value)));
+            documents.Add(new RepositorySummaryItem(document.Id, document.Name, category, detail,
+                indexStatuses.ContainsKey(document.Id),
+                indexStatuses.GetValueOrDefault(document.Id) == "content-indexed"));
         }
-        visible.Sort((left, right) => left.EntryId.CompareTo(right.EntryId));
-        if (visible.Count == 0)
-            return new ChatResult("لا توجد وثائق مفهرسة متاحة للقراءة في المستودع الحالي.", []);
-
-        var countOnly = Regex.IsMatch(question, @"كم\s+(?:عدد|وثيق[ةه]|مستند)|عدد\s+(?:الوثائق|المستندات)",
-            RegexOptions.CultureInvariant);
-        var more = candidates.Count > 1000;
-        if (countOnly)
-            return new ChatResult(more
-                ? $"توجد أكثر من {visible.Count} وثيقة مفهرسة متاحة لك. افتح قسم الوثائق لاستعراض البقية."
-                : $"عدد الوثائق المفهرسة المتاحة لك في المستودع الحالي: {visible.Count} وثيقة.", []);
-
-        var listRequested = Regex.IsMatch(question, @"اذكر|اعرض|اسرد|قائمة|أسماء|اسماء|جميع|كل",
-            RegexOptions.CultureInvariant) &&
-            !Regex.IsMatch(question, @"لخص|ملخص|أهم|اهم", RegexOptions.CultureInvariant);
-        if (listRequested)
-        {
-            var list = new StringBuilder();
-            list.AppendLine(more ? $"أول {visible.Count} وثيقة مفهرسة متاحة لك:" :
-                $"الوثائق المفهرسة المتاحة لك ({visible.Count}):");
-            foreach (var document in visible)
-                list.AppendLine($"- {document.Name} — ID {document.EntryId}");
-            if (more) list.AppendLine("توجد وثائق إضافية في قسم الوثائق.");
-            return new ChatResult(list.ToString().TrimEnd(), []);
-        }
-
-        var contentCount = visible.Count(document => document.Status == "content-indexed");
-        var metadataCount = visible.Count(document => document.Status == "metadata-indexed");
-        var groups = visible.GroupBy(document => !string.IsNullOrWhiteSpace(document.Category)
-                ? document.Category : !string.IsNullOrWhiteSpace(document.Template)
-                    ? $"قالب {document.Template}" : "غير مصنف")
-            .OrderByDescending(group => group.Count()).ThenBy(group => group.Key)
-            .Select(group => new IndexSummaryGroup(Clip(group.Key, 200), group.Count(),
-                group.Take(2).Select(document => new IndexSummaryExample(document.EntryId,
-                    Clip(document.Name, 500), Clip(string.Join("؛ ", document.Highlights), 500)))
-                    .ToArray()))
-            .ToList();
-        if (groups.Count > 32)
-        {
-            var remaining = groups.Skip(31).Sum(group => group.Count);
-            groups = groups.Take(31).Append(new IndexSummaryGroup("تصنيفات أخرى", remaining, [])).ToList();
-        }
-
-        var client = clients.CreateClient("ReportsGraph");
-        var graphRequest = JsonSerializer.Serialize(new
-        {
-            mode = "index_summary", question = question.Trim(), totalDocuments = visible.Count,
-            contentDocuments = contentCount, metadataOnlyDocuments = metadataCount, groups
-        }, GraphJsonOptions);
-        using var content = new StringContent(graphRequest, Encoding.UTF8, "application/json");
-        using var response = await client.PostAsync("answer", content, cancellationToken);
-        if (!response.IsSuccessStatusCode)
-            throw new InvalidOperationException($"Local LangGraph returned HTTP {(int)response.StatusCode} during index summary.");
-        var graphResponse = await response.Content.ReadFromJsonAsync<GraphAnswer>(cancellationToken);
-        if (string.IsNullOrWhiteSpace(graphResponse?.Answer))
-            throw new InvalidOperationException("The local LangGraph service returned an empty index summary.");
-        var heading = more ? $"ملخص أول {visible.Count} وثيقة متاحة (توجد وثائق أخرى):" :
-            $"ملخص {visible.Count} وثيقة مفهرسة متاحة لك:";
-        var coverage = $"{contentCount} بمحتوى صفحات، و{metadataCount} ببيانات Laserfiche فقط.";
-        var sourceIds = groups.SelectMany(group => group.Examples.Take(1)).Take(8)
-            .Select(example => example.EntryId).ToHashSet();
-        var sources = visible.Where(document => sourceIds.Contains(document.EntryId))
-            .Select(document => new Evidence(document.EntryId, document.Name, document.Path,
-                null, 1, string.Join("\n", document.Highlights), "laserfiche-metadata"))
-            .ToArray();
-        return new ChatResult($"{heading}\n{coverage}\n\n{graphResponse.Answer.Trim()}", sources);
+        return new ChatResult(RepositorySummaryReport.Render(documents, question, currentDocuments.Count), []);
     }
 
     private static (string Category, IReadOnlyList<string> Highlights) ReadFields(string json)
