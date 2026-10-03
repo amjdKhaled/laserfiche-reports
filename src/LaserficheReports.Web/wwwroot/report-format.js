@@ -33,7 +33,7 @@
     }
     parts.push(value.trim());
     if (line.trimStart().startsWith('|')) parts.shift();
-    if (line.trimEnd().endsWith('|') && !line.trimEnd().endsWith('\\|')) parts.pop();
+    if (line.trimEnd().endsWith('|') && parts[parts.length - 1] === '') parts.pop();
     return parts;
   }
   function divider(line, columns) {

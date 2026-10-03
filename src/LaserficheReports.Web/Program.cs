@@ -249,8 +249,9 @@ app.MapPost("/api/reports/chat", async (ChatQuestion request, ReportsChatService
     catch (PostgresException exception)
     {
         app.Logger.LogError(exception, "Document search failed in PostgreSQL.");
-        return Results.Json(new { error = "document_search_failed", message = exception.MessageText,
-            sqlState = exception.SqlState }, statusCode: StatusCodes.Status503ServiceUnavailable);
+        var problem = DatabaseDiagnostics.Describe(exception);
+        return Results.Json(new { error = problem.Error, message = problem.Message,
+            sqlState = problem.SqlState }, statusCode: StatusCodes.Status503ServiceUnavailable);
     }
     catch (NpgsqlException exception)
     {
@@ -492,26 +493,12 @@ app.MapGet("/api/database/status", async (
             username = settings.Username
         });
     }
-    catch (PostgresException exception) when (
-        exception.SqlState == "XX000" &&
-        exception.MessageText.Contains("ENOIDENTIFIER", StringComparison.OrdinalIgnoreCase))
-    {
-        return Results.Json(new
-        {
-            status = "unavailable",
-            error = "supabase_tenant_identifier_missing",
-            message = "Use Username=postgres.YOUR_POOLER_TENANT_ID in appsettings.Local.json."
-        }, statusCode: StatusCodes.Status503ServiceUnavailable);
-    }
     catch (PostgresException exception)
     {
-        return Results.Json(new
-        {
-            status = "unavailable",
-            error = "supabase_connection_failed",
-            message = exception.MessageText,
-            sqlState = exception.SqlState
-        }, statusCode: StatusCodes.Status503ServiceUnavailable);
+        var problem = DatabaseDiagnostics.Describe(exception);
+        return Results.Json(new { status = "unavailable", error = problem.Error,
+            message = problem.Message, sqlState = problem.SqlState },
+            statusCode: StatusCodes.Status503ServiceUnavailable);
     }
     catch (Exception exception) when (exception is NpgsqlException or ArgumentException)
     {

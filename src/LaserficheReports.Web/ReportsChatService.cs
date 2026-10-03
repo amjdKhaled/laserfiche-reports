@@ -9,7 +9,10 @@ namespace LaserficheReports.Web;
 
 internal sealed record Evidence(int EntryId, string DocumentName, string Path, int? PageNumber,
     float Similarity, string Text, string TextSource);
-internal sealed record ChatResult(string Answer, IReadOnlyList<Evidence> Sources, AnswerScope? Scope = null);
+internal sealed record ChatResult(string Answer, IReadOnlyList<Evidence> Sources, AnswerScope? Scope = null)
+{
+    public DateTimeOffset GeneratedAt { get; init; } = DateTimeOffset.UtcNow;
+}
 internal sealed record IndexedDocument(int EntryId, string Name, string Path, string Status,
     int ChunkCount, string? TextSource);
 internal sealed record IndexedDocumentPage(IReadOnlyList<IndexedDocument> Items, int Page, bool HasMore);
@@ -80,6 +83,9 @@ internal sealed class ReportsChatService(
         var requestedEntries = ReportSupport.RequestedEntries(question);
         if (requestedEntries.Length > 50)
             throw new ArgumentException("حدد حتى 50 وثيقة في السؤال الواحد.", nameof(question));
+        if (ReportSupport.NeedsFilterClarification(question))
+            return new ChatResult("# توضيح شروط التقرير\n\nالطلب يتضمن أكثر من شرط أو مقارنة غير مدعومة في فحص الحقول الحالي. " +
+                "اكتب شرطًا واحدًا بهذه الصيغة: «إجراء الوثيقة يساوي تحت الاجراء». لن أعرض عددًا أو قائمة على أنها حصر مؤكد لهذا الطلب.", []);
         var condition = ReportSupport.ParseCondition(question);
         if (condition is not null || ReportSupport.IsInventoryQuestion(question))
             return await liveReports.CreateAsync(repository.RepositoryId, condition, requestedEntries, cancellationToken);

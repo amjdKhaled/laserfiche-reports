@@ -34,7 +34,12 @@ internal static partial class ReportSupport
             ? new FieldCondition(left, value) : null;
     }
 
-    internal static bool IsInventoryQuestion(string question) => InventoryRegex().IsMatch(question.Trim());
+    internal static bool IsInventoryQuestion(string question) => InventoryRegex().IsMatch(
+        Regex.Replace(question.Trim().TrimEnd('؟', '?', '.', '!'), @"\s+", " "));
+
+    internal static bool NeedsFilterClarification(string question) =>
+        EqualityRegex().Matches(question).Count > 1 ||
+        (EqualityRegex().IsMatch(question) && CompoundFilterRegex().IsMatch(question));
 
     // Ignore harmless Arabic hamza/diacritic/whitespace differences for matching
     // metadata, while preserving the original field name/value in the report.
@@ -110,6 +115,8 @@ internal static partial class ReportSupport
     private static partial Regex EntryGroupRegex();
     [GeneratedRegex(@"\s*(?:يساوي|تساوي|قيمته|قيمتها|equals|=)\s*", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex EqualityRegex();
-    [GeneratedRegex(@"^(?:(?:اعرض|اذكر|قائمة|تقرير عن|ما هي|ماهي|ما|كم عدد|عدد)\s+)?(?:جميع\s+|كل\s+)?الوثائق\s*(?:الموجودة\s*)?(?:في\s*(?:كل\s*|جميع\s*)?(?:المستودع|الريبو))?\s*[؟?]?$", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"^(?:(?:اعرض|اذكر|اعطني|أعطني|اعطيني|أعطيني|وريني|طلع|ابغا|أبغا|ابي|أبي|أريد|اريد|قائمة|تقرير عن|ما هي|ماهي|ايش|وش|ما|كم عدد|عدد)\s+)?(?:(?:لي|تقرير|قائمة|بكل|عن|بجميع)\s+)*(?:جميع\s+|كل\s+)?(?:الوثائق|المستندات|الملفات)\s*(?:(?:الموجود[ةه]?|المتاحة)\s*)?(?:في\s*(?:(?:هذا|هذي|كل|جميع)\s+)?(?:المستودع|مستودع|المخزن|المخزن هذا|الريبو|(?:ال\s*)?(?:repasetory|repository|repo)))?$|^(?:كم\s+(?:وثيقة|مستند|ملف)\s+في\s+(?:هذا\s+)?(?:المستودع|المخزن)|(?:list|show|count)\s+(?:me\s+)?(?:all\s+)?documents(?:\s+(?:in|from)\s+(?:this\s+|the\s+)?repository)?)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex InventoryRegex();
+    [GeneratedRegex(@"(?:\s+(?:و|أو|او|and|or)\s+[^؟?]*?(?:الحقل|حقل|التصنيف|موعد|تاريخ|اجراء|إجراء)|(?:>=|<=|!=|≠)|(?:أكبر من|اصغر من|أصغر من|اقل من|أقل من|قبل تاريخ|بعد تاريخ))", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex CompoundFilterRegex();
 }

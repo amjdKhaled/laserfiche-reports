@@ -102,7 +102,7 @@ function renderMessages() {
           const scope = el('div', 'report-scope', message.scope.detail);
           scope.setAttribute('role', 'note'); bubble.prepend(scope);
         }
-        if (message.sources?.length) {
+        if (message.generatedAt || message.sources?.length) {
           const actions = el('div', 'report-actions');
           const copy = el('button', '', 'نسخ التقرير'); copy.type = 'button';
           copy.onclick = async () => {
@@ -114,7 +114,18 @@ function renderMessages() {
             document.querySelectorAll('.print-report').forEach(node => node.classList.remove('print-report'));
             item.classList.add('print-report'); window.print();
           };
-          actions.append(copy, print); bubble.append(actions);
+          const format = el('select', 'report-format');
+          format.setAttribute('aria-label', 'صيغة تحميل التقرير');
+          for (const [value, label] of [['html', 'تقرير HTML'], ['md', 'نص Markdown']]) {
+            const option = el('option', '', label); option.value = value; format.append(option);
+          }
+          const download = el('button', '', 'تحميل التقرير'); download.type = 'button';
+          download.onclick = () => {
+            const question = chat.messages.slice(0, messageIndex).reverse().find(previous => previous.role === 'user')?.text;
+            try { ReportsDownload.download(message, question, format.value); }
+            catch { download.textContent = 'تعذر التحميل'; }
+          };
+          actions.append(download, format, copy, print); bubble.append(actions);
         }
       } else bubble.textContent = message.text;
       item.append(bubble);
@@ -169,7 +180,7 @@ $('ask-form').onsubmit = async event => {
   renderHistory(); renderMessages();
   try {
     const result = await api('/api/reports/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question }) });
-    chat.messages[chat.messages.length - 1] = { role: 'assistant', text: result.answer, sources: result.sources, scope: result.scope };
+    chat.messages[chat.messages.length - 1] = { role: 'assistant', text: result.answer, sources: result.sources, scope: result.scope, generatedAt: result.generatedAt };
   } catch (error) {
     chat.messages[chat.messages.length - 1] = { role: 'assistant', text: `تعذر إكمال السؤال: ${error.message}` };
   } finally { $('send').disabled = false; save(); renderMessages(); }

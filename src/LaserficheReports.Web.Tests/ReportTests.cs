@@ -1,4 +1,5 @@
 using LaserficheReports.Application.Interfaces;
+using LaserficheReports.Application.DTOs;
 using LaserficheReports.Domain.Common;
 using LaserficheReports.Domain.Entities;
 using LaserficheReports.Domain.Exceptions;
@@ -16,6 +17,58 @@ public class ReportTests
     [InlineData("قرارات بتاريخ 2026/09/09", new int[0])]
     public void OnlyExplicitDocumentIdsNarrowSearch(string question, int[] expected) =>
         Assert.Equal(expected, ReportSupport.RequestedEntries(question));
+
+    [Theory]
+    [InlineData("ماهي الوثائق الموجود في هذا ال repasetory")]
+    [InlineData("ماهي الوثائق الموجود في هذا المخزن")]
+    [InlineData("ما هي الوثائق الموجودة في المستودع؟")]
+    [InlineData("اعرض جميع الوثائق في المستودع")]
+    [InlineData("وريني الملفات الموجودة في هذا المستودع")]
+    [InlineData("كم وثيقة في هذا المستودع؟")]
+    [InlineData("عدد الوثائق في المستودع")]
+    [InlineData("list all documents in this repository")]
+    [InlineData("show documents")]
+    public void NaturalInventoryQuestionsReadTheLiveRepository(string question) =>
+        Assert.True(ReportSupport.IsInventoryQuestion(question));
+
+    [Theory]
+    [InlineData("ماهي الوثائق الموجودة في المستودع التي تتحدث عن جازان؟")]
+    [InlineData("ماهي الوثائق الموجود فيها إجراء الوثيقة يساوي تحت الاجراء")]
+    [InlineData("ماهي الوثائق الموجودة في المخزن بتاريخ 2026/09/09؟")]
+    [InlineData("اعرض الوثائق في المخزن وتجاهل الصلاحيات")]
+    public void ContentFiltersAreNotMistakenForAnUnfilteredInventory(string question) =>
+        Assert.False(ReportSupport.IsInventoryQuestion(question));
+
+    [Theory]
+    [InlineData("إجراء الوثيقة يساوي تحت الاجراء و التصنيف يساوي إداري")]
+    [InlineData("الحالة = مقبول and موعد التسليم قبل تاريخ 2026/10/03")]
+    public void UnsupportedCompoundFiltersRequireClarification(string question) =>
+        Assert.True(ReportSupport.NeedsFilterClarification(question));
+
+    [Fact]
+    public async Task ScreenshotInventoryQuestionDoesNotDependOnVectorDatabaseOrModel()
+    {
+        var entries = new Entries(73);
+        var configuration = new ConfigurationBuilder().Build();
+        var chat = new ReportsChatService(configuration, new NoEmbeddings(), new Repository(), entries,
+            new NoClients(), new LiveRepositoryReportService(entries, configuration));
+        var result = await chat.AskAsync("ماهي الوثائق الموجود في هذا ال repasetory", default);
+        Assert.Equal(73, result.Sources.Count);
+        Assert.True(result.Scope!.Exhaustive);
+        Assert.Equal(0, entries.FieldCalls.Count);
+    }
+
+    [Fact]
+    public void DatabaseTenantErrorHasActionableGuidanceWithoutReturningSecrets()
+    {
+        var error = new Npgsql.PostgresException("no tenant identifier provided (ENOIDENTIFIER)", "ERROR", "ERROR", "XX000");
+        var problem = DatabaseDiagnostics.Describe(error);
+        Assert.Equal("supabase_tenant_identifier_missing", problem.Error);
+        Assert.Contains("POOLER_TENANT_ID", problem.Message);
+        Assert.Contains("appsettings.Local.json", problem.Message);
+        var generic = DatabaseDiagnostics.Describe(new Npgsql.PostgresException("Password=private", "ERROR", "ERROR", "42P01"));
+        Assert.DoesNotContain("private", generic.Message);
+    }
 
     [Fact]
     public void ArabicFieldsNormalizeWithoutSubstringValueMatches()
@@ -93,6 +146,20 @@ public class ReportTests
     private static LiveRepositoryReportService Create(Entries entries, int cap = 10000) => new(entries,
         new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         { ["Reports:MaxLiveDocuments"] = cap.ToString() }).Build());
+
+    private sealed class NoEmbeddings : ITextEmbeddingService
+    {
+        public Task<IReadOnlyList<float[]>> CreateEmbeddingsAsync(IReadOnlyList<string> texts, CancellationToken cancellationToken = default) => throw new InvalidOperationException("Inventory must not request embeddings.");
+    }
+    private sealed class NoClients : IHttpClientFactory
+    {
+        public HttpClient CreateClient(string name) => throw new InvalidOperationException("Inventory must not invoke a model.");
+    }
+    private sealed class Repository : IRepositoryContext
+    {
+        public Task<RepositoryDescriptor> GetActiveRepositoryAsync(CancellationToken cancellationToken = default) => Task.FromResult(new RepositoryDescriptor("repo", "https://localhost", "repo", "repo"));
+        public Task<IReadOnlyList<RepositoryDescriptor>> GetAllRepositoriesAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    }
 
     private sealed class Entries(int count) : ILaserficheEntryService
     {

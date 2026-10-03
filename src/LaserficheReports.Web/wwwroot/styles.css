@@ -54,3 +54,6 @@
 .report-actions{display:flex;gap:9px;margin-top:18px;border-top:1px solid #e7eef2;padding-top:12px}
 .report-actions button{font:inherit;font-size:12px;border:1px solid #d7e5e9;border-radius:7px;background:white;color:#205b69;padding:7px 12px;cursor:pointer}
 @media print{.shell,.main,#chat-view,.messages{display:block;height:auto;overflow:visible}.sidebar,.topbar,.composer,.note,.message:not(.print-report),#docs-view,.login-layer,.report-actions,.sources{display:none!important}.messages{padding:0}.message{max-width:none}.bubble{border:0!important;padding:0!important}.report-table-wrap{overflow:visible;border-radius:0}.report-table{min-width:0;font-size:11px}.report-table th,.report-table td{padding:7px}.report-reference{background:none;color:inherit}.report-body h3{break-after:avoid}.report-table tr{break-inside:avoid}}
+
+.report-actions{flex-wrap:wrap;align-items:center}
+.report-format{font:inherit;font-size:12px;color:#205b69;background:#fff;border:1px solid #d7e5e9;border-radius:7px;padding:7px;max-width:100%}
