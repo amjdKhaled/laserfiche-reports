@@ -129,7 +129,7 @@ class GraphTests(unittest.TestCase):
 
     def test_synthetic_quality_corpus_is_valid_and_separate_from_mock_tests(self):
         cases = json.loads(Path(__file__).with_name("adversarial_cases.json").read_text(encoding="utf-8"))
-        self.assertGreaterEqual(len(cases), 28)
+        self.assertGreaterEqual(len(cases), 40)
         for case in cases:
             with self.subTest(case=case["name"]):
                 validate_request({key: case[key] for key in ("question", "evidence", "scope")})

@@ -12,7 +12,10 @@ internal sealed record Evidence(int EntryId, string DocumentName, string Path, i
 internal sealed record ChatResult(string Answer, IReadOnlyList<Evidence> Sources, AnswerScope? Scope = null)
 {
     public DateTimeOffset GeneratedAt { get; init; } = DateTimeOffset.UtcNow;
+    public ReportQuality? Quality { get; init; }
 }
+internal sealed record ReportQuality(string Status, bool QuoteVerification, string SemanticReview,
+    string PromptVersion, int ModelCalls);
 internal sealed record IndexedDocument(int EntryId, string Name, string Path, string Status,
     int ChunkCount, string? TextSource);
 internal sealed record IndexedDocumentPage(IReadOnlyList<IndexedDocument> Items, int Page, bool HasMore);
@@ -93,32 +96,31 @@ internal sealed class ReportsChatService(
         var candidateLimit = Math.Clamp(configuration.GetValue<int?>("Reports:CandidateLimit") ?? 240, 24, 1000);
         var evidenceLimit = Math.Clamp(configuration.GetValue<int?>("Reports:EvidenceLimit") ?? 24, 8, 32);
         var prefix = configuration["LocalAI:QueryEmbeddingPrefix"] ?? "search_query: ";
-        var vector = (await embeddings.CreateEmbeddingsAsync(
-            [prefix + question.Trim()], cancellationToken))[0];
-        var literal = "[" + string.Join(",", vector.Select(v =>
-            v.ToString("R", System.Globalization.CultureInfo.InvariantCulture))) + "]";
+        string? literal = null;
+        try
+        {
+            var vectors = await embeddings.CreateEmbeddingsAsync([prefix + question.Trim()], cancellationToken);
+            if (vectors.Count == 0 || vectors[0].Length == 0 || vectors[0].Any(v => !float.IsFinite(v)))
+                throw new InvalidOperationException("The local embedding model returned an invalid vector.");
+            literal = "[" + string.Join(",", vectors[0].Select(v =>
+                v.ToString("R", System.Globalization.CultureInfo.InvariantCulture))) + "]";
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested &&
+            ex is HttpRequestException or InvalidOperationException or TaskCanceledException)
+        {
+            // Lexical retrieval remains usable during an embedding outage; expose this in scope.
+        }
+        var keywords = HybridRetrieval.KeywordQuery(question);
         var candidates = new List<Evidence>();
         await using (var connection = new NpgsqlConnection(ConnectionString))
         {
             await connection.OpenAsync(cancellationToken);
-            const string sql = """
-                select content, metadata,
-                       (1 - (embedding OPERATOR(extensions.<=>) cast(@embedding as extensions.vector)))::real as similarity
-                from public.documents
-                where embedding is not null
-                  and metadata ->> 'source' = 'laserfiche-reports'
-                  and lower(metadata ->> 'repository_id') = lower(@repository)
-                  and metadata ->> 'record_type' = 'document-chunk'
-                  and (not @hasEntryFilter or metadata ->> 'entry_id' = any(@entryIds))
-                  and (@hasEntryFilter or
-                       (1 - (embedding OPERATOR(extensions.<=>) cast(@embedding as extensions.vector))) >= 0.25)
-                order by case when @hasEntryFilter and metadata ->> 'text_source' = 'laserfiche-metadata'
-                              then 0 else 1 end,
-                         embedding OPERATOR(extensions.<=>) cast(@embedding as extensions.vector)
-                limit @candidateLimit
-                """;
-            await using var command = new NpgsqlCommand(sql, connection);
-            command.Parameters.AddWithValue("embedding", literal);
+            await using var command = new NpgsqlCommand(HybridRetrieval.Sql, connection);
+            command.CommandTimeout = Math.Clamp(configuration.GetValue<int?>("Reports:SearchTimeoutSeconds") ?? 60, 10, 300);
+            command.Parameters.Add(new NpgsqlParameter("embedding", NpgsqlTypes.NpgsqlDbType.Text)
+                { Value = (object?)literal ?? DBNull.Value });
+            command.Parameters.AddWithValue("hasVector", literal is not null);
+            command.Parameters.AddWithValue("keywords", keywords);
             command.Parameters.AddWithValue("repository", repository.RepositoryId);
             command.Parameters.AddWithValue("hasEntryFilter", hasEntryFilter);
             command.Parameters.AddWithValue("entryIds", requestedEntries.Select(id => id.ToString(System.Globalization.CultureInfo.InvariantCulture)).ToArray());
@@ -160,6 +162,8 @@ internal sealed class ReportsChatService(
             hasEntryFilter ? "التحليل مقيد بالوثائق التي حددتها؛ يعتمد على المقاطع المفهرسة المتاحة منها."
                 : "البحث شمل فهرس المستودع المتاح؛ المقاطع المختارة أدلة للإجابة وليست حصرًا لجميع الوثائق.",
             requestedEntries);
+        if (literal is null)
+            scope = scope with { Detail = scope.Detail + " البحث بالكلمات فقط؛ تعذر استخدام نموذج البحث الدلالي المحلي." };
         if (evidence.Count == 0)
             return new ChatResult("# تقرير البحث\n\nلم أجد أدلة مفهرسة كافية للإجابة. تأكد من فهرسة محتوى الوثائق المطلوبة.\n\n" + scope.Detail, evidence, scope);
 
@@ -175,7 +179,8 @@ internal sealed class ReportsChatService(
         var graphResponse = await response.Content.ReadFromJsonAsync<GraphAnswer>(cancellationToken);
         if (string.IsNullOrWhiteSpace(graphResponse?.Answer))
             throw new InvalidOperationException("The local LangGraph service returned an empty answer.");
-        return new ChatResult(graphResponse.Answer + ReportSupport.SourceTable(evidence), evidence, scope);
+        return new ChatResult(graphResponse.Answer + ReportSupport.SourceTable(evidence), evidence, scope)
+            { Quality = graphResponse.Quality };
     }
 
     private async Task<bool> CanReadAsync(int entryId, CancellationToken cancellationToken)
@@ -191,5 +196,5 @@ internal sealed class ReportsChatService(
         // Authentication failures and service outages must fail the entire request.
     }
 
-    private sealed record GraphAnswer(string Answer);
+    private sealed record GraphAnswer(string Answer, ReportQuality? Quality);
 }

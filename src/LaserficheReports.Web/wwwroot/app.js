@@ -103,6 +103,8 @@ function renderMessages() {
       const bubble = el('div', 'bubble');
       if (message.role === 'assistant') {
         bubble.append(ReportsMarkdown.render(message.text || '', message.sources?.length || 0, sourcePrefix));
+        const qualityLabel = ReportsDownload.qualityLabel(message.quality);
+        if (qualityLabel) bubble.prepend(el('div', 'report-scope report-quality', qualityLabel));
         if (message.scope) {
           const scope = el('div', 'report-scope', message.scope.detail);
           scope.setAttribute('role', 'note'); bubble.prepend(scope);
@@ -190,7 +192,7 @@ $('ask-form').onsubmit = async event => {
   renderHistory(); renderMessages();
   try {
     const result = await api('/api/reports/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question }) });
-    chat.messages[chat.messages.length - 1] = { role: 'assistant', text: result.answer, sources: result.sources, scope: result.scope, generatedAt: result.generatedAt };
+    chat.messages[chat.messages.length - 1] = { role: 'assistant', text: result.answer, sources: result.sources, scope: result.scope, generatedAt: result.generatedAt, quality: result.quality };
   } catch (error) {
     chat.messages[chat.messages.length - 1] = { role: 'assistant', text: `تعذر إكمال السؤال: ${error.message}` };
   } finally { $('send').disabled = false; save(); renderMessages(); }

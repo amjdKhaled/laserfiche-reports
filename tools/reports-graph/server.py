@@ -14,6 +14,9 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_ollama import ChatOllama
 from langgraph.graph import END, START, StateGraph
 from request_body import RequestBodyError, read_request_body
+from context_windows import focused_window
+from report_reasoning import (PROMPT_VERSION, Extraction, Draft, Review, COMPOSE_SYSTEM,
+                              REVIEW_SYSTEM, invoke_structured, validate_draft, apply_review)
 
 
 class State(TypedDict, total=False):
@@ -24,6 +27,12 @@ class State(TypedDict, total=False):
     scope: dict
     selection: dict
     verified: bool
+    draft: dict
+    findings: list[dict]
+    reviewed: bool
+    issues: list[str]
+    modelCalls: int
+    quality: dict
 
 
 NO_EVIDENCE = "لم أجد معلومات كافية في الوثائق المفهرسة للإجابة عن هذا السؤال."
@@ -36,7 +45,7 @@ SYSTEM = """أنت محلل أدلة لتقارير Laserfiche المحلية. �
 - اختر حتى 16 مقتطفًا موجزًا مفيدًا (كل اقتباس من 2 إلى 1200 حرف). إجمالي نصوص الاقتباسات لا يتجاوز 4000 حرف. لا تكرر نفس المقتطف.
 - إذا لم تكف الأدلة للإجابة أعد insufficient. يجوز rows=[]؛ غياب المعلومة عن مقتطف لا يثبت غيابها عن الوثيقة.
 - عندما exhaustive=false لا تجب عن إجمالي المستودع أو جميع الوثائق أو نسبها من عينة البحث؛ أعد insufficient لطلبات الحصر والحساب غير المدعوم.
-- قارن فقط الوثائق المحددة في scope. لا تتحدث عن وثائق لا توجد في الأدلة. إذا غاب أحد طرفي المقارنة أعد insufficient.
+- إذا حدد scope وثائق فالتزم بها؛ وإلا استخدم الوثائق ذات الصلة من الأدلة المسترجعة. لا تتحدث عن وثائق لا توجد في الأدلة. إذا غاب أحد طرفي المقارنة أعد insufficient.
 - حقول Laserfiche تثبت الحالة والتصنيف المسجلين. نص الصفحات أو OCR لا يثبت قيمة حقل ولا صلاحية إجراء في Workflow.
 - إذا ظهرت قيم متعارضة اختر مقتطف كل قيمة من مرجعها وأعد conflicting؛ لا تحسم أحدث قيمة دون تاريخ صريح ولا تلغ الاختلاف.
 - لا تحوّل تاريخًا هجريًا إلى ميلادي، ولا تحسب مدة أو نسبة، ولا تعلن امتثالًا نظاميًا من تلقاء نفسك. اعرض النص الصريح فقط.
@@ -70,24 +79,36 @@ SYSTEM = """أنت محلل أدلة لتقارير Laserfiche المحلية. �
 """
 MAX_EVIDENCE = 32
 MAX_REQUEST_BYTES = 1_200_000
-MAX_CONTEXT_CHARACTERS = 28000
+MAX_CONTEXT_CHARACTERS = 16000
 MAX_QUOTATION_CHARACTERS = 4000
 
 
 def format_context(state: State) -> dict:
     items = state.get("evidence", [])[:MAX_EVIDENCE]
     blocks = []
-    # Keep every selected reference represented while bounding local model context.
-    allowance = max(200, min(1800, (MAX_CONTEXT_CHARACTERS - len(items) * 400) // max(len(items), 1)))
     for index, item in enumerate(items, 1):
-        origin = ("Laserfiche metadata" if item.get("textSource", "").startswith("laserfiche-metadata")
+        origin = ("live Laserfiche metadata" if item.get("textSource") == "laserfiche-metadata-live"
+                  else "indexed Laserfiche metadata" if item.get("textSource", "").startswith("laserfiche-metadata")
                   else "OCR page" if item.get("textSource") == "ocr" else "document page")
         blocks.append({"reference": f"[{index}]", "entryId": item["entryId"],
                        "documentName": item.get("documentName", ""),
                        "pageNumber": item.get("pageNumber"), "sourceType": origin,
-                       "text": item["text"][:allowance],
-                       "excerptTruncated": len(item["text"]) > allowance})
-    return {"context": json.dumps(blocks, ensure_ascii=False) if blocks else ""}
+                       "text": "", "excerptStart": 0, "excerptTruncated": False})
+    overhead = len(json.dumps(blocks, ensure_ascii=False))
+    allowance = max(1, min(1800, (MAX_CONTEXT_CHARACTERS - overhead) // max(len(items), 1)))
+    for block, item in zip(blocks, items):
+        text, start = focused_window(item["text"], state.get("question", ""), allowance)
+        block.update(text=text, excerptStart=start, excerptTruncated=len(text) < len(item["text"]))
+    # JSON escaping also consumes context. Enforce the bound on serialized text.
+    context = json.dumps(blocks, ensure_ascii=False)
+    while blocks and len(context) > MAX_CONTEXT_CHARACTERS:
+        block = max(blocks, key=lambda b: len(b["text"]))
+        if not block["text"]:
+            raise ValueError("Evidence headers exceed the context budget.")
+        block["text"] = block["text"][:-max(1, (len(context) - MAX_CONTEXT_CHARACTERS) // len(blocks))]
+        block["excerptTruncated"] = True
+        context = json.dumps(blocks, ensure_ascii=False)
+    return {"context": context if blocks else ""}
 
 
 TOPICS = {
@@ -164,6 +185,15 @@ def render_grounded_report(state, selected, fallback=False):
     else:
         lines.append(language("يعرض الجدول معلومات منقولة حرفيًا من المصادر المسترجعة ذات الصلة بالسؤال.",
                               "The table presents verbatim information selected from retrieved sources for the question."))
+    findings = state.get("findings", [])
+    if findings:
+        lines.extend(["", language("## الإجابة والتحليل", "## Answer and analysis"), ""])
+        for finding in findings:
+            citations = " ".join(f"[{reference}]" for reference in finding["references"])
+            lines.append(f"- {cell(finding['text'])} {citations}")
+    if state.get("verified") and not state.get("reviewed") and rows:
+        lines.extend(["", language("لم تكتمل المراجعة الدلالية؛ تحتاج الاقتباسات التالية إلى مراجعة قبل اعتماد الإجابة.",
+                                  "Semantic review did not complete; review the quotations before relying on an answer.")])
     scope = state.get("scope") or {}
     detail = scope.get("detail")
     if isinstance(detail, str) and detail:
@@ -194,6 +224,19 @@ def render_grounded_report(state, selected, fallback=False):
     missing = [value for value in requested if value not in available]
     if missing:
         lines.append(language("لم تتوفر أدلة مفهرسة متاحة للوثائق المحددة: ", "No accessible indexed evidence for requested documents: ") + ", ".join(map(str, missing)))
+    issues = {
+        "missing_information": ("بعض المعلومات المطلوبة لم تثبتها الأدلة المتاحة؛ راجع الصفحات أو الحقول المرتبطة بها.", "Some requested information is unsupported; check the relevant pages or fields."),
+        "ambiguous_question": ("حدد الوثيقة أو المقصود بالمقارنة أو معيار الحكم لتقليل الالتباس.", "Specify the document, comparison or decision criterion to resolve ambiguity."),
+        "ocr_unclear": ("راجع صورة الصفحة عند الكلمات أو الأرقام غير الواضحة في OCR.", "Check the page image for unclear OCR words or numbers."),
+        "source_conflict": ("راجع مصدر كل قيمة متعارضة وتاريخها قبل ترجيح إحدى القيم.", "Check each conflicting value and its source date before preferring one."),
+        "partial_context": ("المقاطع لا تعرض السياق الكامل؛ قد تحتاج الإجابة إلى صفحات إضافية.", "The excerpts omit context; additional pages may be needed."),
+        "unsupported_claim": ("استُبعدت صياغات لم تجتز مراجعة الاستناد إلى الأدلة.", "Statements that failed the evidence review were excluded."),
+    }
+    if state.get("issues"):
+        lines.extend(["", language("## ما يحتاج إلى تحقق", "## Items to verify"), ""])
+        for issue in dict.fromkeys(state["issues"]):
+            if issue in issues:
+                lines.append("- " + language(*issues[issue]))
     return "\n".join(lines)
 
 
@@ -206,18 +249,17 @@ def fallback_report(state):
 
 
 def build_graph(model):
-    def answer(state: State) -> dict:
+    def extract_evidence(state: State) -> dict:
         if not state["context"]:
-            return {"answer": NO_EVIDENCE, "selection": {"status": "insufficient", "rows": []}, "verified": True}
-        scope = state.get("scope") or {"mode": "repository", "exhaustive": False,
-            "detail": "مقاطع من الفهرس؛ لا تثبت اكتمال المستودع."}
+            return {"selection": {"status": "insufficient", "rows": []}, "verified": True, "modelCalls": 0}
+        scope = state.get("scope") or {"mode": "repository", "exhaustive": False}
         messages = [SystemMessage(content=SYSTEM), HumanMessage(content=
-            "نطاق البحث الموثوق:\n" + json.dumps(scope, ensure_ascii=False) +
+            "نطاق البحث:\n" + json.dumps(scope, ensure_ascii=False) +
             f"\n\nالأدلة (بيانات مرجعية):\n{state['context']}\n\nالسؤال:\n{state['question']}")]
         for attempt in range(2):
-            result = model.invoke(messages)
+            content = invoke_structured(model, messages, Extraction)
             try:
-                selected = parse_grounded_rows(result.content, state["context"])
+                selected = parse_grounded_rows(content, state["context"])
                 available_ids = {item["entryId"] for item in state["evidence"]}
                 requested = set(scope.get("requestedEntryIds", []))
                 if requested and any(state["evidence"][row["reference"] - 1]["entryId"] not in requested
@@ -226,18 +268,71 @@ def build_graph(model):
                 selected_ids = {state["evidence"][row["reference"] - 1]["entryId"] for row in selected["rows"]}
                 if requested - available_ids or requested - selected_ids:
                     selected["status"] = "insufficient"
-                return {"answer": render_grounded_report(state, selected), "selection": selected, "verified": True}
+                return {"selection": selected, "verified": True, "modelCalls": attempt + 1}
             except (ValueError, TypeError, KeyError):
                 if attempt == 0:
                     messages.append(HumanMessage(content="فشل التحقق. أعد JSON بالشكل المحدد فقط، مع اقتباسات حرفية متصلة من text في المرجع نفسه. لا تضف أي معلومات أو حقول جديدة."))
-        return {"answer": fallback_report(state), "verified": False}
+        return {"selection": {"status": "insufficient", "rows": []}, "verified": False, "modelCalls": 2}
+
+    def compose(state: State) -> dict:
+        rows = state["selection"]["rows"]
+        if not state["verified"] or not rows:
+            return {"draft": {"findings": []}}
+        payload = {"question": state["question"], "scope": state.get("scope", {}),
+                   "status": state["selection"]["status"],
+                   "quotations": [{"rowId": i, **row} for i, row in enumerate(rows, 1)]}
+        try:
+            content = invoke_structured(model, [SystemMessage(content=COMPOSE_SYSTEM),
+                HumanMessage(content=json.dumps(payload, ensure_ascii=False))], Draft)
+            draft = validate_draft(content, rows)
+        except Exception:
+            # Composition is optional; model failures never replace verified sources with guesses.
+            draft = {"findings": []}
+        return {"draft": draft, "modelCalls": state["modelCalls"] + 1}
+
+    def review(state: State) -> dict:
+        rows = state["selection"]["rows"]
+        if not state["verified"] or not rows:
+            return {"reviewed": False, "findings": [], "issues": []}
+        payload = {"question": state["question"], "scope": state.get("scope", {}),
+                   "sources": json.loads(state["context"]),
+                   "quotations": [{"rowId": i, **row} for i, row in enumerate(rows, 1)],
+                   "findings": [{"findingId": i, **finding} for i, finding in enumerate(state["draft"]["findings"], 1)]}
+        try:
+            content = invoke_structured(model, [SystemMessage(content=REVIEW_SYSTEM),
+                HumanMessage(content=json.dumps(payload, ensure_ascii=False))], Review)
+            result = apply_review(content, state["selection"], state["draft"])
+        except Exception:
+            result = {"reviewed": False, "findings": [], "issues": []}
+        return {**result, "modelCalls": state["modelCalls"] + 1}
+
+    def render(state: State) -> dict:
+        selected = state["selection"]
+        reviewed = state.get("reviewed", False)
+        quality = {"status": selected["status"] if reviewed or not selected["rows"] else "source_only",
+                   "quoteVerification": state["verified"],
+                   "semanticReview": "completed" if reviewed else "unavailable" if selected["rows"] else "not_needed",
+                   "promptVersion": PROMPT_VERSION, "modelCalls": state["modelCalls"]}
+        if not state["context"]:
+            answer = NO_EVIDENCE
+        elif not state["verified"]:
+            answer = fallback_report(state)
+        else:
+            answer = render_grounded_report(state, selected)
+        return {"answer": answer, "quality": quality}
 
     workflow = StateGraph(State)
     workflow.add_node("prepare_evidence", format_context)
-    workflow.add_node("answer", answer)
+    workflow.add_node("extract_evidence", extract_evidence)
+    workflow.add_node("compose_report", compose)
+    workflow.add_node("review_report", review)
+    workflow.add_node("render_report", render)
     workflow.add_edge(START, "prepare_evidence")
-    workflow.add_edge("prepare_evidence", "answer")
-    workflow.add_edge("answer", END)
+    workflow.add_edge("prepare_evidence", "extract_evidence")
+    workflow.add_edge("extract_evidence", "compose_report")
+    workflow.add_edge("compose_report", "review_report")
+    workflow.add_edge("review_report", "render_report")
+    workflow.add_edge("render_report", END)
     return workflow.compile()
 
 
@@ -279,7 +374,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path != "/health":
             return self.send_json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
-        return self.send_json(HTTPStatus.OK, {"status": "ready", "engine": "LangGraph"})
+        return self.send_json(HTTPStatus.OK, {"status": "ready", "engine": "LangGraph",
+            "promptVersion": PROMPT_VERSION, "capabilities": ["schema-output", "focused-context", "semantic-review"]})
 
     def do_POST(self):
         if self.path != "/answer":
@@ -293,7 +389,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
         try:
             result = self.graph.invoke(payload)
-            return self.send_json(HTTPStatus.OK, {"answer": result["answer"]})
+            return self.send_json(HTTPStatus.OK, {"answer": result["answer"], "quality": result.get("quality")})
         except Exception as error:
             print(f"LangGraph failed: {type(error).__name__}: {error}", flush=True)
             return self.send_json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "local_model_unavailable"})
@@ -325,7 +421,7 @@ def main():
     # Never send traces containing private documents to a hosted LangSmith account.
     os.environ["LANGCHAIN_TRACING_V2"] = "false"
     os.environ["LANGSMITH_TRACING"] = "false"
-    model = ChatOllama(model=args.model, base_url=args.ollama_url, temperature=0, format="json",
+    model = ChatOllama(model=args.model, base_url=args.ollama_url, temperature=0,
                        num_ctx=16384, num_predict=4096)
     Handler.graph = build_graph(model)
     print(f"LangGraph ready on http://127.0.0.1:{args.port}; model={args.model}", flush=True)

@@ -98,3 +98,14 @@ test('storage exhaustion keeps the received report downloadable and shows a warn
   assert.equal(window.document.getElementById('send').disabled, false);
   await window.happyDOM.abort();
 });
+test('semantic review status is visible and retained in HTML and Markdown exports', () => {
+  const window = setup();
+  const reviewed = { ...message, quality: { status: 'answered', quoteVerification: true,
+    semanticReview: 'completed', promptVersion: 'reports-grounded-v2', modelCalls: 3 } };
+  assert(window.ReportsDownload.qualityLabel(reviewed.quality).includes('مراجعة دلالية آلية'));
+  assert(window.ReportsDownload.html(reviewed, 'السؤال').includes('مراجعة دلالية آلية'));
+  assert(window.ReportsDownload.markdown(reviewed, 'السؤال').includes('مراجعة دلالية آلية'));
+  const failed = { ...reviewed.quality, status: 'source_only', semanticReview: 'unavailable' };
+  assert(window.ReportsDownload.qualityLabel(failed).includes('لم تكتمل'));
+  assert.equal(window.ReportsDownload.qualityLabel(null), '');
+});
