@@ -71,6 +71,10 @@ public class ReportTests
     }
 
     [Fact]
+    public void ReportCellsPreserveLiteralComparisonAndMarkupCharacters() =>
+        Assert.Equal("1 < 2 <tag>\\|", ReportSupport.Cell("1 < 2 <tag>|"));
+
+    [Fact]
     public void ArabicFieldsNormalizeWithoutSubstringValueMatches()
     {
         var condition = ReportSupport.ParseCondition("ماهي الوثائق الموجود فيها إجراء الوثيقة يساوي تحت الاجراء؟")!;

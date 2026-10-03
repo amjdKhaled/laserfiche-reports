@@ -32,7 +32,7 @@ SYSTEM = """أنت محلل أدلة لتقارير Laserfiche المحلية. �
 الموضوع topic أحد: result, classification, status, date, decision, comparison, requirement, other.
 - كل quote اقتباس حرفي متصل من text في المرجع نفسه؛ لا تركب كلمات من مواضع مختلفة ولا تستخدم الحذف (...).
 - انقل الأسماء والأرقام والتواريخ كما هي تمامًا، بما فيها شكل الأرقام. لا تصحح OCR ولا تخمن الحروف الناقصة.
-- اختر حتى 16 مقتطفًا موجزًا مفيدًا (كل اقتباس من 2 إلى 1200 حرف). لا تكرر نفس المقتطف.
+- اختر حتى 16 مقتطفًا موجزًا مفيدًا (كل اقتباس من 2 إلى 1200 حرف). إجمالي نصوص الاقتباسات لا يتجاوز 4000 حرف. لا تكرر نفس المقتطف.
 - إذا لم تكف الأدلة للإجابة أعد insufficient. يجوز rows=[]؛ غياب المعلومة عن مقتطف لا يثبت غيابها عن الوثيقة.
 - عندما exhaustive=false لا تجب عن إجمالي المستودع أو جميع الوثائق أو نسبها من عينة البحث؛ أعد insufficient لطلبات الحصر والحساب غير المدعوم.
 - قارن فقط الوثائق المحددة في scope. لا تتحدث عن وثائق لا توجد في الأدلة. إذا غاب أحد طرفي المقارنة أعد insufficient.
@@ -51,6 +51,7 @@ SYSTEM = """أنت محلل أدلة لتقارير Laserfiche المحلية. �
 """
 MAX_EVIDENCE = 32
 MAX_CONTEXT_CHARACTERS = 28000
+MAX_QUOTATION_CHARACTERS = 4000
 
 
 def format_context(state: State) -> dict:
@@ -95,6 +96,7 @@ def parse_grounded_rows(content, context):
         raise ValueError("An answered report requires evidence rows.")
     excerpts = json.loads(context)
     seen, validated = set(), []
+    quotation_characters = 0
     for row in rows:
         if not isinstance(row, dict) or set(row) != {"topic", "reference", "quote"}:
             raise ValueError("Invalid result row schema.")
@@ -109,6 +111,9 @@ def parse_grounded_rows(content, context):
         if quote not in excerpts[reference - 1]["text"]:
             raise ValueError("Quotation is not present in the referenced excerpt.")
         if (reference, quote) not in seen:
+            quotation_characters += len(quote)
+            if quotation_characters > MAX_QUOTATION_CHARACTERS:
+                raise ValueError("Quotation output exceeds the report budget.")
             validated.append({**row, "quote": quote})
             seen.add((reference, quote))
     if payload["status"] == "conflicting" and len({row["reference"] for row in validated}) < 2:
@@ -117,7 +122,7 @@ def parse_grounded_rows(content, context):
 
 
 def cell(value):
-    return str(value).replace("<", "‹").replace(">", "›").replace("\\", "\\\\").replace("|", "\\|").replace("\n", " ").replace("\r", " ")
+    return str(value).replace("\\", "\\\\").replace("|", "\\|").replace("\n", " ").replace("\r", " ")
 
 
 def render_grounded_report(state, selected, fallback=False):

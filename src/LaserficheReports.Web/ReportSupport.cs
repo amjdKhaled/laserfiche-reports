@@ -73,8 +73,7 @@ internal static partial class ReportSupport
     internal static string Cell(string? value) => string.IsNullOrWhiteSpace(value) ? "غير مذكور" :
         value.Replace("\\", "\\\\", StringComparison.Ordinal)
             .Replace("|", "\\|", StringComparison.Ordinal)
-            .Replace("\r", " ", StringComparison.Ordinal).Replace("\n", " ", StringComparison.Ordinal)
-            .Replace("<", "‹", StringComparison.Ordinal).Replace(">", "›", StringComparison.Ordinal);
+            .Replace("\r", " ", StringComparison.Ordinal).Replace("\n", " ", StringComparison.Ordinal);
 
     internal static string SourceTable(IReadOnlyList<Evidence> evidence)
     {

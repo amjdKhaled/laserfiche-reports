@@ -137,6 +137,13 @@ class GraphTests(unittest.TestCase):
         self.assertFalse(check_case({"verified": False}, {"status": "insufficient"}))
         self.assertFalse(check_case({"verified": True, "selection": {"status": "answered", "rows": []}}, {"status": "insufficient"}))
 
+    def test_quote_budget_prevents_unbounded_model_output(self):
+        evidence = [{"entryId": i, "text": str(i) * 1200} for i in range(1, 5)]
+        context = format_context({"evidence": evidence})["context"]
+        payload = {"status": "answered", "rows": [{"topic": "other", "reference": i, "quote": str(i) * 1200} for i in range(1, 5)]}
+        with self.assertRaises(ValueError):
+            parse_grounded_rows(json.dumps(payload), context)
+
     def test_invalid_scope_page_and_empty_passages_are_rejected(self):
         for payload in (
             {"question": "سؤال", "evidence": [{"entryId": 1, "text": " "}]},

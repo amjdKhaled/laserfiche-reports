@@ -7,8 +7,9 @@
   }
   function markdown(message, question) {
     const sources = message.sources || [];
-    return `# Laserfiche Reports\n\nالسؤال: ${question || 'غير مسجل'}\n\nتاريخ إعداد الإجابة (UTC): ${timestamp(message)}\n\nنطاق التقرير: ${message.scope?.detail || 'غير مسجل؛ راجع المصادر وحدود الإجابة.'}\n\n${message.text || ''}\n\n## نصوص المصادر الأصلية\n\n` + sources.map((source, i) =>
-      `[${i + 1}] رقم الوثيقة: ${source.entryId}\nاسم الوثيقة: ${source.documentName || 'غير مذكور'}\nالمسار: ${source.path || 'غير مذكور'}\nالصفحة: ${source.pageNumber ?? 'غير مذكورة'}\nنوع المصدر: ${source.textSource || 'غير مذكور'}\n\n${source.text || ''}`).join('\n\n---\n\n');
+    const safe = value => String(value ?? '').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/!\[/g, '!\\[');
+    return `# Laserfiche Reports\n\nالسؤال: ${safe(question || 'غير مسجل')}\n\nتاريخ إعداد الإجابة (UTC): ${timestamp(message)}\n\nنطاق التقرير: ${safe(message.scope?.detail || 'غير مسجل؛ راجع المصادر وحدود الإجابة.')}\n\n${safe(message.text || '')}\n\n## نصوص المصادر الأصلية\n\n` + sources.map((source, i) =>
+      `[${i + 1}] رقم الوثيقة: ${source.entryId}\nاسم الوثيقة: ${source.documentName || 'غير مذكور'}\nالمسار: ${source.path || 'غير مذكور'}\nالصفحة: ${source.pageNumber ?? 'غير مذكورة'}\nنوع المصدر: ${source.textSource || 'غير مذكور'}\n\n${String(source.text || '').split('\n').map(line => '    ' + line).join('\n')}`).join('\n\n---\n\n');
   }
   function html(message, question) {
     const sources = message.sources || [];
