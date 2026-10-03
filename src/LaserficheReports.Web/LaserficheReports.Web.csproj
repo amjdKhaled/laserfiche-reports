@@ -8,5 +8,8 @@
     <ProjectReference Include="..\LaserficheReports.Application\LaserficheReports.Application.csproj" />
     <ProjectReference Include="..\LaserficheReports.Infrastructure\LaserficheReports.Infrastructure.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="LaserficheReports.Web.Tests" />
+  </ItemGroup>
 </Project>
 

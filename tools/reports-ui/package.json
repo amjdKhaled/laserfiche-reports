@@ -1,0 +1,7 @@
+{
+  "name": "laserfiche-reports-ui-tests",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "node --test report.test.mjs" },
+  "devDependencies": { "happy-dom": "20.14.5" }
+}

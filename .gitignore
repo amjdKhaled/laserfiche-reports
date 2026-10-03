@@ -14,3 +14,5 @@ appsettings.Local.json
 
 # Private OCR evaluation inputs and outputs
 ocr-evaluation/
+
+**/node_modules/
