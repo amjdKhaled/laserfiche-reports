@@ -100,18 +100,25 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
             report.AppendLine(condition is null ? $"عدد الوثائق المدرجة: **{matches.Count}**."
                 : $"عدد الوثائق المطابقة: **{matches.Count}**. القيمة المطلوبة: **{ReportSupport.Cell(condition.ExpectedValue)}**.");
         report.AppendLine($"\n{detail}\n");
-        report.AppendLine("## النتائج\n\n| رقم الوثيقة | اسم الوثيقة | الحقل | القيمة | المسار | المرجع |\n| --- | --- | --- | --- | --- | --- |");
+        report.AppendLine("## النتائج\n");
+        report.AppendLine(condition is null
+            ? "| رقم الوثيقة | اسم الوثيقة | المسار | المرجع |\n| --- | --- | --- | --- |"
+            : "| رقم الوثيقة | اسم الوثيقة | الحقل | القيمة | المسار | المرجع |\n| --- | --- | --- | --- | --- | --- |");
         var evidence = new List<Evidence>();
         for (var i = 0; i < matches.Count; i++)
         {
             var (entry, field) = matches[i];
             var path = string.IsNullOrWhiteSpace(entry.FullPath) ? documents[entry.Id].FullPath : entry.FullPath;
-            report.AppendLine($"| {entry.Id} | {ReportSupport.Cell(entry.Name)} | {ReportSupport.Cell(field?.FieldName)} | {ReportSupport.Cell(field?.Value)} | {ReportSupport.Cell(path)} | [{i + 1}] |");
+            report.AppendLine(condition is null
+                ? $"| {entry.Id} | {ReportSupport.Cell(entry.Name)} | {ReportSupport.Cell(path)} | [{i + 1}] |"
+                : $"| {entry.Id} | {ReportSupport.Cell(entry.Name)} | {ReportSupport.Cell(field?.FieldName)} | {ReportSupport.Cell(field?.Value)} | {ReportSupport.Cell(path)} | [{i + 1}] |");
             evidence.Add(new Evidence(entry.Id, entry.Name, path, null, 1,
                 $"اسم الوثيقة: {entry.Name}\nالمسار: {path}\n" +
                 (field is null ? "نوع الإدخال: وثيقة" : $"{field.FieldName}: {field.Value}"), "laserfiche-metadata-live"));
         }
-        if (matches.Count == 0) report.AppendLine("| — | لا توجد نتائج مؤكدة | — | — | — | — |");
+        if (matches.Count == 0) report.AppendLine(condition is null
+            ? "| — | لا توجد نتائج مؤكدة | — | — |"
+            : "| — | لا توجد نتائج مؤكدة | — | — | — | — |");
         report.AppendLine("\n## ملاحظات\n\nالنتائج مبنية على حقول المستودع وقت الفحص؛ لا تعتمد على OCR أو التخمين اللغوي.");
         if (!complete) report.AppendLine("الفحص غير مكتمل؛ الأعداد المذكورة تخص الوثائق المفحوصة فقط.");
         return new ChatResult(report.ToString().Trim(), evidence, scope);

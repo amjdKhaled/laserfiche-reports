@@ -56,6 +56,8 @@ public class ReportTests
         Assert.Equal(73, result.Sources.Count);
         Assert.True(result.Scope!.Exhaustive);
         Assert.Equal(0, entries.FieldCalls.Count);
+        Assert.DoesNotContain("| الحقل |", result.Answer);
+        Assert.Contains("| 73 | وثيقة 73 |", result.Answer);
     }
 
     [Fact]
