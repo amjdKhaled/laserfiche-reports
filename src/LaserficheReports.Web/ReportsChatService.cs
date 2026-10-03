@@ -164,8 +164,11 @@ internal sealed class ReportsChatService(
             return new ChatResult("# تقرير البحث\n\nلم أجد أدلة مفهرسة كافية للإجابة. تأكد من فهرسة محتوى الوثائق المطلوبة.\n\n" + scope.Detail, evidence, scope);
 
         var client = clients.CreateClient("ReportsGraph");
-        using var response = await client.PostAsJsonAsync("answer",
-            new { question = question.Trim(), evidence, scope }, cancellationToken);
+        // ByteArrayContent advertises the actual UTF-8 length for Python HTTP framing.
+        using var body = new ByteArrayContent(JsonSerializer.SerializeToUtf8Bytes(
+            new { question = question.Trim(), evidence, scope }, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+        body.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json") { CharSet = "utf-8" };
+        using var response = await client.PostAsync("answer", body, cancellationToken);
         if (!response.IsSuccessStatusCode)
             throw new InvalidOperationException(
                 $"Local LangGraph returned HTTP {(int)response.StatusCode}. Check the LangGraph terminal and Ollama model.");

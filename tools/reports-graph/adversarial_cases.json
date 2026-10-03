@@ -245,6 +245,9 @@
       ],
       "quotationContains": [
         "مرفوض"
+      ],
+      "allowedReferences": [
+        2
       ]
     }
   },
@@ -387,6 +390,310 @@
       ],
       "quotationContains": [
         "وثائق التشغيل والصيانة"
+      ]
+    }
+  },
+  {
+    "name": "negative-approval",
+    "question": "هل تمت الموافقة على الطلب؟",
+    "evidence": [
+      {
+        "entryId": 618,
+        "documentName": "اختبار 1",
+        "pageNumber": 1,
+        "text": "لم تتم الموافقة على الطلب.",
+        "textSource": "native"
+      }
+    ],
+    "scope": {
+      "mode": "repository",
+      "exhaustive": false,
+      "requestedEntryIds": [],
+      "detail": "مقاطع اختبار مصطنعة؛ ليست حصرًا."
+    },
+    "expected": {
+      "status": "answered",
+      "quotationContains": [
+        "لم تتم الموافقة"
+      ]
+    }
+  },
+  {
+    "name": "conditional-payment",
+    "question": "ما شرط صرف المبلغ؟",
+    "evidence": [
+      {
+        "entryId": 618,
+        "documentName": "اختبار 1",
+        "pageNumber": 1,
+        "text": "يُصرف مبلغ ٥٠٠ ريال بعد توقيع المدير.",
+        "textSource": "native"
+      }
+    ],
+    "scope": {
+      "mode": "repository",
+      "exhaustive": false,
+      "requestedEntryIds": [],
+      "detail": "مقاطع اختبار مصطنعة؛ ليست حصرًا."
+    },
+    "expected": {
+      "status": "answered",
+      "quotationContains": [
+        "٥٠٠ ريال",
+        "بعد توقيع المدير"
+      ]
+    }
+  },
+  {
+    "name": "proposal-not-execution",
+    "question": "هل تم صرف المبلغ بالفعل؟",
+    "evidence": [
+      {
+        "entryId": 618,
+        "documentName": "اختبار 1",
+        "pageNumber": 1,
+        "text": "اقتراح: صرف مبلغ ٥٠٠ ريال بعد الموافقة.",
+        "textSource": "native"
+      }
+    ],
+    "scope": {
+      "mode": "repository",
+      "exhaustive": false,
+      "requestedEntryIds": [],
+      "detail": "مقاطع اختبار مصطنعة؛ ليست حصرًا."
+    },
+    "expected": {
+      "status": "insufficient"
+    }
+  },
+  {
+    "name": "draft-not-final",
+    "question": "هل صدر القرار النهائي بالموافقة؟",
+    "evidence": [
+      {
+        "entryId": 618,
+        "documentName": "اختبار 1",
+        "pageNumber": 1,
+        "text": "مسودة قرار: الموافقة على الطلب؛ لم تعتمد المسودة.",
+        "textSource": "native"
+      }
+    ],
+    "scope": {
+      "mode": "repository",
+      "exhaustive": false,
+      "requestedEntryIds": [],
+      "detail": "مقاطع اختبار مصطنعة؛ ليست حصرًا."
+    },
+    "expected": {
+      "status": "insufficient"
+    }
+  },
+  {
+    "name": "same-page-conflict",
+    "question": "ما الموعد؟ الصفحة تذكر موعدي تسليم متعارضين لنفس الطلب.",
+    "evidence": [
+      {
+        "entryId": 618,
+        "documentName": "اختبار 1",
+        "pageNumber": 1,
+        "text": "موعد تسليم الطلب ١: 2026-10-03. موعد تسليم الطلب ١: 2026-10-04.",
+        "textSource": "native"
+      }
+    ],
+    "scope": {
+      "mode": "repository",
+      "exhaustive": false,
+      "requestedEntryIds": [],
+      "detail": "مقاطع اختبار مصطنعة؛ ليست حصرًا."
+    },
+    "expected": {
+      "status": "conflicting",
+      "quotationContains": [
+        "2026-10-03",
+        "2026-10-04"
+      ]
+    }
+  },
+  {
+    "name": "different-projects-not-conflict",
+    "question": "اعرض موعد التسليم لكل مشروع.",
+    "evidence": [
+      {
+        "entryId": 618,
+        "documentName": "اختبار 1",
+        "pageNumber": 1,
+        "text": "مشروع أ: موعد التسليم 2026-10-03.",
+        "textSource": "native"
+      },
+      {
+        "entryId": 619,
+        "documentName": "اختبار 2",
+        "pageNumber": 1,
+        "text": "مشروع ب: موعد التسليم 2026-10-04.",
+        "textSource": "native"
+      }
+    ],
+    "scope": {
+      "mode": "repository",
+      "exhaustive": false,
+      "requestedEntryIds": [],
+      "detail": "مقاطع اختبار مصطنعة؛ ليست حصرًا."
+    },
+    "expected": {
+      "status": "answered",
+      "requiredReferences": [
+        1,
+        2
+      ]
+    }
+  },
+  {
+    "name": "incomplete-table-header",
+    "question": "ما موعد التسليم في هذا الجدول؟",
+    "evidence": [
+      {
+        "entryId": 618,
+        "documentName": "اختبار 1",
+        "pageNumber": 1,
+        "text": "الجهة | ٢٠٢٦\nالإدارة | ٥٠٠",
+        "textSource": "native"
+      }
+    ],
+    "scope": {
+      "mode": "repository",
+      "exhaustive": false,
+      "requestedEntryIds": [],
+      "detail": "مقاطع اختبار مصطنعة؛ ليست حصرًا."
+    },
+    "expected": {
+      "status": "insufficient"
+    }
+  },
+  {
+    "name": "currency-and-unit",
+    "question": "ما المبلغ والعملة المسجلان؟",
+    "evidence": [
+      {
+        "entryId": 618,
+        "documentName": "اختبار 1",
+        "pageNumber": 1,
+        "text": "قيمة العقد: ١٢٬٥٠٠ ريال سعودي شامل الضريبة.",
+        "textSource": "native"
+      }
+    ],
+    "scope": {
+      "mode": "repository",
+      "exhaustive": false,
+      "requestedEntryIds": [],
+      "detail": "مقاطع اختبار مصطنعة؛ ليست حصرًا."
+    },
+    "expected": {
+      "status": "answered",
+      "quotationContains": [
+        "١٢٬٥٠٠ ريال سعودي",
+        "شامل الضريبة"
+      ]
+    }
+  },
+  {
+    "name": "no-workflow-execution-proof",
+    "question": "هل نفذ Workflow الرفض بالفعل؟",
+    "evidence": [
+      {
+        "entryId": 618,
+        "documentName": "اختبار 1",
+        "pageNumber": 1,
+        "text": "إجراء الوثيقة: مرفوض",
+        "textSource": "laserfiche-metadata"
+      }
+    ],
+    "scope": {
+      "mode": "repository",
+      "exhaustive": false,
+      "requestedEntryIds": [],
+      "detail": "مقاطع اختبار مصطنعة؛ ليست حصرًا."
+    },
+    "expected": {
+      "status": "insufficient"
+    }
+  },
+  {
+    "name": "name-is-not-page-evidence",
+    "question": "هل تثبت عبارة اسم الوثيقة اعتماد الميزانية؟",
+    "evidence": [
+      {
+        "entryId": 618,
+        "documentName": "اختبار 1",
+        "pageNumber": 1,
+        "text": "اسم الوثيقة: الميزانية المعتمدة. لا توجد صفحات مفهرسة.",
+        "textSource": "laserfiche-metadata"
+      }
+    ],
+    "scope": {
+      "mode": "repository",
+      "exhaustive": false,
+      "requestedEntryIds": [],
+      "detail": "مقاطع اختبار مصطنعة؛ ليست حصرًا."
+    },
+    "expected": {
+      "status": "insufficient"
+    }
+  },
+  {
+    "name": "partial-multipart-answer",
+    "question": "ما الموعد والمبلغ والجهة المعتمدة؟",
+    "evidence": [
+      {
+        "entryId": 618,
+        "documentName": "اختبار 1",
+        "pageNumber": 1,
+        "text": "موعد التسليم: 2026-10-03.",
+        "textSource": "native"
+      }
+    ],
+    "scope": {
+      "mode": "repository",
+      "exhaustive": false,
+      "requestedEntryIds": [],
+      "detail": "مقاطع اختبار مصطنعة؛ ليست حصرًا."
+    },
+    "expected": {
+      "status": "insufficient"
+    }
+  },
+  {
+    "name": "two-documents-comparison",
+    "question": "قارن موعد التسليم في الوثيقتين 618 و619",
+    "evidence": [
+      {
+        "entryId": 618,
+        "documentName": "اختبار 1",
+        "pageNumber": 1,
+        "text": "موعد التسليم: 2026-10-03.",
+        "textSource": "native"
+      },
+      {
+        "entryId": 619,
+        "documentName": "اختبار 2",
+        "pageNumber": 1,
+        "text": "موعد التسليم: 2026-10-04.",
+        "textSource": "native"
+      }
+    ],
+    "scope": {
+      "mode": "selected-documents",
+      "exhaustive": false,
+      "requestedEntryIds": [
+        618,
+        619
+      ],
+      "detail": "مقاطع اختبار مصطنعة؛ ليست حصرًا."
+    },
+    "expected": {
+      "status": "answered",
+      "requiredReferences": [
+        1,
+        2
       ]
     }
   }

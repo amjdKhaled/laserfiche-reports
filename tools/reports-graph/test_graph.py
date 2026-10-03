@@ -129,7 +129,7 @@ class GraphTests(unittest.TestCase):
 
     def test_synthetic_quality_corpus_is_valid_and_separate_from_mock_tests(self):
         cases = json.loads(Path(__file__).with_name("adversarial_cases.json").read_text(encoding="utf-8"))
-        self.assertEqual(len(cases), 16)
+        self.assertGreaterEqual(len(cases), 28)
         for case in cases:
             with self.subTest(case=case["name"]):
                 validate_request({key: case[key] for key in ("question", "evidence", "scope")})
@@ -152,6 +152,28 @@ class GraphTests(unittest.TestCase):
             {"question": "سؤال", "evidence": [], "scope": {"requestedEntryIds": [False]}}):
             with self.assertRaises(ValueError):
                 validate_request(payload)
+
+    def test_conflicting_values_in_one_page_are_allowed_but_duplicate_is_not(self):
+        context = format_context({"evidence": [{"entryId": 1, "text": "التسليم: ٣ أكتوبر. التسليم: ٤ أكتوبر."}]})["context"]
+        payload = {"status": "conflicting", "rows": [
+            {"topic": "date", "reference": 1, "quote": "التسليم: ٣ أكتوبر"},
+            {"topic": "date", "reference": 1, "quote": "التسليم: ٤ أكتوبر"}]}
+        self.assertEqual(len(parse_grounded_rows(json.dumps(payload), context)["rows"]), 2)
+        payload["rows"][1] = payload["rows"][0]
+        with self.assertRaises(ValueError):
+            parse_grounded_rows(json.dumps(payload), context)
+
+    def test_comparison_requires_selected_evidence_from_each_requested_document(self):
+        answer = json.dumps({"status": "answered", "rows": [{"topic": "date", "reference": 1, "quote": "موعد أول"}]})
+        result = build_graph(FakeModel([answer])).invoke({"question": "قارن الوثيقتين 1 و2", "scope": {"requestedEntryIds": [1, 2]},
+            "evidence": [{"entryId": 1, "text": "موعد أول"}, {"entryId": 2, "text": "موعد ثان"}]})
+        self.assertEqual(result["selection"]["status"], "insufficient")
+
+    def test_quote_outside_requested_scope_is_rejected(self):
+        answer = json.dumps({"status": "answered", "rows": [{"topic": "other", "reference": 2, "quote": "معلومة أخرى"}]})
+        result = build_graph(FakeModel([answer, answer])).invoke({"question": "الوثيقة 1", "scope": {"requestedEntryIds": [1]},
+            "evidence": [{"entryId": 1, "text": "معلومة أولى"}, {"entryId": 2, "text": "معلومة أخرى"}]})
+        self.assertFalse(result["verified"])
 
     def test_discovery_walks_all_folders_and_deduplicates_documents(self):
         class Opener:

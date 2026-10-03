@@ -25,7 +25,7 @@ internal static partial class ReportSupport
     internal static FieldCondition? ParseCondition(string question)
     {
         var matches = EqualityRegex().Matches(question);
-        if (matches.Count != 1) return null;
+        if (matches.Count != 1 || NeedsFilterClarification(question)) return null;
         var comparison = matches[0];
         var left = question[..comparison.Index].Trim();
         var value = question[(comparison.Index + comparison.Length)..].Trim()
@@ -39,6 +39,7 @@ internal static partial class ReportSupport
 
     internal static bool NeedsFilterClarification(string question) =>
         EqualityRegex().Matches(question).Count > 1 ||
+        UnsupportedComparisonRegex().IsMatch(question) ||
         (EqualityRegex().IsMatch(question) && CompoundFilterRegex().IsMatch(question));
 
     // Ignore harmless Arabic hamza/diacritic/whitespace differences for matching
@@ -110,7 +111,7 @@ internal static partial class ReportSupport
         return digit >= 0 ? (char)('0' + digit) : c;
     }));
 
-    [GeneratedRegex(@"(?:الوثائق|وثائق|المستندات|مستندات|وثيق[ةه]|مستند|documents?|entries|entry|#)\s*(?:(?:رقم|ارقام|أرقام|number|numbers|IDs?)\s*)?[#:]?\s*([0-9]+(?:\s*(?:[,،]|و|and)\s*[0-9]+)*)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"(?:الوثيقتين|وثيقتين|الوثائق|وثائق|المستندين|مستندين|المستندات|مستندات|وثيق[ةه]|مستند|\bdocuments?\b|\bentries\b|\bentry\b|\bIDs?\b|#)\s*(?:(?:رقم|ارقام|أرقام|number|numbers|IDs?)\s*)?[#:]?\s*([0-9]+(?:\s*(?:[,،]|و|and)\s*[0-9]+)*)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex EntryGroupRegex();
     [GeneratedRegex(@"\s*(?:يساوي|تساوي|قيمته|قيمتها|equals|=)\s*", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex EqualityRegex();
@@ -118,4 +119,6 @@ internal static partial class ReportSupport
     private static partial Regex InventoryRegex();
     [GeneratedRegex(@"(?:\s+(?:و|أو|او|and|or)\s+[^؟?]*?(?:الحقل|حقل|التصنيف|موعد|تاريخ|اجراء|إجراء)|(?:>=|<=|!=|≠)|(?:أكبر من|اصغر من|أصغر من|اقل من|أقل من|قبل تاريخ|بعد تاريخ))", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex CompoundFilterRegex();
+    [GeneratedRegex(@"(?:\b(?:not\s+equal(?:s)?|does\s+not\s+equal|unequal)\b|(?:لا|ليس|ليست|غير)\s+(?:يساوي|تساوي|مساوي[ةه]?|مساو[ٍي])|(?:>=|<=|!=|≠)|(?:أكبر من|اصغر من|أصغر من|اقل من|أقل من|قبل تاريخ|بعد تاريخ))", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex UnsupportedComparisonRegex();
 }

@@ -14,6 +14,10 @@ public class ReportTests
     [Theory]
     [InlineData("قارن الوثائق ٦١٨، 609 و 610", new[] { 618, 609, 610 })]
     [InlineData("اعرض الوثيقة 618", new[] { 618 })]
+    [InlineData("قارن الوثيقتين ٦١٨ و٦٠٩", new[] { 618, 609 })]
+    [InlineData("اعرض ID ٦١٨ و 609", new[] { 618, 609 })]
+    [InlineData("قارن document 618 and document 609", new[] { 618, 609 })]
+    [InlineData("رقم الهوية 123456 وتاريخ 2026", new int[0])]
     [InlineData("قرارات بتاريخ 2026/09/09", new int[0])]
     public void OnlyExplicitDocumentIdsNarrowSearch(string question, int[] expected) =>
         Assert.Equal(expected, ReportSupport.RequestedEntries(question));
@@ -42,8 +46,17 @@ public class ReportTests
     [Theory]
     [InlineData("إجراء الوثيقة يساوي تحت الاجراء و التصنيف يساوي إداري")]
     [InlineData("الحالة = مقبول and موعد التسليم قبل تاريخ 2026/10/03")]
+    [InlineData("إجراء الوثيقة لا يساوي تحت الاجراء")]
+    [InlineData("الحالة not equals مقبول")]
+    [InlineData("الحالة != مقبول")]
     public void UnsupportedCompoundFiltersRequireClarification(string question) =>
         Assert.True(ReportSupport.NeedsFilterClarification(question));
+
+    [Theory]
+    [InlineData("إجراء الوثيقة لا يساوي تحت الاجراء")]
+    [InlineData("الحالة != مقبول")]
+    public void NegatedFiltersCannotBecomePositiveMatches(string question) =>
+        Assert.Null(ReportSupport.ParseCondition(question));
 
     [Fact]
     public async Task ScreenshotInventoryQuestionDoesNotDependOnVectorDatabaseOrModel()

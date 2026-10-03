@@ -8,7 +8,11 @@ let pauseScan = false;
 let scanKey = '';
 let documentsPage = 1;
 let hasMoreDocuments = false;
-const save = () => localStorage.setItem(storeKey, JSON.stringify(chats.slice(0, 30)));
+let historySaved = true;
+function save() {
+  try { localStorage.setItem(storeKey, JSON.stringify(chats.slice(0, 30))); historySaved = true; }
+  catch { historySaved = false; }
+}
 function el(tag, className, value) {
   const node = document.createElement(tag);
   if (className) node.className = className;
@@ -29,6 +33,7 @@ async function api(url, options) {
   return body;
 }
 function openSession(username) {
+  historySaved = true;
   storeKey = `laserfiche-reports-chat-v1:${username.toLowerCase()}`;
   scanKey = `laserfiche-reports-scan-v1:${username.toLowerCase()}`;
   try { chats = JSON.parse(localStorage.getItem(storeKey) || '[]'); }
@@ -152,6 +157,10 @@ function renderMessages() {
       container.append(item);
     });
   }
+  if (!historySaved) {
+    const warning = el('p', 'report-scope', 'تعذر حفظ المحادثة في المتصفح. التقرير متاح الآن؛ حمّله قبل إغلاق الصفحة.');
+    warning.setAttribute('role', 'status'); container.append(warning);
+  }
   container.scrollTop = container.scrollHeight;
 }
 function showTab(tab) {
@@ -166,6 +175,7 @@ $('tab-docs').onclick = () => showTab('docs');
 $('new-chat').onclick = () => { active = null; renderHistory(); renderMessages(); showTab('chat'); };
 $('ask-form').onsubmit = async event => {
   event.preventDefault();
+  if ($('send').disabled) return;
   const question = $('question').value.trim();
   if (!question) return;
   if (!active) {

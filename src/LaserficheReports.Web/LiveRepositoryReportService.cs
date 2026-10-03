@@ -23,6 +23,7 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
                 {
                     var entry = await entries.GetEntryAsync(id, cancellationToken);
                     if (entry.EntryType == LFEntryType.Document) documents.TryAdd(id, entry);
+                    else skipped++;
                 }
                 catch (LaserficheException ex) when (ex.StatusCode is 403 or 404) { skipped++; }
             }
@@ -62,7 +63,7 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
             {
                 // Recheck access even if the folder enumeration returned a cached row.
                 var entry = await entries.GetEntryAsync(candidate.Id, cancellationToken);
-                if (entry.EntryType != LFEntryType.Document) continue;
+                if (entry.EntryType != LFEntryType.Document) { skipped++; continue; }
                 if (condition is null) { inspected++; matches.Add((entry, null)); continue; }
                 var fields = await entries.GetEntryFieldsAsync(entry.Id, cancellationToken);
                 inspected++;

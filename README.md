@@ -383,21 +383,34 @@ Reference: [Supabase self-hosted Postgres connections](https://supabase.com/docs
 
 ## Report quality and adversarial evaluation
 
-`tools/reports-graph/adversarial_cases.json` contains 16 synthetic questions for
+`tools/reports-graph/adversarial_cases.json` contains 28 synthetic questions for
 missing dates, missing comparison documents, repository counts/percentages from a
 sample, instructions injected into questions/documents, OCR name guessing, Arabic
 digit fidelity, conflicting dates, metadata vs OCR, Hijri conversion, compliance
 claims, English answers and ambiguous ranking. These are deliberately separate
 from mock-based regression tests: only running the local model measures its behavior.
+The additional cases cover negated approvals, conditional payments, drafts versus
+final decisions, conflicting values on one page, unrelated project dates, missing
+table headings, currency/units, workflow execution, filenames versus page content,
+incomplete multipart answers and comparisons across both requested documents.
 
 ```powershell
 .\tools\reports-graph\.venv\Scripts\python.exe .\tools\reports-graph\evaluate.py --model qwen2.5:7b
 ```
 
-The evaluator verifies expected status, required references and quotation contents;
+The evaluator verifies expected status, required/allowed references and quotation contents;
 it exits nonzero for an unverified fallback or failed case. Even passing this
 synthetic corpus does not certify production answers. Review real documents and
 question relevance, especially when OCR is degraded.
+
+The extraction prompt preserves negation, exceptions, conditions and units, and
+does not treat indexed fields as a live read. The validator also requires evidence
+from every explicitly requested document before marking a comparison answered.
+HTTP requests support both fixed-length UTF-8 and bounded chunked framing, avoiding
+a false `413` when .NET sends a streamed request. Unsupported negative field filters
+require clarification rather than silently becoming positive equality filters.
+If browser history storage is full, the report remains visible and downloadable;
+a message asks you to download it before closing the page.
 
 UI/HTML export regression tests (development only; no production dependency):
 

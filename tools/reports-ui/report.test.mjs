@@ -79,3 +79,22 @@ test('chat saves report time/scope and displays download for a valid empty resul
   assert.equal(saved[0].messages[1].scope.detail, message.scope.detail);
   await window.happyDOM.abort();
 });
+test('storage exhaustion keeps the received report downloadable and shows a warning', async () => {
+  const window = setup();
+  window.document.write(readFileSync(root + 'index.html', 'utf8').replace(/<script[^>]*>[\s\S]*?<\/script>/g, ''));
+  window.fetch = async url => ({ ok: true, status: 200, json: async () => url === '/api/session/status'
+    ? { authenticated: true, username: 'tester' } : { answer: message.text, ...message } });
+  Object.defineProperty(window, 'localStorage', { value: {
+    getItem: () => null, removeItem: () => {},
+    setItem: () => { throw new Error('QuotaExceededError'); }
+  } });
+  window.eval(readFileSync(root + 'app.js', 'utf8'));
+  await new Promise(resolve => setTimeout(resolve, 20));
+  window.document.getElementById('question').value = 'اعرض الوثائق';
+  window.document.getElementById('ask-form').dispatchEvent(new window.Event('submit', { cancelable: true }));
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert(window.document.querySelector('#messages [role="status"]').textContent.includes('حمّله'));
+  assert([...window.document.querySelectorAll('.report-actions button')].some(node => node.textContent === 'تحميل التقرير'));
+  assert.equal(window.document.getElementById('send').disabled, false);
+  await window.happyDOM.abort();
+});
