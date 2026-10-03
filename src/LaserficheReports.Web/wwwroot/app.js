@@ -81,9 +81,9 @@ function renderMessages() {
   const chat = chats.find(c => c.id === active);
   if (!chat || !chat.messages.length) {
     const welcome = el('div', 'welcome');
-    welcome.innerHTML = '<div class="welcome-icon">✦</div><h2>ما الذي تريد معرفته؟</h2><p>ابحث في محتوى الوثائق المفهرسة، وستظهر مصادر كل إجابة أسفلها.</p>';
+    welcome.innerHTML = '<div class="welcome-icon">✦</div><h2>ما التقرير الذي تريد إعداده؟</h2><p>اسأل عن المستودع أو حدد رقم وثيقة. تظهر النتائج كتقرير وجداول مع مصادرها.</p>';
     const suggestions = el('div', 'suggestions');
-    for (const question of ['ما الوثائق المتعلقة بالتشغيل والصيانة؟', 'ما مواعيد التسليم المذكورة في حقول الوثائق؟', 'لخص أهم النقاط في الوثائق المفهرسة']) {
+    for (const question of ['ماهي الوثائق الموجود فيها إجراء الوثيقة يساوي تحت الاجراء', 'اعرض جميع الوثائق في المستودع', 'لخص أهم النقاط في الوثيقة 618 كتقرير']) {
       const button = el('button', '', question);
       button.onclick = () => { $('question').value = question; $('question').focus(); };
       suggestions.append(button);
@@ -91,15 +91,50 @@ function renderMessages() {
     welcome.append(suggestions);
     container.append(welcome);
   } else {
-    chat.messages.forEach(message => {
+    chat.messages.forEach((message, messageIndex) => {
       const item = el('div', `message ${message.role}`);
       item.append(el('div', 'label', message.role === 'user' ? 'أنت' : 'Laserfiche Reports'));
-      item.append(el('div', 'bubble', message.text));
+      const sourcePrefix = `source-${chat.id}-${messageIndex}`;
+      const bubble = el('div', 'bubble');
+      if (message.role === 'assistant') {
+        bubble.append(ReportsMarkdown.render(message.text || '', message.sources?.length || 0, sourcePrefix));
+        if (message.scope) {
+          const scope = el('div', 'report-scope', message.scope.detail);
+          scope.setAttribute('role', 'note'); bubble.prepend(scope);
+        }
+        if (message.generatedAt || message.sources?.length) {
+          const actions = el('div', 'report-actions');
+          const copy = el('button', '', 'نسخ التقرير'); copy.type = 'button';
+          copy.onclick = async () => {
+            try { await navigator.clipboard.writeText(message.text); copy.textContent = 'تم النسخ'; }
+            catch { copy.textContent = 'تعذر النسخ'; }
+          };
+          const print = el('button', '', 'طباعة التقرير'); print.type = 'button';
+          print.onclick = () => {
+            document.querySelectorAll('.print-report').forEach(node => node.classList.remove('print-report'));
+            item.classList.add('print-report'); window.print();
+          };
+          const format = el('select', 'report-format');
+          format.setAttribute('aria-label', 'صيغة تحميل التقرير');
+          for (const [value, label] of [['html', 'تقرير HTML'], ['md', 'نص Markdown']]) {
+            const option = el('option', '', label); option.value = value; format.append(option);
+          }
+          const download = el('button', '', 'تحميل التقرير'); download.type = 'button';
+          download.onclick = () => {
+            const question = chat.messages.slice(0, messageIndex).reverse().find(previous => previous.role === 'user')?.text;
+            try { ReportsDownload.download(message, question, format.value); }
+            catch { download.textContent = 'تعذر التحميل'; }
+          };
+          actions.append(download, format, copy, print); bubble.append(actions);
+        }
+      } else bubble.textContent = message.text;
+      item.append(bubble);
       if (message.sources?.length) {
         const sources = el('div', 'sources');
         message.sources.forEach((source, index) => {
-          const isMetadata = source.textSource === 'laserfiche-metadata';
+          const isMetadata = source.textSource?.startsWith('laserfiche-metadata');
           const card = el('details', 'source');
+          card.id = `${sourcePrefix}-${index + 1}`;
           card.append(el('summary', '',
             `[${index + 1}] ${source.documentName || 'وثيقة'} · ${isMetadata ? 'بيانات Laserfiche' : `صفحة ${source.pageNumber || '—'}`}`));
           card.append(el('small', 'source-path', source.path || `Entry ${source.entryId}`));
@@ -145,7 +180,7 @@ $('ask-form').onsubmit = async event => {
   renderHistory(); renderMessages();
   try {
     const result = await api('/api/reports/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question }) });
-    chat.messages[chat.messages.length - 1] = { role: 'assistant', text: result.answer, sources: result.sources };
+    chat.messages[chat.messages.length - 1] = { role: 'assistant', text: result.answer, sources: result.sources, scope: result.scope, generatedAt: result.generatedAt };
   } catch (error) {
     chat.messages[chat.messages.length - 1] = { role: 'assistant', text: `تعذر إكمال السؤال: ${error.message}` };
   } finally { $('send').disabled = false; save(); renderMessages(); }
