@@ -54,6 +54,7 @@ builder.Services.AddSession(options =>
 });
 builder.Services.AddLaserficheInfrastructure(builder.Configuration);
 builder.Services.AddScoped<ReportsChatService>();
+builder.Services.AddScoped<LiveRepositoryReportService>();
 builder.Services.AddHttpClient("ReportsGraph", client =>
 {
     var baseUrl = builder.Configuration["ReportsGraph:BaseUrl"] ?? "http://127.0.0.1:8766";

@@ -1,6 +1,5 @@
 using System.Net.Http.Json;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using LaserficheReports.Application.Interfaces;
 using LaserficheReports.Domain.Entities;
 using LaserficheReports.Domain.Exceptions;
@@ -10,7 +9,7 @@ namespace LaserficheReports.Web;
 
 internal sealed record Evidence(int EntryId, string DocumentName, string Path, int? PageNumber,
     float Similarity, string Text, string TextSource);
-internal sealed record ChatResult(string Answer, IReadOnlyList<Evidence> Sources);
+internal sealed record ChatResult(string Answer, IReadOnlyList<Evidence> Sources, AnswerScope? Scope = null);
 internal sealed record IndexedDocument(int EntryId, string Name, string Path, string Status,
     int ChunkCount, string? TextSource);
 internal sealed record IndexedDocumentPage(IReadOnlyList<IndexedDocument> Items, int Page, bool HasMore);
@@ -21,7 +20,8 @@ internal sealed class ReportsChatService(
     ITextEmbeddingService embeddings,
     IRepositoryContext repositories,
     ILaserficheEntryService entries,
-    IHttpClientFactory clients)
+    IHttpClientFactory clients,
+    LiveRepositoryReportService liveReports)
 {
     private string ConnectionString => configuration["Supabase:PostgresConnectionString"]
         ?? throw new InvalidOperationException("Supabase:PostgresConnectionString is missing.");
@@ -77,10 +77,15 @@ internal sealed class ReportsChatService(
             throw new ArgumentException("Question must contain 1 to 2000 characters.", nameof(question));
 
         var repository = await repositories.GetActiveRepositoryAsync(cancellationToken);
-        // An explicit document number narrows evidence before vector ranking.
-        var requestedEntry = Regex.Match(question, @"(?:وثيق[ةه]|مستند|entry|#)\s*(?:رقم\s*)?#?\s*(\d+)",
-            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-        var entryFilter = requestedEntry.Success ? requestedEntry.Groups[1].Value : null;
+        var requestedEntries = ReportSupport.RequestedEntries(question);
+        if (requestedEntries.Length > 50)
+            throw new ArgumentException("حدد حتى 50 وثيقة في السؤال الواحد.", nameof(question));
+        var condition = ReportSupport.ParseCondition(question);
+        if (condition is not null || ReportSupport.IsInventoryQuestion(question))
+            return await liveReports.CreateAsync(repository.RepositoryId, condition, requestedEntries, cancellationToken);
+        var hasEntryFilter = requestedEntries.Length > 0;
+        var candidateLimit = Math.Clamp(configuration.GetValue<int?>("Reports:CandidateLimit") ?? 240, 24, 1000);
+        var evidenceLimit = Math.Clamp(configuration.GetValue<int?>("Reports:EvidenceLimit") ?? 24, 8, 32);
         var prefix = configuration["LocalAI:QueryEmbeddingPrefix"] ?? "search_query: ";
         var vector = (await embeddings.CreateEmbeddingsAsync(
             [prefix + question.Trim()], cancellationToken))[0];
@@ -98,19 +103,20 @@ internal sealed class ReportsChatService(
                   and metadata ->> 'source' = 'laserfiche-reports'
                   and lower(metadata ->> 'repository_id') = lower(@repository)
                   and metadata ->> 'record_type' = 'document-chunk'
-                  and (@entryId is null or metadata ->> 'entry_id' = @entryId)
-                  and (@entryId is not null or
+                  and (not @hasEntryFilter or metadata ->> 'entry_id' = any(@entryIds))
+                  and (@hasEntryFilter or
                        (1 - (embedding OPERATOR(extensions.<=>) cast(@embedding as extensions.vector))) >= 0.25)
-                order by case when @entryId is not null and metadata ->> 'text_source' = 'laserfiche-metadata'
+                order by case when @hasEntryFilter and metadata ->> 'text_source' = 'laserfiche-metadata'
                               then 0 else 1 end,
                          embedding OPERATOR(extensions.<=>) cast(@embedding as extensions.vector)
-                limit 16
+                limit @candidateLimit
                 """;
             await using var command = new NpgsqlCommand(sql, connection);
             command.Parameters.AddWithValue("embedding", literal);
             command.Parameters.AddWithValue("repository", repository.RepositoryId);
-            command.Parameters.Add(new NpgsqlParameter("entryId", NpgsqlTypes.NpgsqlDbType.Text)
-                { Value = (object?)entryFilter ?? DBNull.Value });
+            command.Parameters.AddWithValue("hasEntryFilter", hasEntryFilter);
+            command.Parameters.AddWithValue("entryIds", requestedEntries.Select(id => id.ToString(System.Globalization.CultureInfo.InvariantCulture)).ToArray());
+            command.Parameters.AddWithValue("candidateLimit", candidateLimit);
             await using var reader = await command.ExecuteReaderAsync(cancellationToken);
             while (await reader.ReadAsync(cancellationToken))
             {
@@ -132,7 +138,7 @@ internal sealed class ReportsChatService(
 
         var authorized = new HashSet<int>();
         var denied = new HashSet<int>();
-        var evidence = new List<Evidence>();
+        var allowedCandidates = new List<Evidence>();
         foreach (var candidate in candidates)
         {
             if (!authorized.Contains(candidate.EntryId) && !denied.Contains(candidate.EntryId))
@@ -140,21 +146,27 @@ internal sealed class ReportsChatService(
                 if (await CanReadAsync(candidate.EntryId, cancellationToken)) authorized.Add(candidate.EntryId);
                 else denied.Add(candidate.EntryId);
             }
-            if (authorized.Contains(candidate.EntryId) && evidence.Count < 8) evidence.Add(candidate);
+            if (authorized.Contains(candidate.EntryId)) allowedCandidates.Add(candidate);
         }
+        var evidence = ReportSupport.SelectEvidence(allowedCandidates, evidenceLimit);
+        var scope = new AnswerScope(hasEntryFilter ? "selected-documents" : "repository",
+            repository.RepositoryId, evidence.Select(x => x.EntryId).Distinct().Count(), evidence.Count, false,
+            hasEntryFilter ? "التحليل مقيد بالوثائق التي حددتها؛ يعتمد على المقاطع المفهرسة المتاحة منها."
+                : "البحث شمل فهرس المستودع المتاح؛ المقاطع المختارة أدلة للإجابة وليست حصرًا لجميع الوثائق.",
+            requestedEntries);
         if (evidence.Count == 0)
-            return new ChatResult("لم أجد معلومات كافية في الوثائق المفهرسة للإجابة عن هذا السؤال.", evidence);
+            return new ChatResult("# تقرير البحث\n\nلم أجد أدلة مفهرسة كافية للإجابة. تأكد من فهرسة محتوى الوثائق المطلوبة.\n\n" + scope.Detail, evidence, scope);
 
         var client = clients.CreateClient("ReportsGraph");
         using var response = await client.PostAsJsonAsync("answer",
-            new { question = question.Trim(), evidence }, cancellationToken);
+            new { question = question.Trim(), evidence, scope }, cancellationToken);
         if (!response.IsSuccessStatusCode)
             throw new InvalidOperationException(
                 $"Local LangGraph returned HTTP {(int)response.StatusCode}. Check the LangGraph terminal and Ollama model.");
         var graphResponse = await response.Content.ReadFromJsonAsync<GraphAnswer>(cancellationToken);
         if (string.IsNullOrWhiteSpace(graphResponse?.Answer))
             throw new InvalidOperationException("The local LangGraph service returned an empty answer.");
-        return new ChatResult(graphResponse.Answer, evidence);
+        return new ChatResult(graphResponse.Answer + ReportSupport.SourceTable(evidence), evidence, scope);
     }
 
     private async Task<bool> CanReadAsync(int entryId, CancellationToken cancellationToken)

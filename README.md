@@ -91,7 +91,8 @@ Open `http://127.0.0.1:5187/` and sign in with your Laserfiche account.
 For a short demo, leave OCR disabled and index Entry `618` from **Documents & system**.
 Ask “ما تصنيف الوثيقة 618؟” or “ما موعد تسليم الوثيقة 618؟”; expand a source
 to see the exact Laserfiche field text used in the answer. A page source links
-to its original image. Answers require the local LangGraph and Ollama services.
+to its original image. Content analysis requires the local LangGraph and Ollama services.
+Live metadata equality and inventory reports use Laserfiche directly.
 To index every document accessible to the current Laserfiche account, use
 **فهرسة المستودع بالكامل** in the same tab. The browser walks the repository
 folder tree, indexes documents one at a time, checkpoints after every item,
@@ -293,3 +294,45 @@ Invoke-WebRequest `
 The response is streamed from Laserfiche and is not stored on the application
 server. The temporary output above exists only because the test caller requests
 an output file.
+
+## Structured reports and repository scope
+
+Answers render as reports with a summary, results table, notes and numbered
+sources. Click a reference to inspect its source. **نسخ التقرير** copies Markdown;
+**طباعة التقرير** prints the selected report (or saves it as PDF in the browser).
+
+- `ماهي الوثائق الموجود فيها إجراء الوثيقة يساوي تحت الاجراء` checks the
+  current metadata of every accessible document, including nested folders and all
+  API continuation pages. It does not use vector top-k results or model-generated
+  counts. Whitespace, Arabic hamza and diacritics are normalized for matching;
+  original values are preserved in the report. Declared multi-value fields match
+  individual values exactly. Use one equality condition and the full field name.
+- `اعرض جميع الوثائق في المستودع` produces a live document inventory.
+- `لخص الوثيقة 618` or `قارن الوثائق 618، 609` restrict content retrieval to the
+  specified IDs. Other questions search the repository index without an implicit
+  document filter. General content answers use selected evidence, not an exhaustive
+  scan of every page. The report displays this distinction explicitly.
+- Content answering considers up to 240 candidates and selects up to 24 distinct
+  passages across documents by default. The local model receives bounded excerpts;
+  the expandable source cards contain the original selected indexed passages.
+- The system prompt separates OCR from metadata, requires references and missing-data
+  labels, and prevents claiming an exhaustive census from semantic retrieval. Invalid
+  report formatting or out-of-range references trigger one retry, then a source-excerpt
+  table. This validation checks format/reference numbers, not semantic factual accuracy.
+- Reports respect current account permissions. Outages abort the report; skipped
+  inaccessible entries or reaching `Reports:MaxLiveDocuments` (default 10000) label
+  it as partial. A live traversal is not a transactional snapshot; concurrent changes
+  may affect its results. Unknown fields are reported explicitly rather than claiming
+  zero matches. Compound filters and range comparisons are not live metadata queries.
+
+Configuration defaults are in `Reports`: `CandidateLimit=240`, `EvidenceLimit=24`
+(maximum 32), and `MaxLiveDocuments=10000`. No schema migration is needed.
+After updating, restart both the web application and `tools/reports-graph/start.ps1`
+and refresh the browser to load the report renderer.
+
+Validation:
+
+```powershell
+dotnet test
+.\tools\reports-graph\.venv\Scripts\python.exe -m unittest discover -s tools/reports-graph -p "test_*.py"
+```

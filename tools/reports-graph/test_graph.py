@@ -2,17 +2,18 @@ import unittest
 import io
 import json
 
-from server import NO_EVIDENCE, build_graph, validate_request
+from server import NO_EVIDENCE, build_graph, validate_request, valid_report, format_context
 from sync import discover_all
 
 
 class FakeModel:
-    def __init__(self):
+    def __init__(self, answers=None):
         self.calls = []
+        self.answers = iter(answers or ["# تقرير\n\n| البند | النتيجة | المرجع |\n| --- | --- | --- |\n| القرار | قرار مجلس الإدارة | [1] |"] * 2)
 
     def invoke(self, messages):
         self.calls.append(messages)
-        return type("Reply", (), {"content": "ورد ذلك في الوثيقة [1]."})()
+        return type("Reply", (), {"content": next(self.answers)})()
 
 
 class GraphTests(unittest.TestCase):
@@ -41,7 +42,37 @@ class GraphTests(unittest.TestCase):
 
     def test_rejects_excessive_evidence(self):
         with self.assertRaises(ValueError):
-            validate_request({"question": "سؤال", "evidence": [{"entryId": 1, "text": "x"}] * 9})
+            validate_request({"question": "سؤال", "evidence": [{"entryId": 1, "text": "x"}] * 33})
+
+    def test_report_requires_references_on_every_row(self):
+        self.assertFalse(valid_report("# تقرير\n| البند | المصدر |\n| --- | --- |\n| ادعاء | [1] |\n| ادعاء آخر | بلا مرجع |", 1))
+        self.assertFalse(valid_report("# تقرير\n| البند | المصدر |\n| --- | --- |\n| ادعاء | [8] |", 1))
+
+    def test_invalid_model_response_falls_back_to_actual_sources(self):
+        model = FakeModel(["ادعاء مخترع [99]", "ادعاء مخترع [99]"])
+        result = build_graph(model).invoke({"question": "سؤال", "evidence": [
+            {"entryId": 618, "documentName": "لائحة", "text": "المعلومة الأصلية"}]})
+        self.assertEqual(len(model.calls), 2)
+        self.assertIn("المعلومة الأصلية", result["answer"])
+        self.assertNotIn("ادعاء مخترع", result["answer"])
+        self.assertTrue(valid_report(result["answer"], 1))
+
+    def test_scope_and_context_truncation_are_explicit(self):
+        evidence = [{"entryId": i + 1, "text": "x" * 8000} for i in range(32)]
+        context = json.loads(format_context({"evidence": evidence})["context"])
+        self.assertEqual(len(context), 32)
+        self.assertTrue(all(item["excerptTruncated"] for item in context))
+        self.assertLess(sum(len(item["text"]) for item in context), 28000)
+        model = FakeModel()
+        build_graph(model).invoke({"question": "سؤال", "evidence": evidence[:1],
+                                  "scope": {"exhaustive": False, "mode": "selected-documents"}})
+        self.assertIn('"exhaustive": false', model.calls[0][1].content)
+        self.assertIn('selected-documents', model.calls[0][1].content)
+
+    def test_rejects_boolean_and_negative_entry_ids(self):
+        for entry_id in (True, -1, 0):
+            with self.assertRaises(ValueError):
+                validate_request({"question": "سؤال", "evidence": [{"entryId": entry_id, "text": "x"}]})
 
     def test_discovery_walks_all_folders_and_deduplicates_documents(self):
         class Opener:

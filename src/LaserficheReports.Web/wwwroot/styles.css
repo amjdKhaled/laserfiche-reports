@@ -34,3 +34,23 @@
 .composer button{flex:none}
 .note{flex:none}
 @media(max-width:760px){.shell{display:flex;flex-direction:column}.sidebar{flex:none}.main{flex:1;min-height:0}.messages{max-height:none}.composer{width:calc(100% - 30px)}}
+
+/* Readable local reports and RTL result tables. */
+.message.assistant .bubble{white-space:normal;padding:20px 22px}
+.report-body{line-height:1.85;min-width:0}
+.report-body h2{font-size:21px;color:#164764;margin:5px 0 18px;line-height:1.5}
+.report-body h3{font-size:16px;color:#205b69;border-bottom:1px solid #e1e9ef;padding-bottom:7px;margin:22px 0 10px}
+.report-body p{margin:8px 0;white-space:pre-wrap}
+.report-body code{background:#edf3f5;border-radius:4px;padding:1px 5px;unicode-bidi:plaintext}
+.report-table-wrap{max-width:100%;overflow-x:auto;border:1px solid #dbe7ed;border-radius:11px;margin:13px 0;overscroll-behavior-x:contain}
+.report-table{width:100%;border-collapse:collapse;font-size:13px;line-height:1.7;min-width:430px}
+.report-table th{text-align:start;background:#edf5f6;color:#205b69;font-weight:700;padding:12px;border-bottom:1px solid #dbe7ed}
+.report-table td{padding:11px 12px;text-align:start;border-bottom:1px solid #e7eef2;vertical-align:top;min-width:85px;max-width:290px;overflow-wrap:anywhere;unicode-bidi:plaintext}
+.report-table tr:last-child td{border-bottom:0}
+.report-table tbody tr:nth-child(even){background:#f8fbfc}
+.report-reference{display:inline;font:inherit;color:#0f7f70;border:0;border-radius:4px;background:#e3f4ee;padding:0 4px;cursor:pointer;white-space:nowrap}
+.report-reference:hover{background:#c8eade}
+.report-scope{background:#f0f6f8;border-inline-start:3px solid #148f7e;color:#466a7b;font-size:12px;padding:10px 13px;border-radius:6px;margin-bottom:14px;line-height:1.8}
+.report-actions{display:flex;gap:9px;margin-top:18px;border-top:1px solid #e7eef2;padding-top:12px}
+.report-actions button{font:inherit;font-size:12px;border:1px solid #d7e5e9;border-radius:7px;background:white;color:#205b69;padding:7px 12px;cursor:pointer}
+@media print{.shell,.main,#chat-view,.messages{display:block;height:auto;overflow:visible}.sidebar,.topbar,.composer,.note,.message:not(.print-report),#docs-view,.login-layer,.report-actions,.sources{display:none!important}.messages{padding:0}.message{max-width:none}.bubble{border:0!important;padding:0!important}.report-table-wrap{overflow:visible;border-radius:0}.report-table{min-width:0;font-size:11px}.report-table th,.report-table td{padding:7px}.report-reference{background:none;color:inherit}.report-body h3{break-after:avoid}.report-table tr{break-inside:avoid}}
