@@ -12,6 +12,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LaserficheReports.Web", "sr
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LaserficheReports.Infrastructure.Tests", "src\LaserficheReports.Infrastructure.Tests\LaserficheReports.Infrastructure.Tests.csproj", "{34679E3D-8D94-4BC5-9A61-BEC1E89A6015}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LaserficheReports.Web.Tests", "src\LaserficheReports.Web.Tests\LaserficheReports.Web.Tests.csproj", "{B2F8D321-862A-4310-978F-99BC38CA9092}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -38,5 +40,9 @@ Global
 		{34679E3D-8D94-4BC5-9A61-BEC1E89A6015}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{34679E3D-8D94-4BC5-9A61-BEC1E89A6015}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{34679E3D-8D94-4BC5-9A61-BEC1E89A6015}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B2F8D321-862A-4310-978F-99BC38CA9092}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B2F8D321-862A-4310-978F-99BC38CA9092}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B2F8D321-862A-4310-978F-99BC38CA9092}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B2F8D321-862A-4310-978F-99BC38CA9092}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal

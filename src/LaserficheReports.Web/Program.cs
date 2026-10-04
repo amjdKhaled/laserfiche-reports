@@ -54,6 +54,7 @@ builder.Services.AddSession(options =>
 });
 builder.Services.AddLaserficheInfrastructure(builder.Configuration);
 builder.Services.AddScoped<ReportsChatService>();
+builder.Services.AddScoped<LiveRepositoryReportService>();
 builder.Services.AddHttpClient("ReportsGraph", client =>
 {
     var baseUrl = builder.Configuration["ReportsGraph:BaseUrl"] ?? "http://127.0.0.1:8766";
@@ -106,6 +107,50 @@ app.Use(async (context, next) =>
     await next();
 });
 app.UseSession();
+// Serialize requests sharing a browser session, including requests from other tabs.
+// Commit before releasing: a repository switch cannot race an in-flight report.
+var sessionGates = Enumerable.Range(0, 64).Select(_ => new SemaphoreSlim(1, 1)).ToArray();
+app.Use(async (context, next) =>
+{
+    if (!context.Request.Path.StartsWithSegments("/api")) { await next(); return; }
+    var cookie = context.Request.Cookies[".LaserficheReports.Session"] ?? "new-session";
+    var gate = sessionGates[(StringComparer.Ordinal.GetHashCode(cookie) & int.MaxValue) % sessionGates.Length];
+    await gate.WaitAsync(context.RequestAborted);
+    try
+    {
+        await context.Session.LoadAsync(context.RequestAborted);
+        var expected = context.Request.Headers["X-Reports-Repository"].ToString();
+        if (string.IsNullOrEmpty(expected)) expected = context.Request.Query["repositoryId"].ToString();
+        var generation = context.Request.Headers["X-Reports-Session"].ToString();
+        if (string.IsNullOrEmpty(generation)) generation = context.Request.Query["sessionGeneration"].ToString();
+        var repository = await context.RequestServices.GetRequiredService<IRepositoryContext>()
+            .GetActiveRepositoryAsync(context.RequestAborted);
+        if (!context.Request.Path.StartsWithSegments("/api/session") &&
+            ((!string.IsNullOrEmpty(expected) && !string.Equals(expected, repository.RepositoryId, StringComparison.OrdinalIgnoreCase)) ||
+             (!string.IsNullOrEmpty(generation) && generation != context.Session.GetString("ReportsGeneration"))))
+        {
+            context.Response.StatusCode = 409;
+            await context.Response.WriteAsJsonAsync(new { error = "تغيّر المستودع في جلسة أخرى. أعد تسجيل الدخول إلى المستودع المطلوب." });
+            return;
+        }
+        await next();
+    }
+    catch (LaserficheException error) when (!context.Response.HasStarted)
+    {
+        context.Response.StatusCode = error.StatusCode is 401 or 403 or 404 ? error.StatusCode : 502;
+        await context.Response.WriteAsJsonAsync(new { error = "تعذر الوصول إلى Laserfiche. تحقق من المستودع وبيانات الدخول وصلاحيات الوثيقة." });
+    }
+    catch (ArgumentException error) when (!context.Response.HasStarted)
+    {
+        context.Response.StatusCode = 400;
+        await context.Response.WriteAsJsonAsync(new { error = error.Message });
+    }
+    finally
+    {
+        try { await context.Session.CommitAsync(CancellationToken.None); }
+        finally { gate.Release(); }
+    }
+});
 app.UseDefaultFiles();
 app.UseStaticFiles();
 
@@ -118,46 +163,8 @@ app.MapGet("/api/app/status", (IConfiguration config) => Results.Ok(new
     startedAtUtc
 }));
 
-app.MapGet("/api/session/status", async (ISessionCredentialStore sessions,
-    CancellationToken cancellationToken) =>
-{
-    var credential = await sessions.TryGetAsync(cancellationToken);
-    return Results.Ok(new { authenticated = credential is not null, username = credential?.Username });
-});
-
-app.MapPost("/api/session/login", async (LoginRequest request, IRepositoryContext repositories,
-    ILaserficheAuthService auth, ISessionCredentialStore sessions,
-    HttpContext httpContext,
-    CancellationToken cancellationToken) =>
-{
-    if (string.IsNullOrWhiteSpace(request.Username) || request.Username.Length > 256 ||
-        request.Password is null)
-        return Results.BadRequest(new { error = "Enter a Laserfiche username and password." });
-    await auth.InvalidateCurrentSessionTokensAsync();
-    await sessions.ClearAsync(cancellationToken);
-    httpContext.Session.SetString("AuthenticationScopeMethod", "Reports");
-    httpContext.Session.SetString("AuthenticationScopeSubject", httpContext.Session.Id);
-    var repository = await repositories.GetActiveRepositoryAsync(cancellationToken);
-    if (!await auth.TryAuthenticateAsync(repository, request.Username, request.Password, cancellationToken))
-    {
-        await auth.InvalidateCurrentSessionTokensAsync();
-        httpContext.Session.Remove("AuthenticationScopeMethod");
-        httpContext.Session.Remove("AuthenticationScopeSubject");
-        return Results.Unauthorized();
-    }
-    await sessions.StoreAsync(request.Username, request.Password, cancellationToken);
-    return Results.Ok(new { authenticated = true, repository = repository.RepositoryId });
-});
-
-app.MapPost("/api/session/logout", async (ISessionCredentialStore sessions,
-    ILaserficheAuthService auth, HttpContext httpContext, CancellationToken cancellationToken) =>
-{
-    await auth.InvalidateCurrentSessionTokensAsync();
-    await sessions.ClearAsync(cancellationToken);
-    httpContext.Session.Remove("AuthenticationScopeMethod");
-    httpContext.Session.Remove("AuthenticationScopeSubject");
-    return Results.Ok(new { authenticated = false });
-});
+app.MapReportSessions();
+app.MapReportLinks();
 
 app.MapGet("/api/graph/status", async (IHttpClientFactory factory, CancellationToken cancellationToken) =>
 {
@@ -248,8 +255,9 @@ app.MapPost("/api/reports/chat", async (ChatQuestion request, ReportsChatService
     catch (PostgresException exception)
     {
         app.Logger.LogError(exception, "Document search failed in PostgreSQL.");
-        return Results.Json(new { error = "document_search_failed", message = exception.MessageText,
-            sqlState = exception.SqlState }, statusCode: StatusCodes.Status503ServiceUnavailable);
+        var problem = DatabaseDiagnostics.Describe(exception);
+        return Results.Json(new { error = problem.Error, message = problem.Message,
+            sqlState = problem.SqlState }, statusCode: StatusCodes.Status503ServiceUnavailable);
     }
     catch (NpgsqlException exception)
     {
@@ -491,26 +499,12 @@ app.MapGet("/api/database/status", async (
             username = settings.Username
         });
     }
-    catch (PostgresException exception) when (
-        exception.SqlState == "XX000" &&
-        exception.MessageText.Contains("ENOIDENTIFIER", StringComparison.OrdinalIgnoreCase))
-    {
-        return Results.Json(new
-        {
-            status = "unavailable",
-            error = "supabase_tenant_identifier_missing",
-            message = "Use Username=postgres.YOUR_POOLER_TENANT_ID in appsettings.Local.json."
-        }, statusCode: StatusCodes.Status503ServiceUnavailable);
-    }
     catch (PostgresException exception)
     {
-        return Results.Json(new
-        {
-            status = "unavailable",
-            error = "supabase_connection_failed",
-            message = exception.MessageText,
-            sqlState = exception.SqlState
-        }, statusCode: StatusCodes.Status503ServiceUnavailable);
+        var problem = DatabaseDiagnostics.Describe(exception);
+        return Results.Json(new { status = "unavailable", error = problem.Error,
+            message = problem.Message, sqlState = problem.SqlState },
+            statusCode: StatusCodes.Status503ServiceUnavailable);
     }
     catch (Exception exception) when (exception is NpgsqlException or ArgumentException)
     {
@@ -528,4 +522,4 @@ app.MapHealthChecks("/health");
 app.Run();
 
 internal sealed record ChatQuestion(string Question);
-internal sealed record LoginRequest(string Username, string Password);
+internal sealed record LoginRequest(string Username, string Password, string? RepositoryId = null);
