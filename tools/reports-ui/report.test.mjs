@@ -8,6 +8,7 @@ function setup() {
   const window = new Window({ url: 'http://localhost:5187', settings: { enableJavaScriptEvaluation: true, suppressInsecureJavaScriptEnvironmentWarning: true } });
   window.eval(readFileSync(root + 'report-format.js', 'utf8'));
   window.eval(readFileSync(root + 'report-download.js', 'utf8'));
+  window.eval(readFileSync(root + 'office-export.js', 'utf8'));
   return window;
 }
 const message = {
@@ -67,14 +68,14 @@ test('chat saves report time/scope and displays download for a valid empty resul
   const window = setup();
   window.document.write(readFileSync(root + 'index.html', 'utf8').replace(/<script[^>]*>[\s\S]*?<\/script>/g, ''));
   window.fetch = async url => ({ ok: true, status: 200, json: async () => url === '/api/session/status'
-    ? { authenticated: true, username: 'tester' } : { ...message, sources: [] } });
+    ? { authenticated: true, username: 'tester', repository: 'RepoA', server: 'https://localhost' } : { ...message, sources: [] } });
   window.eval(readFileSync(root + 'app.js', 'utf8'));
   await new Promise(resolve => setTimeout(resolve, 20));
   window.document.getElementById('question').value = 'عدد الوثائق؟';
   window.document.getElementById('ask-form').dispatchEvent(new window.Event('submit', { cancelable: true }));
   await new Promise(resolve => setTimeout(resolve, 20));
   assert([...window.document.querySelectorAll('.report-actions button')].some(node => node.textContent === 'تحميل التقرير'));
-  const saved = JSON.parse(window.localStorage.getItem('laserfiche-reports-chat-v1:tester'));
+  const saved = JSON.parse(window.localStorage.getItem('laserfiche-reports-chat-v2:https%3A%2F%2Flocalhost:repoa:tester'));
   assert.equal(saved[0].messages[1].generatedAt, message.generatedAt);
   assert.equal(saved[0].messages[1].scope.detail, message.scope.detail);
   await window.happyDOM.abort();
@@ -83,7 +84,7 @@ test('storage exhaustion keeps the received report downloadable and shows a warn
   const window = setup();
   window.document.write(readFileSync(root + 'index.html', 'utf8').replace(/<script[^>]*>[\s\S]*?<\/script>/g, ''));
   window.fetch = async url => ({ ok: true, status: 200, json: async () => url === '/api/session/status'
-    ? { authenticated: true, username: 'tester' } : { answer: message.text, ...message } });
+    ? { authenticated: true, username: 'tester', repository: 'RepoA', server: 'https://localhost' } : { answer: message.text, ...message } });
   Object.defineProperty(window, 'localStorage', { value: {
     getItem: () => null, removeItem: () => {},
     setItem: () => { throw new Error('QuotaExceededError'); }
@@ -108,4 +109,65 @@ test('semantic review status is visible and retained in HTML and Markdown export
   const failed = { ...reviewed.quality, status: 'source_only', semanticReview: 'unavailable' };
   assert(window.ReportsDownload.qualityLabel(failed).includes('لم تكتمل'));
   assert.equal(window.ReportsDownload.qualityLabel(null), '');
+});
+
+test('repository histories and scan checkpoints never migrate across repositories', async () => {
+  const window=setup();
+  window.document.write(readFileSync(root+'index.html','utf8').replace(/<script[^>]*>[\s\S]*?<\/script>/g,''));
+  window.fetch=async()=>({ok:true,status:200,json:async()=>({authenticated:true,username:'tester',repository:'RepoA',server:'https://localhost'})});
+  window.localStorage.setItem('laserfiche-reports-chat-v1:tester',JSON.stringify([{id:'legacy',title:'unscoped data',messages:[]} ]));
+  window.localStorage.setItem('laserfiche-reports-chat-v2:https%3A%2F%2Flocalhost:repoa:tester',JSON.stringify([{id:'a',title:'Repository A confidential',messages:[]} ]));
+  window.eval(readFileSync(root+'app.js','utf8')); await new Promise(r=>setTimeout(r,20));
+  assert(window.document.getElementById('history').textContent.includes('Repository A confidential'));
+  assert(!window.document.getElementById('history').textContent.includes('unscoped'));
+  window.eval("openSession('tester','RepoB','https://localhost','new-generation')");
+  assert.equal(window.document.getElementById('history').textContent,'');
+  assert.equal(window.document.getElementById('active-repository').textContent,'RepoB');
+  await window.happyDOM.abort();
+});
+
+test('late report from another repository is not saved or displayed in the new session', async()=>{
+  const window=setup();let resolveChat, sentHeaders;
+  window.document.write(readFileSync(root+'index.html','utf8').replace(/<script[^>]*>[\s\S]*?<\/script>/g,''));
+  window.fetch=async(url,options)=>url==='/api/session/status'
+    ? {ok:true,status:200,json:async()=>({authenticated:true,username:'tester',repository:'RepoA',server:'https://localhost',generation:'first'})}
+    : new Promise(resolve=>{resolveChat=resolve;sentHeaders=options.headers;});
+  window.eval(readFileSync(root+'app.js','utf8'));await new Promise(r=>setTimeout(r,20));
+  window.document.getElementById('question').value='سؤال';
+  window.document.getElementById('ask-form').dispatchEvent(new window.Event('submit',{cancelable:true}));
+  assert.equal(sentHeaders.get('X-Reports-Repository'),'RepoA');assert.equal(sentHeaders.get('X-Reports-Session'),'first');
+  window.eval("openSession('tester','RepoB','https://localhost','second')");
+  resolveChat({ok:true,status:200,json:async()=>({answer:'OLD PRIVATE RESULT',sources:[],generatedAt:message.generatedAt})});
+  await new Promise(r=>setTimeout(r,20));
+  assert(!window.document.getElementById('messages').textContent.includes('OLD PRIVATE RESULT'));
+  assert.equal(window.localStorage.getItem('laserfiche-reports-chat-v2:https%3A%2F%2Flocalhost:repob:tester'),null);
+  await window.happyDOM.abort();
+});
+
+test('Office downloads are ZIP packages and user content cannot create Excel formulas', async()=>{
+  const window=setup();
+  const malicious={...message,text:'| اسم | قيمة |\n| --- | --- |\n| =HYPERLINK("https://example.com") | '+ 'طويل'.repeat(300)+' |'};
+  for(const format of ['docx','xlsx']){
+    const blob=window.ReportsOffice[format](malicious,'السؤال');
+    const bytes=new Uint8Array(await blob.arrayBuffer());assert.deepEqual([...bytes.slice(0,4)],[80,75,3,4]);
+    const source=new TextDecoder().decode(bytes);assert(source.includes('السؤال'));
+    if(format==='xlsx'){assert(source.includes('t="inlineStr"'));assert(!source.includes('<f>'));assert(source.includes('rightToLeft="1"'));}
+    else {assert(source.includes('<w:bidi/>'));assert(source.includes('<w:tbl>'));}
+  }
+});
+
+test('each table export contains only that table and retains report scope', async()=>{
+  const window=setup();
+  window.document.write(readFileSync(root+'index.html','utf8').replace(/<script[^>]*>[\s\S]*?<\/script>/g,''));
+  window.fetch=async url=>({ok:true,status:200,json:async()=>url==='/api/session/status'
+    ? {authenticated:true,username:'tester',repository:'RepoA',server:'https://localhost'}
+    : {...message,answer:message.text+'\n\n| آخر | قيمة |\n| --- | --- |\n| مختلف | 42 |'}});
+  window.eval(readFileSync(root+'app.js','utf8')); await new Promise(r=>setTimeout(r,20));
+  window.document.getElementById('question').value='سؤال';
+  window.document.getElementById('ask-form').dispatchEvent(new window.Event('submit',{cancelable:true}));
+  await new Promise(r=>setTimeout(r,20));
+  const buttons=window.document.querySelectorAll('.table-export-actions button');assert.equal(buttons.length,2);
+  let exported;window.ReportsDownload.download=(result)=>{exported=result;};buttons[0].click();
+  assert(exported.text.includes('تحت الإجراء'));assert(!exported.text.includes('مختلف'));assert.equal(exported.scope.detail,message.scope.detail);
+  await window.happyDOM.abort();
 });

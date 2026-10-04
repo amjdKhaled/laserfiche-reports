@@ -425,3 +425,18 @@ UI/HTML export regression tests (development only; no production dependency):
 npm ci --prefix tools/reports-ui
 npm test --prefix tools/reports-ui
 ```
+
+### Repository selection, Office exports and Dashboard identity
+
+Login now includes a repository selector/discovery action; the header identifies
+the active repository. Chats and ingestion checkpoints are separated by server,
+repository and account, with stale-tab checks on every browser API request.
+
+Each report offers Word (`.docx`), Excel (`.xlsx`), HTML and Markdown downloads,
+and PDF saving through the browser print dialog. Its Laserfiche button opens the
+explicit related document IDs using Web Client search URLs after rechecking access.
+The blue/white Dashboard identity and ISB logo are reused, with fixed-layout
+wrapping tables and horizontal scrolling inside the table on small screens.
+
+See [repository reports setup and limits](docs/REPOSITORY_REPORTS.md), including
+`Laserfiche:WebClientBaseUrl` for a custom Web Client directory.

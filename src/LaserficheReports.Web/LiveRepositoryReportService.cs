@@ -122,6 +122,7 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
             : "| — | لا توجد نتائج مؤكدة | — | — | — | — |");
         report.AppendLine("\n## ملاحظات\n\nالنتائج مبنية على حقول المستودع وقت الفحص؛ لا تعتمد على OCR أو التخمين اللغوي.");
         if (!complete) report.AppendLine("الفحص غير مكتمل؛ الأعداد المذكورة تخص الوثائق المفحوصة فقط.");
-        return new ChatResult(report.ToString().Trim(), evidence, scope);
+        return new ChatResult(report.ToString().Trim(), evidence, scope)
+            { RelatedEntryIds = evidence.Select(e => e.EntryId).Distinct().ToArray() };
     }
 }

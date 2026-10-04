@@ -13,6 +13,7 @@ internal sealed record ChatResult(string Answer, IReadOnlyList<Evidence> Sources
 {
     public DateTimeOffset GeneratedAt { get; init; } = DateTimeOffset.UtcNow;
     public ReportQuality? Quality { get; init; }
+    public int[] RelatedEntryIds { get; init; } = [];
 }
 internal sealed record ReportQuality(string Status, bool QuoteVerification, string SemanticReview,
     string PromptVersion, int ModelCalls);
@@ -180,7 +181,8 @@ internal sealed class ReportsChatService(
         if (string.IsNullOrWhiteSpace(graphResponse?.Answer))
             throw new InvalidOperationException("The local LangGraph service returned an empty answer.");
         return new ChatResult(graphResponse.Answer + ReportSupport.SourceTable(evidence), evidence, scope)
-            { Quality = graphResponse.Quality };
+            { Quality = graphResponse.Quality, RelatedEntryIds = (graphResponse.RelatedEntryIds ?? [])
+                .Where(id => evidence.Any(e => e.EntryId == id)).Distinct().ToArray() };
     }
 
     private async Task<bool> CanReadAsync(int entryId, CancellationToken cancellationToken)
@@ -196,5 +198,5 @@ internal sealed class ReportsChatService(
         // Authentication failures and service outages must fail the entire request.
     }
 
-    private sealed record GraphAnswer(string Answer, ReportQuality? Quality);
+    private sealed record GraphAnswer(string Answer, ReportQuality? Quality, int[]? RelatedEntryIds);
 }

@@ -6,11 +6,12 @@
   <title>Laserfiche Reports</title>
   <link rel="stylesheet" href="/styles.css">
   <link rel="stylesheet" href="/login.css">
+  <link rel="stylesheet" href="/dashboard-theme.css">
 </head>
 <body>
   <div class="shell">
     <aside class="sidebar">
-      <div class="brand"><span class="mark">◈</span><div><strong>Laserfiche Reports</strong><small>تقارير المستندات المحلية</small></div></div>
+      <div class="brand"><img src="/isb-logo.jpg" class="brand-logo" alt="ISB"><div><strong>Laserfiche Reports</strong><small>تقارير المستندات المحلية</small></div></div>
       <button class="new-chat" id="new-chat">＋ محادثة جديدة</button>
       <div class="side-heading">المحادثات الأخيرة</div>
       <div id="history" class="history"></div>
@@ -19,7 +20,7 @@
     <main class="main">
       <header class="topbar">
         <div><h1>اسأل وثائقك</h1><p>ابحث في حقول Laserfiche ومحتوى الصفحات، مع مصدر لكل إجابة</p></div>
-        <div class="top-actions"><div class="tabs"><button id="tab-chat" class="active">المحادثة</button><button id="tab-docs">الوثائق والنظام</button></div><button id="logout" class="logout">تسجيل الخروج</button></div>
+        <div class="top-actions"><button type="button" id="switch-repository" class="repository-badge" title="تغيير المستودع"><span>المستودع</span> <strong id="active-repository">—</strong> ▾</button><div class="tabs"><button id="tab-chat" class="active">المحادثة</button><button id="tab-docs">الوثائق والنظام</button></div><button id="logout" class="logout">تسجيل الخروج</button></div>
       </header>
       <section id="chat-view" class="view">
         <div id="messages" class="messages">
@@ -54,16 +55,21 @@
       <div class="welcome-icon">◈</div>
       <h2>الدخول إلى Laserfiche Reports</h2>
       <p>استخدم حساب Laserfiche للوصول إلى الوثائق المسموح لك بها.</p>
+      <label for="repository-id">المستودع</label>
+      <input id="repository-id" list="repository-options" maxlength="256" required placeholder="اسم المستودع في Laserfiche">
+      <datalist id="repository-options"></datalist>
       <label for="username">اسم المستخدم</label>
       <input id="username" type="text" autocomplete="username" required>
       <label for="password">كلمة المرور</label>
       <input id="password" type="password" autocomplete="current-password" required>
+      <button id="discover-repositories" type="button">اكتشاف المستودعات</button>
       <button id="login-submit" type="submit">تسجيل الدخول</button>
       <div id="login-error" role="alert"></div>
     </form>
   </div>
   <script src="/report-format.js" defer></script>
   <script src="/report-download.js" defer></script>
+  <script src="/office-export.js" defer></script>
   <script src="/app.js" defer></script>
 </body>
 </html>

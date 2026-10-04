@@ -395,7 +395,10 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
         try:
             result = self.graph.invoke(payload)
-            return self.send_json(HTTPStatus.OK, {"answer": result["answer"], "quality": result.get("quality")})
+            related = sorted({payload["evidence"][row["reference"] - 1]["entryId"]
+                              for row in result.get("selection", {}).get("rows", [])})
+            return self.send_json(HTTPStatus.OK, {"answer": result["answer"], "quality": result.get("quality"),
+                                                  "relatedEntryIds": related})
         except Exception as error:
             print(f"LangGraph failed: {type(error).__name__}: {error}", flush=True)
             return self.send_json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "local_model_unavailable"})

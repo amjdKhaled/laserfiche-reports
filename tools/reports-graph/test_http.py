@@ -11,7 +11,8 @@ class HttpTests(unittest.TestCase):
     def setUp(self):
         class Graph:
             def invoke(self, payload):
-                return {"answer": payload["question"]}
+                return {"answer": payload["question"], "selection": {"rows":
+                    [{"reference": 1}] if payload["evidence"] else []}}
 
         class TestHandler(Handler):
             graph = Graph()
@@ -45,3 +46,10 @@ class HttpTests(unittest.TestCase):
         response = self.client.getresponse()
         self.assertEqual(response.status, 400)
         response.read()
+
+    def test_related_documents_use_selected_evidence_not_all_candidates(self):
+        self.client.request("POST", "/answer", json.dumps({"question": "سؤال", "evidence": [
+            {"entryId": 618, "text": "دليل مختار"}, {"entryId": 42, "text": "مرشح غير مستخدم"}]}).encode())
+        response = self.client.getresponse()
+        self.assertEqual(response.status, 200)
+        self.assertEqual(json.loads(response.read())["relatedEntryIds"], [618])
