@@ -19,3 +19,9 @@
 .brand-logo{width:70px;height:45px;object-fit:contain;flex:none}
 
 .table-export-actions{margin-top:0;margin-bottom:18px;border-top:0;justify-content:flex-start}
+
+.brand strong{font-size:20px;line-height:1.5;overflow-wrap:anywhere}
+.service-diagnostic,.service-hint{font-size:12px;line-height:1.8;overflow-wrap:anywhere;text-align:right}
+.service-diagnostic{color:#a93636}.service-hint{color:#698094}
+.status-card:has(.service-diagnostic){grid-column:span 2}
+@media(max-width:760px){.status-card:has(.service-diagnostic){grid-column:1/-1}}

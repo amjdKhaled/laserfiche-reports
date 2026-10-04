@@ -10,3 +10,11 @@
 .login-card button:disabled{opacity:.6}
 .login-card #login-error{min-height:24px;font-size:12px;color:#b44442;margin-top:7px}
 @media(max-width:760px){.top-actions{margin-top:10px;flex-wrap:wrap}}
+
+.login-card select{width:100%;min-height:48px;padding:12px 14px;border:1px solid #d4e0ea;border-radius:10px;background:#f8faff;color:#142940;font:inherit;cursor:pointer}
+.login-card select:focus,.login-card input:focus{outline:3px solid #0054d51f;border-color:#0054d5}
+.login-card select option{padding:12px;white-space:normal}
+#repository-help{color:#698094;font-size:12px;line-height:1.7;margin-top:7px}
+#repository-manual{margin-top:10px}
+
+.login-card #login-error.success{color:#137956}

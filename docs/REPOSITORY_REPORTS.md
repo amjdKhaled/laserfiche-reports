@@ -83,3 +83,15 @@ encoding and grouping. Office packages are inspected using DOCX/XLSX readers.
 Live repository discovery, installed Web Client navigation and model quality still
 require testing on the machine with Laserfiche and Ollama. A passing mocked test
 is not a measurement of actual model accuracy on the user's documents.
+
+## Local Supabase connection repair
+
+`ENOIDENTIFIER` means the Supavisor connection lacks the actual tenant in its username. Run from the reports project root, using the existing local Supabase Docker `.env` file:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\configure-database.ps1 -EnvFile "C:\path\to\supabase\docker\.env"
+```
+
+The script reads the actual `POOLER_TENANT_ID`, `POSTGRES_PASSWORD`, and optional `POSTGRES_DB`/`POSTGRES_PORT`; it stores the connection in the private local settings without printing credentials. Pass `-Port` for a custom published port. It preserves existing application settings (or creates local settings if absent) and does not change the database. Restart the web application and refresh service status. Without `-EnvFile`, it prompts for the actual tenant and hidden password. `-DirectConnection` is only for an explicitly configured direct PostgreSQL port, not Supavisor.
+
+The repository field is a select list. Discovery populates repository IDs/names and an explicit manual option accepts another ID. The visible app name is تقارير ليزرفيش الذكية.

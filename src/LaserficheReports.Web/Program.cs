@@ -362,24 +362,14 @@ app.MapPost("/api/ingestion/laserfiche/{entryId:int}", async (
             preservedExistingIndex = true
         }, statusCode: StatusCodes.Status503ServiceUnavailable);
     }
-    catch (PostgresException exception) when (
-        exception.SqlState == "XX000" &&
-        exception.MessageText.Contains("ENOIDENTIFIER", StringComparison.OrdinalIgnoreCase))
-    {
-        return Results.Json(new
-        {
-            error = "supabase_tenant_identifier_missing",
-            message = "The Supabase pooler username must include its tenant identifier, for example Username=postgres.YOUR_POOLER_TENANT_ID.",
-            preservedExistingIndex = true
-        }, statusCode: StatusCodes.Status503ServiceUnavailable);
-    }
     catch (PostgresException exception)
     {
+        var problem = DatabaseDiagnostics.Describe(exception);
         return Results.Json(new
         {
-            error = "supabase_write_failed",
-            message = exception.MessageText,
-            sqlState = exception.SqlState,
+            error = problem.Error,
+            message = problem.Message,
+            sqlState = problem.SqlState,
             preservedExistingIndex = true
         }, statusCode: StatusCodes.Status503ServiceUnavailable);
     }
