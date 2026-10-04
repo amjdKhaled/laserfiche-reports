@@ -81,6 +81,19 @@ MAX_EVIDENCE = 32
 MAX_REQUEST_BYTES = 1_200_000
 MAX_CONTEXT_CHARACTERS = 16000
 MAX_QUOTATION_CHARACTERS = 4000
+DEFAULT_OLLAMA_TIMEOUT_SECONDS = 4 * 60 * 60
+
+
+def resolve_ollama_timeout_seconds(value=None):
+    raw = value if value is not None else os.environ.get(
+        "REPORTS_OLLAMA_TIMEOUT_SECONDS", str(DEFAULT_OLLAMA_TIMEOUT_SECONDS))
+    try:
+        seconds = int(raw)
+    except (TypeError, ValueError) as error:
+        raise ValueError("REPORTS_OLLAMA_TIMEOUT_SECONDS must be an integer.") from error
+    if not 60 <= seconds <= 24 * 60 * 60:
+        raise ValueError("REPORTS_OLLAMA_TIMEOUT_SECONDS must be between 60 and 86400.")
+    return seconds
 
 
 def format_context(state: State) -> dict:
@@ -430,10 +443,16 @@ def main():
     # Never send traces containing private documents to a hosted LangSmith account.
     os.environ["LANGCHAIN_TRACING_V2"] = "false"
     os.environ["LANGSMITH_TRACING"] = "false"
+    try:
+        ollama_timeout = resolve_ollama_timeout_seconds()
+    except ValueError as error:
+        parser.error(str(error))
     model = ChatOllama(model=args.model, base_url=args.ollama_url, temperature=0,
-                       num_ctx=16384, num_predict=4096)
+                       num_ctx=16384, num_predict=4096,
+                       client_kwargs={"timeout": ollama_timeout})
     Handler.graph = build_graph(model)
-    print(f"LangGraph ready on http://127.0.0.1:{args.port}; model={args.model}", flush=True)
+    print(f"LangGraph ready on http://127.0.0.1:{args.port}; model={args.model}; "
+          f"Ollama request timeout={ollama_timeout}s", flush=True)
     ThreadingHTTPServer(("127.0.0.1", args.port), Handler).serve_forever()
 
 

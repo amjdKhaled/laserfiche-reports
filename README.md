@@ -419,6 +419,19 @@ require clarification rather than silently becoming positive equality filters.
 If browser history storage is full, the report remains visible and downloadable;
 a message asks you to download it before closing the page.
 
+### Long-running local reports
+
+The web application allows up to four hours for one LangGraph answer request, and
+the LangGraph Ollama client allows up to four hours for each local model call. This
+supports slower models and detailed reports; the chat shows a message asking the
+user to keep the page open while it works. Override the web limit in
+`appsettings.Local.json` with `ReportsGraph:TimeoutSeconds` (60 seconds to 24 hours),
+or set `ReportsGraph__TimeoutSeconds` in the application environment. Override the
+Ollama HTTP limit with `REPORTS_OLLAMA_TIMEOUT_SECONDS` before starting
+`tools/reports-graph/start.ps1` (60 seconds to 24 hours). Restart both services
+after changing these settings. Closing the browser or stopping either service still
+ends the current request.
+
 UI/HTML export regression tests (development only; no production dependency):
 
 ```powershell

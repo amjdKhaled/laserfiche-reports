@@ -63,7 +63,7 @@ builder.Services.AddHttpClient("ReportsGraph", client =>
         uri.Host is not ("127.0.0.1" or "localhost" or "::1"))
         throw new InvalidOperationException("ReportsGraph:BaseUrl must be local HTTP.");
     client.BaseAddress = new Uri(uri.AbsoluteUri.TrimEnd('/') + "/");
-    client.Timeout = TimeSpan.FromMinutes(15);
+    client.Timeout = TimeSpan.FromSeconds(ReportsGraphTimeout.ResolveSeconds(builder.Configuration));
 }).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
 {
     AllowAutoRedirect = false,

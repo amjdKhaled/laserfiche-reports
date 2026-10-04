@@ -11,6 +11,15 @@ namespace LaserficheReports.Web.Tests;
 
 public class ReportTests
 {
+    [Fact]
+    public void GraphTimeoutDefaultsToFourHoursAndHonorsSafeConfiguration()
+    {
+        Assert.Equal(14400, ReportsGraphTimeout.ResolveSeconds(new ConfigurationBuilder().Build()));
+        var configured = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        { ["ReportsGraph:TimeoutSeconds"] = "7200" }).Build();
+        Assert.Equal(7200, ReportsGraphTimeout.ResolveSeconds(configured));
+    }
+
     [Theory]
     [InlineData("قارن الوثائق ٦١٨، 609 و 610", new[] { 618, 609, 610 })]
     [InlineData("اعرض الوثيقة 618", new[] { 618 })]
