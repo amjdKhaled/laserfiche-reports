@@ -18,6 +18,8 @@ jobs:
           $tokens = $null
           [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path scripts/configure-database.ps1), [ref]$tokens, [ref]$parseErrors) | Out-Null
           if ($parseErrors.Count -gt 0) { throw ($parseErrors | Out-String) }
+      - shell: pwsh
+        run: ./scripts/test-configure-database.ps1
   python:
     runs-on: ubuntu-latest
     steps:

@@ -28,6 +28,11 @@ internal static partial class ReportSupport
         if (matches.Count != 1 || NeedsFilterClarification(question)) return null;
         var comparison = matches[0];
         var left = question[..comparison.Index].Trim();
+        // Natural Arabic questions often wrap the field label in guillemets and
+        // add prose after it: "قيمة حقل «إجراء الوثيقة» فيها تساوي ...".
+        // Keep only the actual label so it can be matched against Laserfiche.
+        var quotedField = QuotedFieldRegex().Match(left);
+        if (quotedField.Success) left = quotedField.Groups["field"].Value.Trim();
         var value = question[(comparison.Index + comparison.Length)..].Trim()
             .TrimEnd('؟', '?', '،').Trim().Trim('"', '\'', '«', '»');
         return left.Length > 0 && value.Length is > 0 and <= 200
@@ -36,6 +41,8 @@ internal static partial class ReportSupport
 
     internal static bool IsInventoryQuestion(string question) => InventoryRegex().IsMatch(
         Regex.Replace(question.Trim().TrimEnd('؟', '?', '.', '!'), @"\s+", " "));
+
+    internal static bool IsDocumentMetadataQuestion(string question) => MetadataQuestionRegex().IsMatch(question);
 
     internal static bool NeedsFilterClarification(string question) =>
         EqualityRegex().Matches(question).Count > 1 ||
@@ -115,6 +122,10 @@ internal static partial class ReportSupport
     private static partial Regex EntryGroupRegex();
     [GeneratedRegex(@"\s*(?:يساوي|تساوي|قيمته|قيمتها|equals|=)\s*", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex EqualityRegex();
+    [GeneratedRegex(@"(?:قيمة\s+)?(?:حقل\s+)[«""'](?<field>[^»""']+)[»""'](?:\s*(?:فيها|فيه))?\s*$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex QuotedFieldRegex();
+    [GeneratedRegex(@"(?:بيانات|معلومات)\s+(?:ال)?وثيق[ةه]|(?:حقول|حقل)\s*(?:ها|ه)?|(?:قيم|قيمة)\s*(?:ها|ه)?|\bmetadata\b|\bfields?\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex MetadataQuestionRegex();
     [GeneratedRegex(@"^(?:(?:اعرض|اذكر|اعطني|أعطني|اعطيني|أعطيني|وريني|طلع|ابغا|أبغا|ابي|أبي|أريد|اريد|قائمة|تقرير عن|ما هي|ماهي|ايش|وش|ما|كم عدد|عدد)\s+)?(?:(?:لي|تقرير|قائمة|بكل|عن|بجميع)\s+)*(?:جميع\s+|كل\s+)?(?:الوثائق|المستندات|الملفات)\s*(?:(?:الموجود[ةه]?|المتاحة)\s*)?(?:في\s*(?:(?:هذا|هذي|كل|جميع)\s+)?(?:المستودع|مستودع|المخزن|المخزن هذا|الريبو|(?:ال\s*)?(?:repasetory|repository|repo)))?$|^(?:كم\s+(?:وثيقة|مستند|ملف)\s+في\s+(?:هذا\s+)?(?:المستودع|المخزن)|(?:list|show|count)\s+(?:me\s+)?(?:all\s+)?documents(?:\s+(?:in|from)\s+(?:this\s+|the\s+)?repository)?)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex InventoryRegex();
     [GeneratedRegex(@"(?:\s+(?:و|أو|او|and|or)\s+[^؟?]*?(?:الحقل|حقل|التصنيف|موعد|تاريخ|اجراء|إجراء)|(?:>=|<=|!=|≠)|(?:أكبر من|اصغر من|أصغر من|اقل من|أقل من|قبل تاريخ|بعد تاريخ))", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]

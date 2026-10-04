@@ -24,6 +24,25 @@ function el(tag, className, value) {
   if (value) node.textContent = value;
   return node;
 }
+function selectedRepository() {
+  return $('repository-id').value === '__manual__' ? $('repository-manual').value.trim() : $('repository-id').value;
+}
+function setRepositorySelection(id) {
+  const select = $('repository-id');
+  if (id && !Array.from(select.options).some(option => option.value === id)) {
+    const option = el('option', '', id); option.value = id;
+    select.insertBefore(option, select.lastElementChild);
+  }
+  select.value = id || '';
+  $('repository-manual').classList.add('hidden');
+  $('repository-manual').required = false;
+}
+$('repository-id').onchange = () => {
+  const manual = $('repository-id').value === '__manual__';
+  $('repository-manual').classList.toggle('hidden', !manual);
+  $('repository-manual').required = manual;
+  if (manual) $('repository-manual').focus();
+};
 async function api(url, options) {
   const epoch = sessionEpoch;
   const headers = new Headers(options?.headers || {});
@@ -48,7 +67,7 @@ function openSession(username, repository, server, generation) {
   sessionRepository = repository || '';
   sessionServer = server || '';
   $('active-repository').textContent = sessionRepository || 'غير محدد';
-  $('repository-id').value = sessionRepository;
+  setRepositorySelection(sessionRepository);
   documentsPage = 1;
   $('documents').replaceChildren();
   $('statuses').replaceChildren();
@@ -71,11 +90,12 @@ $('login-form').onsubmit = async event => {
   event.preventDefault();
   $('login-submit').disabled = true;
   $('login-error').textContent = '';
+  $('login-error').classList.remove('success');
   try {
     const username = $('username').value.trim();
     const session = await api('/api/session/login', { method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password: $('password').value, repositoryId: $('repository-id').value.trim() }) });
+      body: JSON.stringify({ username, password: $('password').value, repositoryId: selectedRepository() }) });
     $('password').value = '';
     openSession(session.username || username, session.repository, session.server, session.generation);
   } catch (error) { $('login-error').textContent = `تعذر تسجيل الدخول: ${error.message}`; }
@@ -119,7 +139,7 @@ function renderMessages() {
   } else {
     chat.messages.forEach((message, messageIndex) => {
       const item = el('div', `message ${message.role}`);
-      item.append(el('div', 'label', message.role === 'user' ? 'أنت' : 'Laserfiche Reports'));
+      item.append(el('div', 'label', message.role === 'user' ? 'أنت' : 'تقارير ليزرفيش الذكية'));
       const sourcePrefix = `source-${chat.id}-${messageIndex}`;
       const bubble = el('div', 'bubble');
       if (message.role === 'assistant') {
@@ -251,7 +271,7 @@ $('ask-form').onsubmit = async event => {
   chat.messages.push({ role: 'user', text: question });
   $('question').value = '';
   $('send').disabled = true;
-  chat.messages.push({ role: 'assistant', text: 'جاري البحث في الوثائق وتحضير الإجابة...' });
+  chat.messages.push({ role: 'assistant', text: 'جاري تحليل الوثائق وتجهيز التقرير. قد يستغرق ذلك وقتًا بحسب حجم الأدلة وسرعة النموذج؛ اترك الصفحة مفتوحة...' });
   renderHistory(); renderMessages();
   try {
     const result = await api('/api/reports/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question }) });
@@ -280,12 +300,17 @@ async function refreshStatuses() {
   await Promise.all(services.map(async ([name, url], index) => {
     const deferred = name === 'OCR' && appStatus.ocrEnabled === false;
     let healthy = false;
+    let diagnostic = '';
     try { if (!deferred) {
       const data = await api(url);
       healthy = data.status !== 'unavailable' && data.isConnected !== false && data.authenticationSucceeded !== false;
-    } } catch { /* rendered as unavailable */ }
+    } } catch(error) { diagnostic = error.message; }
     cards[index].append(el('span', deferred ? 'deferred' : healthy ? 'ok' : 'bad',
       deferred ? 'مؤجل' : healthy ? 'متصل' : 'غير متصل'));
+    if (name === 'Supabase' && diagnostic && epoch === sessionEpoch) {
+      cards[index].append(el('p', 'service-diagnostic', diagnostic));
+      cards[index].append(el('p', 'service-hint', 'لضبط الاتصال المحلي شغّل scripts\\configure-database.ps1 من مجلد المشروع، ثم أعد تشغيل التطبيق وحدّث الحالة.'));
+    }
   }));
 }
 async function loadDocuments() {
@@ -450,7 +475,7 @@ $('scan-start').onclick = async () => {
   }
 };
 api('/api/session/status').then(session => {
-  $('repository-id').value = session.repository || '';
+  setRepositorySelection(session.repository || '');
   if (session.authenticated && session.username) openSession(session.username, session.repository, session.server, session.generation);
   else $('login-layer').classList.remove('hidden');
 }).catch(() => $('login-layer').classList.remove('hidden'));
@@ -462,11 +487,18 @@ $('switch-repository').onclick = () => {
 };
 $('discover-repositories').onclick = async () => {
   $('discover-repositories').disabled=true;
+  $('login-error').classList.remove('success');
   try {
     const repositories=await api('/api/session/repositories',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({username:$('username').value.trim(),password:$('password').value,repositoryId:$('repository-id').value.trim()})});
-    $('repository-options').replaceChildren();
-    repositories.forEach(repo=>{const option=el('option','',repo.name);option.value=repo.id;$('repository-options').append(option);});
+      body:JSON.stringify({username:$('username').value.trim(),password:$('password').value,repositoryId:selectedRepository()})});
+    const previous = selectedRepository();
+    const select = $('repository-id');
+    select.replaceChildren();
+    const prompt = el('option', '', 'اختر المستودع'); prompt.value = ''; select.append(prompt);
+    repositories.forEach(repo=>{const option=el('option','',repo.name || repo.id);option.value=repo.id;select.append(option);});
+    const manual = el('option', '', 'إدخال مستودع آخر…'); manual.value = '__manual__'; select.append(manual);
+    setRepositorySelection(previous);
+    $('login-error').classList.add('success');
     $('login-error').textContent=`تم العثور على ${repositories.length} مستودع. اختر من خانة المستودع ثم سجل الدخول.`;
   } catch(error) { $('login-error').textContent=error.message; }
   finally { $('discover-repositories').disabled=false; }

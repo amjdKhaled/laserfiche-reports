@@ -171,3 +171,37 @@ test('each table export contains only that table and retains report scope', asyn
   assert(exported.text.includes('تحت الإجراء'));assert(!exported.text.includes('مختلف'));assert.equal(exported.scope.detail,message.scope.detail);
   await window.happyDOM.abort();
 });
+
+
+test('repository select discovers IDs and submits an explicit manual repository', async()=>{
+  const window=setup();let loginBody;
+  window.document.write(readFileSync(root+'index.html','utf8').replace(/<script[^>]*>[\s\S]*?<\/script>/g,''));
+  window.fetch=async(url,options)=>{
+    let body={};
+    if(url==='/api/session/status') body={authenticated:false,repository:'ConfiguredRepo'};
+    if(url==='/api/session/repositories') body=[{id:'RepoA',name:'اسم المستودع الطويل جدًا'},{id:'RepoB',name:'مستودع آخر'}];
+    if(url==='/api/session/login'){loginBody=JSON.parse(options.body);body={username:'tester',repository:loginBody.repositoryId};}
+    return {ok:true,status:200,json:async()=>body};
+  };
+  window.eval(readFileSync(root+'app.js','utf8'));await new Promise(r=>setTimeout(r,20));
+  const select=window.document.getElementById('repository-id');
+  assert.equal(select.tagName,'SELECT');assert.equal(select.value,'ConfiguredRepo');
+  window.document.getElementById('discover-repositories').click();await new Promise(r=>setTimeout(r,20));
+  assert([...select.options].some(option=>option.value==='RepoA' && option.textContent==='اسم المستودع الطويل جدًا'));
+  select.value='__manual__';select.dispatchEvent(new window.Event('change'));
+  const manual=window.document.getElementById('repository-manual');assert(manual.required);assert(!manual.classList.contains('hidden'));
+  manual.value='CustomRepo';window.document.getElementById('username').value='tester';window.document.getElementById('password').value='password';
+  window.document.getElementById('login-form').dispatchEvent(new window.Event('submit',{cancelable:true}));await new Promise(r=>setTimeout(r,20));
+  assert.equal(loginBody.repositoryId,'CustomRepo');
+  assert.equal(window.document.title,'تقارير ليزرفيش الذكية');
+  await window.happyDOM.abort();
+});
+test('database status shows the actual repair message instead of hiding the cause', async()=>{
+  const window=setup();window.document.write(readFileSync(root+'index.html','utf8').replace(/<script[^>]*>[\s\S]*?<\/script>/g,''));
+  window.fetch=async url=>({ok:url!=='/api/database/status',status:url==='/api/database/status'?503:200,json:async()=>url==='/api/database/status'?{message:'اضبط POOLER_TENANT_ID من ملف Supabase المحلي'}:{authenticated:true,username:'tester',repository:'RepoA',ocrEnabled:false}});
+  window.eval(readFileSync(root+'app.js','utf8'));await new Promise(r=>setTimeout(r,20));
+  await window.eval('refreshStatuses()');
+  const card=[...window.document.querySelectorAll('.status-card')].find(card=>card.textContent.includes('Supabase'));
+  assert(card.textContent.includes('غير متصل'));assert(card.textContent.includes('POOLER_TENANT_ID'));assert(card.textContent.includes('configure-database.ps1'));
+  await window.happyDOM.abort();
+});

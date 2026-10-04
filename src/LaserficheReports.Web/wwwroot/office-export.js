@@ -44,7 +44,7 @@
       const count=Math.max(1,...rows.map(r=>r.length)), width=Math.floor(14400/count);
       return `<w:tbl><w:tblPr><w:bidiVisual/><w:tblW w:w="14400" w:type="dxa"/><w:tblLayout w:type="fixed"/><w:tblBorders>${['top','left','bottom','right','insideH','insideV'].map(side=>`<w:${side} w:val="single" w:sz="4" w:color="DCE3F0"/>`).join('')}</w:tblBorders></w:tblPr><w:tblGrid>${Array.from({length:count},()=>`<w:gridCol w:w="${width}"/>`).join('')}</w:tblGrid>${rows.map((row,i)=>`<w:tr>${i===0?'<w:trPr><w:tblHeader/></w:trPr>':''}${row.map(cell=>`<w:tc><w:tcPr><w:tcW w:w="${width}" w:type="dxa"/>${i===0?'<w:shd w:fill="EAF1FF"/>':''}</w:tcPr>${para(cell)}</w:tc>`).join('')}</w:tr>`).join('')}</w:tbl>`;
     };
-    let body=para('Laserfiche Reports')+metadata(message,question).map(r=>para(r.join(': '))).join('');
+    let body=para('تقارير ليزرفيش الذكية')+metadata(message,question).map(r=>para(r.join(': '))).join('');
     body+=blocks(message).map(b=>b.rows?table(b.rows):para(b.text)).join('');
     body+=para('نصوص المصادر الأصلية')+(message.sources||[]).map((s,i)=>para(`[${i+1}] ${s.documentName} · ${s.entryId} · ${s.pageNumber??'—'}`)+para(s.path)+para(s.text)).join('');
     return zip({'[Content_Types].xml':`<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>`,

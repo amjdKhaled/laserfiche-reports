@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Laserfiche Reports</title>
+  <title>تقارير ليزرفيش الذكية</title>
   <link rel="stylesheet" href="/styles.css">
   <link rel="stylesheet" href="/login.css">
   <link rel="stylesheet" href="/dashboard-theme.css">
@@ -11,7 +11,7 @@
 <body>
   <div class="shell">
     <aside class="sidebar">
-      <div class="brand"><img src="/isb-logo.jpg" class="brand-logo" alt="ISB"><div><strong>Laserfiche Reports</strong><small>تقارير المستندات المحلية</small></div></div>
+      <div class="brand"><img src="/isb-logo.jpg" class="brand-logo" alt="ISB"><div><strong>تقارير ليزرفيش الذكية</strong><small>تقارير المستندات المحلية</small></div></div>
       <button class="new-chat" id="new-chat">＋ محادثة جديدة</button>
       <div class="side-heading">المحادثات الأخيرة</div>
       <div id="history" class="history"></div>
@@ -53,11 +53,15 @@
   <div id="login-layer" class="login-layer hidden">
     <form id="login-form" class="login-card">
       <div class="welcome-icon">◈</div>
-      <h2>الدخول إلى Laserfiche Reports</h2>
+      <h2>الدخول إلى تقارير ليزرفيش الذكية</h2>
       <p>استخدم حساب Laserfiche للوصول إلى الوثائق المسموح لك بها.</p>
       <label for="repository-id">المستودع</label>
-      <input id="repository-id" list="repository-options" maxlength="256" required placeholder="اسم المستودع في Laserfiche">
-      <datalist id="repository-options"></datalist>
+      <select id="repository-id" required aria-describedby="repository-help">
+        <option value="">اختر المستودع</option>
+        <option value="__manual__">إدخال مستودع آخر…</option>
+      </select>
+      <input id="repository-manual" class="hidden" maxlength="256" placeholder="اسم المستودع كما يظهر في Laserfiche" aria-label="اسم المستودع الآخر">
+      <small id="repository-help">اكتشف المستودعات بحسابك، ثم اختر المستودع من القائمة.</small>
       <label for="username">اسم المستخدم</label>
       <input id="username" type="text" autocomplete="username" required>
       <label for="password">كلمة المرور</label>

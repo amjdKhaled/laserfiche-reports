@@ -11,6 +11,15 @@ namespace LaserficheReports.Web.Tests;
 
 public class ReportTests
 {
+    [Fact]
+    public void GraphTimeoutDefaultsToFourHoursAndHonorsSafeConfiguration()
+    {
+        Assert.Equal(14400, ReportsGraphTimeout.ResolveSeconds(new ConfigurationBuilder().Build()));
+        var configured = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        { ["ReportsGraph:TimeoutSeconds"] = "7200" }).Build();
+        Assert.Equal(7200, ReportsGraphTimeout.ResolveSeconds(configured));
+    }
+
     [Theory]
     [InlineData("قارن الوثائق ٦١٨، 609 و 610", new[] { 618, 609, 610 })]
     [InlineData("اعرض الوثيقة 618", new[] { 618 })]
@@ -59,6 +68,27 @@ public class ReportTests
         Assert.Null(ReportSupport.ParseCondition(question));
 
     [Fact]
+    public void QuotedFieldInNaturalArabicQuestionIsExtractedBeforeMatching()
+    {
+        var condition = ReportSupport.ParseCondition(
+            "ما الوثائق التي قيمة حقل «إجراء الوثيقة» فيها تساوي «تحت الإجراء»؟");
+
+        Assert.NotNull(condition);
+        Assert.Equal("إجراء الوثيقة", condition.FieldQuestion);
+        Assert.Equal("تحت الإجراء", condition.ExpectedValue);
+        Assert.True(ReportSupport.MatchesField(condition, "إجراء الوثيقة"));
+    }
+
+    [Fact]
+    public void RepositorySummaryRequestIsNotParsedAsAFieldFilter() =>
+        Assert.Null(ReportSupport.ParseCondition("الآن أعطني ملخصاً للمخزن بالكامل"));
+
+    [Fact]
+    public void ArabicDocumentMetadataRequestIsRecognized() =>
+        Assert.True(ReportSupport.IsDocumentMetadataQuestion(
+            "ما بيانات الوثيقة رقم 619؟ اعرض اسمها وحقولها وقيمها في جدول"));
+
+    [Fact]
     public async Task ScreenshotInventoryQuestionDoesNotDependOnVectorDatabaseOrModel()
     {
         var entries = new Entries(73);
@@ -71,6 +101,24 @@ public class ReportTests
         Assert.Equal(0, entries.FieldCalls.Count);
         Assert.DoesNotContain("| الحقل |", result.Answer);
         Assert.Contains("| 73 | وثيقة 73 |", result.Answer);
+    }
+
+    [Fact]
+    public async Task ExplicitDocumentMetadataQuestionReturnsLiveFieldsWithoutVectorSearch()
+    {
+        const string question = "ما بيانات الوثيقة رقم 619؟ اعرض اسمها وحقولها وقيمها في جدول، واذكر أي قيمة غير موجودة.";
+        var entries = new Entries(1);
+        var configuration = new ConfigurationBuilder().Build();
+        var chat = new ReportsChatService(configuration, new NoEmbeddings(), new Repository(), entries,
+            new NoClients(), new LiveRepositoryReportService(entries, configuration));
+
+        var result = await chat.AskAsync(question, default);
+
+        Assert.Contains("تقرير بيانات الوثائق", result.Answer);
+        Assert.Contains("إجراء الوثيقة", result.Answer);
+        Assert.Contains("تحت الإجراء", result.Answer);
+        Assert.Equal(new[] { 619 }, result.Scope!.RequestedEntryIds);
+        Assert.Equal(new[] { 619 }, entries.FieldCalls);
     }
 
     [Fact]

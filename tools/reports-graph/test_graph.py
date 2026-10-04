@@ -5,7 +5,8 @@ from pathlib import Path
 
 from evaluate import check_case
 
-from server import NO_EVIDENCE, build_graph, validate_request, format_context, parse_grounded_rows
+from server import (DEFAULT_OLLAMA_TIMEOUT_SECONDS, NO_EVIDENCE, build_graph, validate_request,
+                    format_context, parse_grounded_rows, resolve_ollama_timeout_seconds)
 from sync import discover_all
 
 
@@ -20,6 +21,14 @@ class FakeModel:
 
 
 class GraphTests(unittest.TestCase):
+    def test_slow_local_model_has_a_four_hour_request_timeout(self):
+        self.assertEqual(resolve_ollama_timeout_seconds(), DEFAULT_OLLAMA_TIMEOUT_SECONDS)
+        self.assertEqual(resolve_ollama_timeout_seconds("7200"), 7200)
+        for value in ("59", "86401", "many"):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                resolve_ollama_timeout_seconds(value)
+
+
     def test_no_evidence_does_not_call_model(self):
         model = FakeModel()
         result = build_graph(model).invoke({"question": "ما القرار؟", "evidence": []})
