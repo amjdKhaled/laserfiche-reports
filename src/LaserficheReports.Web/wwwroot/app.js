@@ -161,7 +161,155 @@ function renderMessages() {
           tableActions.append(tableDownload,tableFormat); wrap.after(tableActions);
         });
         const qualityLabel = ReportsDownload.qualityLabel(message.quality);
-        if (qualityLabel) bubble.prepend(el('div', 'report-scope report-qual…2760 tokens truncated…u0627لاتصال المحلي شغّل scripts\\configure-database.ps1 من مجلد المشروع، ثم أعد تشغيل التطبيق وحدّث الحالة.'));
+        if (qualityLabel) bubble.prepend(el('div', 'report-scope report-quality', qualityLabel));
+        if (message.scope) {
+          const scope = el('div', 'report-scope', message.scope.detail);
+          scope.setAttribute('role', 'note'); bubble.prepend(scope);
+        }
+        if (message.generatedAt || message.sources?.length) {
+          const actions = el('div', 'report-actions');
+          const copy = el('button', '', 'نسخ التقرير'); copy.type = 'button';
+          copy.onclick = async () => {
+            try { await navigator.clipboard.writeText(message.text); copy.textContent = 'تم النسخ'; }
+            catch { copy.textContent = 'تعذر النسخ'; }
+          };
+          const print = el('button', '', 'طباعة التقرير'); print.type = 'button';
+          print.onclick = () => {
+            document.querySelectorAll('.print-report').forEach(node => node.classList.remove('print-report'));
+            item.classList.add('print-report'); window.print();
+          };
+          const format = el('select', 'report-format');
+          format.setAttribute('aria-label', 'صيغة تحميل التقرير');
+          for (const [value, label] of [['docx', 'Word (.docx)'], ['xlsx', 'Excel (.xlsx)'], ['pdf', 'PDF (حفظ عبر الطباعة)'], ['html', 'تقرير HTML'], ['md', 'نص Markdown']]) {
+            const option = el('option', '', label); option.value = value; format.append(option);
+          }
+          const download = el('button', '', 'تحميل التقرير'); download.type = 'button';
+          download.onclick = () => {
+            const question = chat.messages.slice(0, messageIndex).reverse().find(previous => previous.role === 'user')?.text;
+            try { ReportsDownload.download(message, question, format.value); }
+            catch (error) { download.textContent = error.message || 'تعذر التحميل'; }
+          };
+          actions.append(download, format, copy, print);
+          const open = el('button', '', 'فتح وثائق التقرير في Laserfiche ↗'); open.type = 'button';
+          open.disabled = !message.relatedEntryIds?.length;
+          open.title = open.disabled ? 'لا توجد وثائق مرتبطة مؤكدة بهذه النتيجة' : 'عرض الوثائق المرتبطة في Web Client';
+          open.onclick = async () => {
+            open.disabled = true;
+            const epoch = sessionEpoch;
+            const preview = window.open('', '_blank');
+            if (preview) { preview.opener = null; preview.document.title = 'فتح وثائق التقرير'; preview.document.body.textContent = 'جاري التحقق من الوثائق...'; }
+            try {
+              const result = await api('/api/reports/laserfiche-links', {method:'POST', headers:{'Content-Type':'application/json'},
+                body:JSON.stringify({repositoryId:message.scope?.repositoryId || message.repositoryId,entryIds:message.relatedEntryIds})});
+              if (epoch !== sessionEpoch) { preview?.close(); return; }
+              const links = el('div', 'report-open-links');
+              result.urls.forEach((url,i) => {
+                const a=el('a','source-link',result.urls.length===1 ? `عرض ${result.documentCount} وثيقة في Laserfiche ↗` : `فتح المجموعة ${i+1} من ${result.urls.length} ↗`);
+                a.href=url; a.target='_blank'; a.rel='noopener noreferrer'; links.append(a);
+              });
+              bubble.querySelector('.report-open-links')?.remove(); bubble.append(links);
+              if (result.urls.length===1 && preview) preview.location.replace(result.urls[0]);
+              else preview?.close();
+            } catch(error) { preview?.close(); open.textContent=error.message; }
+            finally { open.disabled=false; }
+          };
+          actions.append(open); bubble.append(actions);
+        }
+      } else bubble.textContent = message.text;
+      item.append(bubble);
+      if (message.sources?.length) {
+        const sources = el('div', 'sources');
+        message.sources.forEach((source, index) => {
+          const isMetadata = source.textSource?.startsWith('laserfiche-metadata');
+          const card = el('details', 'source');
+          card.id = `${sourcePrefix}-${index + 1}`;
+          card.append(el('summary', '',
+            `[${index + 1}] ${source.documentName || 'وثيقة'} · ${isMetadata ? 'بيانات Laserfiche' : `صفحة ${source.pageNumber || '—'}`}`));
+          card.append(el('small', 'source-path', source.path || `Entry ${source.entryId}`));
+          card.append(el('p', 'source-text', source.text || ''));
+          if (source.pageNumber) {
+            const link = el('a', 'source-link', 'عرض صورة الصفحة ↗');
+            link.href = `/api/laserfiche/documents/${source.entryId}/pages/${source.pageNumber}/image?repositoryId=${encodeURIComponent(message.scope?.repositoryId || message.repositoryId || sessionRepository)}&sessionGeneration=${encodeURIComponent(sessionGeneration)}`;
+            link.target = '_blank'; link.rel = 'noopener';
+            card.append(link);
+          }
+          sources.append(card);
+        });
+        item.append(sources);
+      }
+      container.append(item);
+    });
+  }
+  if (!historySaved) {
+    const warning = el('p', 'report-scope', 'تعذر حفظ المحادثة في المتصفح. التقرير متاح الآن؛ حمّله قبل إغلاق الصفحة.');
+    warning.setAttribute('role', 'status'); container.append(warning);
+  }
+  container.scrollTop = container.scrollHeight;
+}
+function showTab(tab) {
+  $('chat-view').classList.toggle('hidden', tab !== 'chat');
+  $('docs-view').classList.toggle('hidden', tab !== 'docs');
+  $('tab-chat').classList.toggle('active', tab === 'chat');
+  $('tab-docs').classList.toggle('active', tab === 'docs');
+  if (tab === 'docs') { refreshStatuses(); loadDocuments(); }
+}
+$('tab-chat').onclick = () => showTab('chat');
+$('tab-docs').onclick = () => showTab('docs');
+$('new-chat').onclick = () => { active = null; renderHistory(); renderMessages(); showTab('chat'); };
+$('ask-form').onsubmit = async event => {
+  event.preventDefault();
+  if ($('send').disabled) return;
+  const question = $('question').value.trim();
+  if (!question) return;
+  if (!active) {
+    active = crypto.randomUUID();
+    chats.unshift({ id: active, title: question.slice(0, 45), messages: [] });
+  }
+  const epoch = sessionEpoch;
+  const chat = chats.find(c => c.id === active);
+  pendingOperations++;
+  chat.messages.push({ role: 'user', text: question });
+  $('question').value = '';
+  $('send').disabled = true;
+  chat.messages.push({ role: 'assistant', text: 'جاري تحليل الوثائق وتجهيز التقرير. قد يستغرق ذلك وقتًا بحسب حجم الأدلة وسرعة النموذج؛ اترك الصفحة مفتوحة...' });
+  renderHistory(); renderMessages();
+  try {
+    const result = await api('/api/reports/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question }) });
+    if (epoch !== sessionEpoch) return;
+    chat.messages[chat.messages.length - 1] = { role: 'assistant', repositoryId: sessionRepository, relatedEntryIds: result.relatedEntryIds, text: result.answer, sources: result.sources, scope: result.scope, generatedAt: result.generatedAt, quality: result.quality };
+  } catch (error) {
+    chat.messages[chat.messages.length - 1] = { role: 'assistant', text: `تعذر إكمال السؤال: ${error.message}` };
+  } finally { pendingOperations--; $('send').disabled = false; if (epoch === sessionEpoch) { save(); renderMessages(); } }
+};
+$('question').onkeydown = event => {
+  if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); $('ask-form').requestSubmit(); }
+};
+async function refreshStatuses() {
+  const epoch = sessionEpoch;
+  const appStatus = await api('/api/app/status').catch(() => ({}));
+  if (epoch !== sessionEpoch) return;
+  const services = [['Laserfiche', '/api/laserfiche/status'], ['Supabase', '/api/database/status'],
+    ['Ollama Embeddings', '/api/embeddings/status'], ['LangGraph', '/api/graph/status'], ['OCR', '/api/ocr/status']];
+  $('statuses').replaceChildren();
+  const cards = services.map(([name]) => {
+    const card = el('div', 'status-card');
+    card.append(el('strong', '', name));
+    $('statuses').append(card);
+    return card;
+  });
+  await Promise.all(services.map(async ([name, url], index) => {
+    const deferred = name === 'OCR' && appStatus.ocrEnabled === false;
+    let healthy = false;
+    let diagnostic = '';
+    try { if (!deferred) {
+      const data = await api(url);
+      healthy = data.status !== 'unavailable' && data.isConnected !== false && data.authenticationSucceeded !== false;
+    } } catch(error) { diagnostic = error.message; }
+    cards[index].append(el('span', deferred ? 'deferred' : healthy ? 'ok' : 'bad',
+      deferred ? 'مؤجل' : healthy ? 'متصل' : 'غير متصل'));
+    if (name === 'Supabase' && diagnostic && epoch === sessionEpoch) {
+      cards[index].append(el('p', 'service-diagnostic', diagnostic));
+      cards[index].append(el('p', 'service-hint', 'لضبط الاتصال المحلي شغّل scripts\\configure-database.ps1 من مجلد المشروع، ثم أعد تشغيل التطبيق وحدّث الحالة.'));
     }
   }));
 }
