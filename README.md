@@ -383,7 +383,7 @@ Reference: [Supabase self-hosted Postgres connections](https://supabase.com/docs
 
 ## Report quality and adversarial evaluation
 
-`tools/reports-graph/adversarial_cases.json` contains 40 synthetic questions for
+`tools/reports-graph/adversarial_cases.json` contains 46 synthetic questions for
 missing dates, missing comparison documents, repository counts/percentages from a
 sample, instructions injected into questions/documents, OCR name guessing, Arabic
 digit fidelity, conflicting dates, metadata vs OCR, Hijri conversion, compliance
@@ -408,7 +408,7 @@ review, query-focused source windows, and hybrid lexical/vector retrieval with R
 Read [AI reports architecture](docs/AI_REPORTS_ARCHITECTURE.md) for implementation,
 primary research sources, limits and local evaluation instructions. Restart both
 the web application and LangGraph after updating; `/health` on port 8766 reports
-`promptVersion: reports-grounded-v2`. Semantic review is a model check, not a guarantee.
+`promptVersion: reports-grounded-v2.1`. Semantic review is a model check, not a guarantee.
 
 The extraction prompt preserves negation, exceptions, conditions and units, and
 does not treat indexed fields as a live read. The validator also requires evidence

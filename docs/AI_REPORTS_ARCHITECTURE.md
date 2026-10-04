@@ -66,7 +66,7 @@ authority. A misleading statement may fool both calls. Verbatim quotation checks
 establish provenance only; OCR errors, stale indexed fields, incomplete retrieval
 and semantic errors still require evaluation on real documents.
 
-`/health` identifies `reports-grounded-v2`. Chat responses expose a `quality` object
+`/health` identifies `reports-grounded-v2.1`. Chat responses expose a `quality` object
 with report status, quotation verification, semantic-review state and model-call
 count. The UI displays understandable status labels rather than invented confidence
 percentages. Old saved reports without this object remain readable.
@@ -78,7 +78,7 @@ fallback behavior. PostgreSQL/pgvector CI exercises the actual hybrid SQL agains
 an isolated `reports_test` database, including cross-repository and project isolation.
 It never connects to the user's database. UI tests cover exporting and persistence.
 
-The 40-case synthetic corpus is a separate model-quality check. Run it on the model
+The 46-case synthetic corpus is a separate model-quality check. Run it on the model
 used for reports after restarting LangGraph:
 
 ```powershell
@@ -94,3 +94,27 @@ in answer quality, and add anonymized examples of failures from real documents.
 Examples include negation, conditional payments, currency/unit mismatches, late
 answers inside long chunks, absent comparison evidence, misleading instructions,
 incomplete table headings, OCR uncertainty and causes not stated in the source.
+
+## v2.1 output correctness follow-up
+
+- Bind the schema in Ollama's `format` and include it in the trusted system
+  prompt, following the official structured-output guidance.
+- Give composition the actual source name, page and source type to distinguish
+  comparison subjects. These labels do not establish document contents.
+- Preserve signs, percentage markers and numeric separators in deterministic
+  checks. A negative balance cannot be silently rewritten as positive, and a
+  comma-separated list cannot be merged into a larger number. This is a lexical
+  guard, not unit conversion or mathematical validation; faithful paraphrases
+  may be conservatively rejected. Semantic review still checks units and meaning.
+- Downgrade coverage when a finding is rejected and explain that unsupported
+  prose was excluded, even when the model returns `sufficient`.
+- Extend prompts and quality cases for blank versus zero, effective versus upload
+  dates, partial questions, and recommendations versus approved obligations.
+- Evaluation rejects an empty `answered` selection and can require an actual
+  synthesis using `minimumFindings`, so a quotations-only response cannot silently
+  pass cases specifically testing answer composition.
+
+Regression tests use scripted model replies. Run the 46 cases on the installed
+Ollama model and review the resulting answers against their synthetic sources
+before drawing conclusions about real report quality. No benchmark score is
+claimed from the research sources.

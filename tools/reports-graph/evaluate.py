@@ -20,7 +20,9 @@ def check_case(result, expected):
     selection = result.get("selection", {})
     rows = selection.get("rows", [])
     return (result.get("verified") is True and selection.get("status") == expected["status"]
+            and (selection.get("status") == "insufficient" or bool(rows))
             and (not rows or result.get("reviewed") is True)
+            and len(result.get("findings", [])) >= expected.get("minimumFindings", 0)
             and set(expected.get("requiredReferences", [])).issubset({row["reference"] for row in rows})
             and ("allowedReferences" not in expected or
                  {row["reference"] for row in rows}.issubset(set(expected["allowedReferences"])))

@@ -2,8 +2,9 @@ import json
 import unittest
 
 from server import build_graph, format_context, MAX_CONTEXT_CHARACTERS
-from report_reasoning import validate_draft, apply_review
+from report_reasoning import validate_draft, apply_review, numeric_literals
 from context_windows import focused_window
+from evaluate import check_case
 
 
 class ScriptedModel:
@@ -45,6 +46,16 @@ class ReasoningTests(unittest.TestCase):
         self.assertEqual(result["quality"]["modelCalls"], 3)
         self.assertEqual(len(model.schemas), 3)
         self.assertTrue(all(s["type"] == "object" for s in model.schemas))
+        self.assertTrue(all("JSON Schema:" in call[0].content for call in model.calls))
+
+    def test_composer_gets_authoritative_source_identity_and_type(self):
+        request = self.request()
+        request["evidence"][0].update(documentName="قرار اللجنة", pageNumber=4, textSource="ocr")
+        model = ScriptedModel([self.selection(), {"findings": []},
+            {"coverage": "sufficient", "rows": self.review()["rows"], "findings": [], "issues": []}])
+        build_graph(model).invoke(request)
+        source = json.loads(model.calls[1][1].content)["quotations"][0]["source"]
+        self.assertEqual(source, {"documentName": "قرار اللجنة", "pageNumber": 4, "sourceType": "OCR page"})
 
     def test_verbatim_but_misleading_negation_fragment_is_removed_by_review(self):
         model = ScriptedModel([self.selection("تمت الموافقة"),
@@ -89,6 +100,22 @@ class ReasoningTests(unittest.TestCase):
                               {"findings": [{"text": "تمت الموافقة", "rowIds": [1]}]})
         self.assertEqual(result["findings"], [])
         self.assertEqual(len(result["selection"]["rows"]), 1)
+        self.assertEqual(result["selection"]["status"], "insufficient")
+        self.assertIn("unsupported_claim", result["issues"])
+
+    def test_numeric_guard_preserves_sign_percent_and_decimal_list_boundaries(self):
+        cases = [("الرصيد −٥٠٠ ريال", "الرصيد 500 ريال"),
+                 ("النسبة ٥ ٪", "النسبة 5"),
+                 ("القيم 12,50", "القيمة 1250"),
+                 ("القيم 12, 500", "القيمة 12500"),
+                 ("القيمة ١٢٫٥", "القيمة 125"),
+                 ("الفترة 2025-2026", "السنة 2026")]
+        for quote, finding in cases:
+            with self.subTest(quote=quote), self.assertRaises(ValueError):
+                validate_draft(json.dumps({"findings": [{"text": finding, "rowIds": [1]}]}),
+                               [{"quote": quote}])
+        self.assertEqual(numeric_literals("الرصيد −٥٠٠، والنسبة ٥ ٪"), {"-500", "5%"})
+        self.assertEqual(numeric_literals("12,500.50 و١٢٬٥٠٠٫٥٠"), {"12500.50"})
 
     def test_focused_window_preserves_late_answer_and_original_characters(self):
         source = "مقدمة عامة. " * 160 + "\nموعد التسليم: ١٤٤٨/٠٣/٢٧ بعد موافقة المدير.\n" + "تفاصيل أخرى. " * 50
@@ -101,6 +128,14 @@ class ReasoningTests(unittest.TestCase):
         context = format_context({"question": "سؤال", "evidence": evidence})["context"]
         self.assertLessEqual(len(context), MAX_CONTEXT_CHARACTERS)
         self.assertEqual(len(json.loads(context)), 32)
+
+    def test_quality_gate_requires_answer_rows_and_requested_synthesis(self):
+        result = {"verified": True, "reviewed": True,
+                  "selection": {"status": "answered", "rows": []}, "findings": []}
+        self.assertFalse(check_case(result, {"status": "answered"}))
+        result["selection"]["rows"] = self.selection()["rows"]
+        self.assertTrue(check_case(result, {"status": "answered"}))
+        self.assertFalse(check_case(result, {"status": "answered", "minimumFindings": 1}))
 
 
 if __name__ == "__main__":

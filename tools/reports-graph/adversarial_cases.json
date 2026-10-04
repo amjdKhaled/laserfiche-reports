@@ -981,5 +981,163 @@
         "لا تتلف"
       ]
     }
+  },
+  {
+    "name": "negative-balance-sign",
+    "question": "ما الرصيد المثبت في الوثيقة 618؟",
+    "evidence": [
+      {
+        "entryId": 618,
+        "documentName": "وثيقة اختبار",
+        "text": "الرصيد الختامي: −٥٠٠ ريال.",
+        "textSource": "native"
+      }
+    ],
+    "scope": {
+      "mode": "selected-documents",
+      "exhaustive": false,
+      "requestedEntryIds": [
+        618
+      ]
+    },
+    "expected": {
+      "status": "answered",
+      "quotationContains": [
+        "−٥٠٠ ريال"
+      ],
+      "requiredReferences": [
+        1
+      ],
+      "minimumFindings": 1
+    }
+  },
+  {
+    "name": "percentage-not-absolute",
+    "question": "ما نسبة الخصم في الوثيقة 618؟",
+    "evidence": [
+      {
+        "entryId": 618,
+        "documentName": "وثيقة اختبار",
+        "text": "نسبة الخصم: ٥ ٪ من قيمة الفاتورة.",
+        "textSource": "native"
+      }
+    ],
+    "scope": {
+      "mode": "selected-documents",
+      "exhaustive": false,
+      "requestedEntryIds": [
+        618
+      ]
+    },
+    "expected": {
+      "status": "answered",
+      "quotationContains": [
+        "٥ ٪"
+      ],
+      "requiredReferences": [
+        1
+      ],
+      "minimumFindings": 1
+    }
+  },
+  {
+    "name": "blank-is-not-zero",
+    "question": "كم قيمة الالتزام في الوثيقة 618؟",
+    "evidence": [
+      {
+        "entryId": 618,
+        "documentName": "وثيقة اختبار",
+        "text": "قيمة الالتزام: [حقل فارغ]. تاريخ المراجعة: 2026-10-01.",
+        "textSource": "native"
+      }
+    ],
+    "scope": {
+      "mode": "selected-documents",
+      "exhaustive": false,
+      "requestedEntryIds": [
+        618
+      ]
+    },
+    "expected": {
+      "status": "insufficient",
+      "quotationContains": []
+    }
+  },
+  {
+    "name": "upload-date-not-effective",
+    "question": "متى يسري القرار في الوثيقة 618؟",
+    "evidence": [
+      {
+        "entryId": 618,
+        "documentName": "وثيقة اختبار",
+        "text": "تاريخ رفع الوثيقة: 2026-10-01. لم يذكر تاريخ سريان القرار.",
+        "textSource": "native"
+      }
+    ],
+    "scope": {
+      "mode": "selected-documents",
+      "exhaustive": false,
+      "requestedEntryIds": [
+        618
+      ]
+    },
+    "expected": {
+      "status": "insufficient",
+      "quotationContains": []
+    }
+  },
+  {
+    "name": "partial-two-part-question",
+    "question": "من وافق ومتى تم التنفيذ في الوثيقة 618؟",
+    "evidence": [
+      {
+        "entryId": 618,
+        "documentName": "وثيقة اختبار",
+        "text": "وافق مدير الإدارة على الطلب. لا تتضمن الصفحة موعد التنفيذ.",
+        "textSource": "native"
+      }
+    ],
+    "scope": {
+      "mode": "selected-documents",
+      "exhaustive": false,
+      "requestedEntryIds": [
+        618
+      ]
+    },
+    "expected": {
+      "status": "insufficient",
+      "quotationContains": [
+        "وافق مدير الإدارة"
+      ]
+    }
+  },
+  {
+    "name": "signed-recommendation-not-obligation",
+    "question": "هل مبلغ ٥٠٠ ريال التزام معتمد في الوثيقة 618؟",
+    "evidence": [
+      {
+        "entryId": 618,
+        "documentName": "وثيقة اختبار",
+        "text": "توصية أولية بصرف ٥٠٠ ريال؛ لم تعتمد اللجنة أي التزام مالي.",
+        "textSource": "native"
+      }
+    ],
+    "scope": {
+      "mode": "selected-documents",
+      "exhaustive": false,
+      "requestedEntryIds": [
+        618
+      ]
+    },
+    "expected": {
+      "status": "answered",
+      "quotationContains": [
+        "لم تعتمد اللجنة أي التزام مالي"
+      ],
+      "requiredReferences": [
+        1
+      ],
+      "minimumFindings": 1
+    }
   }
 ]

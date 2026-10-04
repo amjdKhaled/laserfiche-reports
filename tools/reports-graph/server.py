@@ -278,9 +278,15 @@ def build_graph(model):
         rows = state["selection"]["rows"]
         if not state["verified"] or not rows:
             return {"draft": {"findings": []}}
+        sources = json.loads(state["context"])
+        quotations = []
+        for i, row in enumerate(rows, 1):
+            source = sources[row["reference"] - 1]
+            quotations.append({"rowId": i, **row, "source": {
+                key: source[key] for key in ("documentName", "pageNumber", "sourceType")}})
         payload = {"question": state["question"], "scope": state.get("scope", {}),
                    "status": state["selection"]["status"],
-                   "quotations": [{"rowId": i, **row} for i, row in enumerate(rows, 1)]}
+                   "quotations": quotations}
         try:
             content = invoke_structured(model, [SystemMessage(content=COMPOSE_SYSTEM),
                 HumanMessage(content=json.dumps(payload, ensure_ascii=False))], Draft)
