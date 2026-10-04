@@ -125,7 +125,7 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
             {
                 if (fields.Count == 0)
                 {
-                    report.AppendLine($"| {entry.Id} | {ReportSupport.Cell(entry.Name)} | لا توجد حقول متاحة | غير مذكور | {ReportSupport.Cell(path)} | [{i + 1}] |");
+                    report.AppendLine($"| {entry.Id} | {ReportSupport.Cell(entry.Name)} | لا توجد حقول متاحة | غير مذكور | {ReportSupport.Cell(path)} | [{evidence.Count + 1}] |");
                     evidence.Add(new Evidence(entry.Id, entry.Name, path, null, 1,
                         $"اسم الوثيقة: {entry.Name}\nلا توجد حقول متاحة\nالمسار: {path}", "laserfiche-metadata-live"));
                 }
@@ -147,6 +147,7 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
             ? "| — | لا توجد نتائج مؤكدة | — | — | — | — |"
             : "| — | لا توجد نتائج مؤكدة | — | — |");
         report.AppendLine("\n## ملاحظات\n\nالنتائج مبنية على حقول المستودع وقت الفحص؛ لا تعتمد على OCR أو التخمين اللغوي.");
+        if (includeFields) report.AppendLine("القيمة «غير مذكور» تعني أن Laserfiche لم يُرجع قيمة لهذا الحقل في وقت الفحص.");
         if (!complete) report.AppendLine("الفحص غير مكتمل؛ الأعداد المذكورة تخص الوثائق المفحوصة فقط.");
         return new ChatResult(report.ToString().Trim(), evidence, scope)
             { RelatedEntryIds = evidence.Select(e => e.EntryId).Distinct().ToArray() };
