@@ -91,7 +91,8 @@ internal sealed class ReportsChatService(
             return new ChatResult("# توضيح شروط التقرير\n\nالطلب يتضمن أكثر من شرط أو مقارنة غير مدعومة في فحص الحقول الحالي. " +
                 "اكتب شرطًا واحدًا بهذه الصيغة: «إجراء الوثيقة يساوي تحت الاجراء». لن أعرض عددًا أو قائمة على أنها حصر مؤكد لهذا الطلب.", []);
         var condition = ReportSupport.ParseCondition(question);
-        if (condition is not null || ReportSupport.IsInventoryQuestion(question))
+        if (condition is not null || ReportSupport.IsInventoryQuestion(question) ||
+            (requestedEntries.Length > 0 && ReportSupport.IsDocumentMetadataQuestion(question)))
             return await liveReports.CreateAsync(repository.RepositoryId, condition, requestedEntries, cancellationToken);
         var hasEntryFilter = requestedEntries.Length > 0;
         var candidateLimit = Math.Clamp(configuration.GetValue<int?>("Reports:CandidateLimit") ?? 240, 24, 1000);
