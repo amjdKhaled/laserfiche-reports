@@ -53,7 +53,7 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
             }
         }
 
-        var matches = new List<(LFEntry Entry, LFFieldValue? Field)>();
+        var matches = new List<(LFEntry Entry, IReadOnlyList<LFFieldValue> Fields)>();
         var knownField = false;
         var inspected = 0;
         foreach (var candidate in documents.Values.OrderBy(x => x.Id))
@@ -64,7 +64,15 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
                 // Recheck access even if the folder enumeration returned a cached row.
                 var entry = await entries.GetEntryAsync(candidate.Id, cancellationToken);
                 if (entry.EntryType != LFEntryType.Document) { skipped++; continue; }
-                if (condition is null) { inspected++; matches.Add((entry, null)); continue; }
+                if (condition is null)
+                {
+                    inspected++;
+                    var metadata = requestedIds.Count > 0
+                        ? await entries.GetEntryFieldsAsync(entry.Id, cancellationToken)
+                        : Array.Empty<LFFieldValue>();
+                    matches.Add((entry, metadata));
+                    continue;
+                }
                 var fields = await entries.GetEntryFieldsAsync(entry.Id, cancellationToken);
                 inspected++;
                 var relevant = fields.Where(field => ReportSupport.MatchesField(condition, field.FieldName))
@@ -79,7 +87,7 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
                     throw new ArgumentException("اسم الحقل غير محدد. اكتب اسم الحقل الكامل كما يظهر في Laserfiche.");
                 var match = relevant.FirstOrDefault(field =>
                     ReportSupport.MatchesValue(field.Value, condition.ExpectedValue, field.IsMultiValue));
-                if (match is not null) matches.Add((entry, match));
+                if (match is not null) matches.Add((entry, [match]));
             }
             catch (LaserficheException ex) when (ex.StatusCode is 403 or 404) { skipped++; }
             // Outages and authentication failures must abort rather than produce a false full report.
@@ -90,36 +98,54 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
         var detail = complete ? $"فُحصت {inspected} وثيقة من {target} باستخدام بيانات Laserfiche الحالية."
             : $"فُحصت {inspected} وثيقة؛ التقرير جزئي" +
               (truncated ? " بسبب بلوغ حد الفحص المهيأ." : " بسبب وثائق أو مجلدات تعذر الوصول إليها.");
+        var includeFields = condition is not null || requestedIds.Count > 0;
         var scope = new AnswerScope(requestedIds.Count > 0 ? "selected-documents" : "repository",
-            repositoryId, inspected, matches.Count, complete, detail, requestedIds);
-        var report = new StringBuilder(condition is null ? "# تقرير وثائق المستودع\n\n" : "# تقرير مطابقة حقول الوثائق\n\n");
+            repositoryId, inspected, condition is null ? matches.Sum(x => x.Fields.Count) : matches.Count,
+            complete, detail, requestedIds);
+        var report = new StringBuilder(condition is not null ? "# تقرير مطابقة حقول الوثائق\n\n" :
+            includeFields ? "# تقرير بيانات الوثائق\n\n" : "# تقرير وثائق المستودع\n\n");
         report.AppendLine($"تاريخ إعداد التقرير: {DateTimeOffset.UtcNow:yyyy-MM-dd HH:mm} UTC\n");
         report.AppendLine("## ملخص التقرير\n");
         if (condition is not null && !knownField)
             report.AppendLine("لم أتعرف على اسم الحقل المطلوب ضمن الوثائق المفحوصة. اكتب اسم الحقل الكامل متبوعًا بـ «يساوي» ثم القيمة.");
         else
-            report.AppendLine(condition is null ? $"عدد الوثائق المدرجة: **{matches.Count}**."
+            report.AppendLine(condition is null ? $"عدد الوثائق المدرجة: **{matches.Count}**؛ عدد قيم الحقول المسترجعة: **{matches.Sum(x => x.Fields.Count)}**."
                 : $"عدد الوثائق المطابقة: **{matches.Count}**. القيمة المطلوبة: **{ReportSupport.Cell(condition.ExpectedValue)}**.");
         report.AppendLine($"\n{detail}\n");
         report.AppendLine("## النتائج\n");
-        report.AppendLine(condition is null
-            ? "| رقم الوثيقة | اسم الوثيقة | المسار | المرجع |\n| --- | --- | --- | --- |"
-            : "| رقم الوثيقة | اسم الوثيقة | الحقل | القيمة | المسار | المرجع |\n| --- | --- | --- | --- | --- | --- |");
+        report.AppendLine(condition is not null || includeFields
+            ? "| رقم الوثيقة | اسم الوثيقة | الحقل | القيمة | المسار | المرجع |\n| --- | --- | --- | --- | --- | --- |"
+            : "| رقم الوثيقة | اسم الوثيقة | المسار | المرجع |\n| --- | --- | --- | --- |");
         var evidence = new List<Evidence>();
         for (var i = 0; i < matches.Count; i++)
         {
-            var (entry, field) = matches[i];
+            var (entry, fields) = matches[i];
             var path = string.IsNullOrWhiteSpace(entry.FullPath) ? documents[entry.Id].FullPath : entry.FullPath;
-            report.AppendLine(condition is null
-                ? $"| {entry.Id} | {ReportSupport.Cell(entry.Name)} | {ReportSupport.Cell(path)} | [{i + 1}] |"
-                : $"| {entry.Id} | {ReportSupport.Cell(entry.Name)} | {ReportSupport.Cell(field?.FieldName)} | {ReportSupport.Cell(field?.Value)} | {ReportSupport.Cell(path)} | [{i + 1}] |");
-            evidence.Add(new Evidence(entry.Id, entry.Name, path, null, 1,
-                $"اسم الوثيقة: {entry.Name}\nالمسار: {path}\n" +
-                (field is null ? "نوع الإدخال: وثيقة" : $"{field.FieldName}: {field.Value}"), "laserfiche-metadata-live"));
+            if (includeFields)
+            {
+                if (fields.Count == 0)
+                {
+                    report.AppendLine($"| {entry.Id} | {ReportSupport.Cell(entry.Name)} | لا توجد حقول متاحة | غير مذكور | {ReportSupport.Cell(path)} | [{i + 1}] |");
+                    evidence.Add(new Evidence(entry.Id, entry.Name, path, null, 1,
+                        $"اسم الوثيقة: {entry.Name}\nلا توجد حقول متاحة\nالمسار: {path}", "laserfiche-metadata-live"));
+                }
+                foreach (var field in fields)
+                {
+                    report.AppendLine($"| {entry.Id} | {ReportSupport.Cell(entry.Name)} | {ReportSupport.Cell(field.FieldName)} | {ReportSupport.Cell(field.Value)} | {ReportSupport.Cell(path)} | [{evidence.Count + 1}] |");
+                    evidence.Add(new Evidence(entry.Id, entry.Name, path, null, 1,
+                        $"اسم الوثيقة: {entry.Name}\nالمسار: {path}\n{field.FieldName}: {field.Value}", "laserfiche-metadata-live"));
+                }
+            }
+            else
+            {
+                report.AppendLine($"| {entry.Id} | {ReportSupport.Cell(entry.Name)} | {ReportSupport.Cell(path)} | [{i + 1}] |");
+                evidence.Add(new Evidence(entry.Id, entry.Name, path, null, 1,
+                    $"اسم الوثيقة: {entry.Name}\nالمسار: {path}\nنوع الإدخال: وثيقة", "laserfiche-metadata-live"));
+            }
         }
-        if (matches.Count == 0) report.AppendLine(condition is null
-            ? "| — | لا توجد نتائج مؤكدة | — | — |"
-            : "| — | لا توجد نتائج مؤكدة | — | — | — | — |");
+        if (matches.Count == 0) report.AppendLine(condition is not null || includeFields
+            ? "| — | لا توجد نتائج مؤكدة | — | — | — | — |"
+            : "| — | لا توجد نتائج مؤكدة | — | — |");
         report.AppendLine("\n## ملاحظات\n\nالنتائج مبنية على حقول المستودع وقت الفحص؛ لا تعتمد على OCR أو التخمين اللغوي.");
         if (!complete) report.AppendLine("الفحص غير مكتمل؛ الأعداد المذكورة تخص الوثائق المفحوصة فقط.");
         return new ChatResult(report.ToString().Trim(), evidence, scope)
