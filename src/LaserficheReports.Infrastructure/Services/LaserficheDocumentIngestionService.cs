@@ -55,12 +55,12 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
     public Task<DocumentIngestionResult> IngestMetadataAsync(int entryId, CancellationToken cancellationToken = default) =>
         IngestCoreAsync(entryId, false, cancellationToken);
 
-    public Task<DocumentIngestionResult> ReindexContentAsync(int entryId, CancellationToken cancellationToken = default) =>
-        IngestCoreAsync(entryId, true, cancellationToken);
+    public Task<DocumentIngestionResult> ReindexContentAsync(int entryId, CancellationToken cancellationToken = default, bool rebuild = false) =>
+        IngestCoreAsync(entryId, true, cancellationToken, rebuild);
 
     private async Task<DocumentIngestionResult> IngestCoreAsync(
         int entryId, bool force,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default, bool rebuild = false)
     {
         if (entryId <= 0)
         {
@@ -310,7 +310,7 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
             contentFailureCount);
         var contentHash = IndexFingerprint.Hash(JsonSerializer.Serialize(pageTexts.OrderBy(x => x.PageNumber)));
         var pipelineVersion = IndexFingerprint.Hash($"v2|{_localAiOptions.EmbeddingModel}|{_localAiOptions.EffectiveEmbeddingDimensions}|{_localAiOptions.EffectiveChunkSize}|{_localAiOptions.EffectiveChunkOverlap}|{_ocrOptions.Enabled}");
-        if (hasUsableText && await HasCurrentContentAsync(repository.RepositoryId, entryId, contentHash, pipelineVersion, cancellationToken))
+        if (!rebuild && hasUsableText && await HasCurrentContentAsync(repository.RepositoryId, entryId, contentHash, pipelineVersion, cancellationToken))
             return await RefreshMetadataAsync(entryId, cancellationToken);
         var chunks = BuildSearchChunks(entry, fields, pageTexts,
             _localAiOptions.EffectiveChunkSize, _localAiOptions.EffectiveChunkOverlap);

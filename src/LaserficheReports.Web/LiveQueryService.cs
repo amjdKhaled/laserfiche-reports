@@ -6,7 +6,8 @@ using LaserficheReports.Infrastructure.Services;
 namespace LaserficheReports.Web;
 
 internal sealed class LiveQueryService(ILaserficheEntryService entries, ILaserficheTemplateService templates,
-    ILaserficheFieldDefinitionService definitions, ILaserficheDocumentService documents)
+    ILaserficheFieldDefinitionService definitions, ILaserficheDocumentService documents,
+    LiveReportFiles? files = null, IHttpContextAccessor? accessor = null, IConfiguration? configuration = null)
 {
     internal async Task<ChatResult> AnswerAsync(QueryIntent intent,string repository,CancellationToken ct)
     {
@@ -21,6 +22,9 @@ internal sealed class LiveQueryService(ILaserficheEntryService entries, ILaserfi
             var values=await definitions.GetFieldDefinitionsAsync(ct);
             return new ChatResult("الحقول الحالية من Laserfiche:\n\n| الرقم | الحقل | النوع |\n| --- | --- | --- |\n"+string.Join("\n",values.Select(x=>$"| {x.Key} | {ReportSupport.Cell(x.Value.Name)} | {ReportSupport.Cell(x.Value.FieldType)} |")),[],Scope(values.Count));
         }
+        var artifact=files is not null && accessor?.HttpContext is not null ? files.Create(repository,accessor.HttpContext.Session.Id) : ((string Token,string Path)?)null;
+        await using var writer=artifact is not null ? new StreamWriter(artifact.Value.Path,false,new UTF8Encoding(false)) : null;
+        if(writer is not null)await writer.WriteLineAsync("# نتائج Laserfiche الحالية\n\n| الرقم | الاسم | المسار |\n| --- | --- | --- |");
         var evidence=new List<Evidence>();var rows=new StringBuilder();var total=0;long imageCount=0;var unknownImages=0;
         await foreach(var entry in MatchingAsync(intent,ct))
         {
@@ -32,6 +36,7 @@ internal sealed class LiveQueryService(ILaserficheEntryService entries, ILaserfi
                 imageCount+=pages.Count(x=>x.MimeType?.StartsWith("image/",StringComparison.OrdinalIgnoreCase)==true||x.Width is >0&&x.Height is >0);
                 unknownImages+=pages.Count(x=>string.IsNullOrEmpty(x.MimeType)&&!(x.Width is >0&&x.Height is >0));
             }
+            if(writer is not null)await writer.WriteLineAsync($"| {entry.Id} | {ReportSupport.Cell(entry.Name)} | {ReportSupport.Cell(entry.FullPath)} |");
             if(evidence.Count>=500)continue; // display bound only; enumeration and counts continue to completion.
             var fields=intent.Type==QueryType.DocumentLookup?await entries.GetEntryFieldsAsync(entry.Id,ct):[];
             var text=fields.Count>0?string.Join("; ",fields.Select(x=>$"{x.FieldName}: {x.Value}")):entry.FullPath;
@@ -41,7 +46,8 @@ internal sealed class LiveQueryService(ILaserficheEntryService entries, ILaserfi
         var detail=$"تم الحصر مباشرة من Laserfiche وفق صلاحيات حسابك، دون Top-K. وقت انتهاء الفحص: {DateTimeOffset.UtcNow:O}. التغييرات أثناء الفحص قد تؤثر على النتائج؛ هذا ليس لقطة معاملات للمستودع.";
         if(total>500)detail+=" يعرض الرد أول 500 نتيجة فقط؛ العدد يشمل جميع النتائج المفحوصة.";
         var count=intent.Kind=="images"?$"الصور المؤكدة: **{imageCount}**."+(unknownImages>0?$" تعذر تحديد نوع {unknownImages} صفحة؛ عدد الصور جزئي.":""):$"عدد النتائج: **{total}**.";
-        return new ChatResult(count+"\n\n"+detail+"\n\n| الرقم | الاسم | المسار | البيانات |\n| --- | --- | --- | --- |\n"+rows,evidence,Scope(total) with {Detail=detail,Exhaustive=unknownImages==0});
+        if(writer is not null){await writer.WriteLineAsync("\n"+count+"\n\n"+detail);await writer.FlushAsync(ct);}
+        return new ChatResult(count+"\n\n"+detail+"\n\n| الرقم | الاسم | المسار | البيانات |\n| --- | --- | --- | --- |\n"+rows,evidence,Scope(total) with {Detail=detail,Exhaustive=unknownImages==0}) { DownloadUrl=artifact is not null?$"/api/reports/files/{artifact.Value.Token}":null };
         AnswerScope Scope(int count)=>new("repository",repository,count,0,true,"المصدر: Laserfiche API الحالي؛ النطاق يتبع صلاحيات حسابك.",intent.EntryIds);
     }
     internal async IAsyncEnumerable<LFEntry> MatchingAsync(QueryIntent intent,[EnumeratorCancellation] CancellationToken ct)
@@ -64,13 +70,14 @@ internal sealed class LiveQueryService(ILaserficheEntryService entries, ILaserfi
             if(matches.Length!=1)throw new ArgumentException("حدد اسم قالب موجود في Laserfiche دون اختصار.");
             templateId=matches[0].Id;
         }
-        var start=DateTimeOffset.UtcNow.Date;
+        var zone=TimeZoneInfo.FindSystemTimeZoneById(configuration?["Reports:TimeZone"]??"Asia/Riyadh");
+        var start=TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow,zone).Date;
         await foreach(var entry in Candidates(ct))
         {
             if(intent.Kind=="folders") {if(entry.EntryType is LFEntryType.Folder or LFEntryType.RecordSeries)yield return entry;continue;}
             if(entry.EntryType!=LFEntryType.Document)continue;
             if(templateId.HasValue&&entry.TemplateId!=templateId)continue;
-            if(intent.DateMode=="created-today"&&entry.CreationTime?.UtcDateTime.Date!=start)continue;
+            if(intent.DateMode=="created-today"&&(entry.CreationTime is null || TimeZoneInfo.ConvertTime(entry.CreationTime.Value,zone).Date!=start))continue;
             if(intent.DateMode=="modified-recent"&&!(entry.LastModifiedTime>=DateTimeOffset.UtcNow.AddDays(-7)))continue;
             var current=entry;
             if(intent.Kind=="electronic")

@@ -28,6 +28,12 @@ public sealed class LaserficheRealtimeSyncService(IServiceScopeFactory scopes,Re
     }
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        FileStream? instance = null;
+        if (options.Value.Enabled)
+        {
+            // A second IIS/Kestrel/service process may read status but must not consume this queue concurrently.
+            instance = new FileStream(Path.Combine(options.Value.StateDirectory,"indexer.lock"),FileMode.OpenOrCreate,FileAccess.ReadWrite,FileShare.None);
+        }
         var opt=laserfiche.CurrentValue;
         foreach(var id in options.Value.Repositories.Append(opt.RepositoryId).Where(x=>!string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase))
             Register(new(id,opt.ServerUrl,id,id));
@@ -46,7 +52,7 @@ public sealed class LaserficheRealtimeSyncService(IServiceScopeFactory scopes,Re
             }
         }
         catch(OperationCanceledException) when(stoppingToken.IsCancellationRequested) { }
-        finally {await Task.WhenAll(_tasks.Values);}
+        finally {try {await Task.WhenAll(_tasks.Values);} finally {instance?.Dispose();}}
     }
     private async Task RunRepositoryAsync(string key,RepositoryDescriptor repository,CancellationToken ct)
     {
@@ -149,7 +155,7 @@ public sealed class LaserficheRealtimeSyncService(IServiceScopeFactory scopes,Re
                         var fields=await entries.GetEntryFieldsAsync(entry.Id,ct);
                         var previous=state.Manifest(key,entry.Id);
                         var result=work.Change==EntryChange.Metadata&&previous?.Indexed==true
-                            ?await ingestion.RefreshMetadataAsync(entry.Id,ct):await ingestion.ReindexContentAsync(entry.Id,ct);
+                            ?await ingestion.RefreshMetadataAsync(entry.Id,ct):await ingestion.ReindexContentAsync(entry.Id,ct,work.Change==EntryChange.Rebuild);
                         state.SetHealth(key,"vector","Connected");
                         state.Seen(key,entry.Id,IndexFingerprint.Metadata(entry,fields),entry.LastModifiedTime?.ToString("O"),"event",
                             result.IngestionStatus=="content-indexed"&&string.IsNullOrEmpty(result.ContentDiagnostic));
@@ -184,7 +190,7 @@ public sealed class LaserficheRealtimeSyncService(IServiceScopeFactory scopes,Re
                 var contentChanged=rebuild||previous is null||!previous.Value.Indexed||previous.Value.Modified!=modified;
                 var metadataChanged=previous?.Hash!=hash;
                 state.Seen(key,entry.Id,hash,modified,generation,previous?.Indexed==true&&!contentChanged);
-                if(contentChanged||metadataChanged)state.Accept(key,entry.Id,contentChanged?EntryChange.Content:EntryChange.Metadata,0,
+                if(contentChanged||metadataChanged)state.Accept(key,entry.Id,rebuild?EntryChange.Rebuild:contentChanged?EntryChange.Content:EntryChange.Metadata,0,
                     options.Value.DebounceMilliseconds,label:$"Reconcile entry {entry.Id}");
             }
             // Only after a complete successful traversal. A failed/denied folder never causes bulk deletion.

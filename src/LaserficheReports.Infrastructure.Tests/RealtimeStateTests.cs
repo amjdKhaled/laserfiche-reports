@@ -8,7 +8,7 @@ namespace LaserficheReports.Infrastructure.Tests;
 public sealed class RealtimeStateTests : IDisposable
 {
     private readonly string _path=Path.Combine(Path.GetTempPath(),"lf-tests-"+Guid.NewGuid().ToString("N"));
-    private RealtimeStateStore Create()=>new(Options.Create(new RealtimeOptions {StateDirectory=_path}));
+    private RealtimeStateStore Create()=>new(Microsoft.Extensions.Options.Options.Create(new RealtimeOptions {StateDirectory=_path}));
     [Fact] public void DeduplicateUpgradeAndDoNotDropEventArrivingDuringProcessing()
     {
         var state=Create();state.Accept("a",602,EntryChange.Metadata,10);state.Accept("a",602,EntryChange.Content,11);

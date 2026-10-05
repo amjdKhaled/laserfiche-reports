@@ -58,7 +58,7 @@ internal sealed class HybridQueryService(LiveQueryService live,IConfiguration co
                 using var body=new ByteArrayContent(JsonSerializer.SerializeToUtf8Bytes(new {question,evidence=batch,scope},new JsonSerializerOptions(JsonSerializerDefaults.Web)));
                 body.Headers.ContentType=new("application/json"){CharSet="utf-8"};
                 using var response=await clients.CreateClient("ReportsGraph").PostAsync("answer",body,ct);response.EnsureSuccessStatusCode();
-                var result=await response.Content.ReadFromJsonAsync<Answer>(ct);
+                var result=await response.Content.ReadFromJsonAsync<GraphResponse>(ct);
                 if(string.IsNullOrWhiteSpace(result?.Answer))throw new InvalidOperationException("Empty content-analysis answer.");calls++;
                 var text=result.Answer+ReportSupport.SourceTable(batch);
                 await writer.WriteLineAsync(text);
@@ -73,5 +73,5 @@ internal sealed class HybridQueryService(LiveQueryService live,IConfiguration co
             new("live-filtered-content",repository,matching,sources.Count,complete,detail,intent.EntryIds))
         {DownloadUrl=link,Quality=new(complete?"complete":"partial",true,"per-batch","live-hybrid-v1",calls)};
     }
-    private sealed record Answer(string Answer);
+    private sealed record GraphResponse(string Answer);
 }
