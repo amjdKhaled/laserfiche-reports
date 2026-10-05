@@ -9,6 +9,8 @@
     <ProjectReference Include="..\LaserficheReports.Infrastructure\LaserficheReports.Infrastructure.csproj" />
   </ItemGroup>
   <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="8.0.1" />
+    <Content Include="..\..\integrations\laserfiche-notifications\listener.ps1" Link="integrations\listener.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <InternalsVisibleTo Include="LaserficheReports.Web.Tests" />
   </ItemGroup>
 </Project>

@@ -57,6 +57,7 @@ public static class ServiceCollectionExtensions
 
         // ── Repository context — singleton; reads session-scoped override first,
         //    then falls back to live options (supports Desktop Client repo param) ─
+        services.AddSingleton<RepositoryExecutionContext>();
         services.AddSingleton<IRepositoryContext, SessionAwareRepositoryContext>();
 
         // ── Credential provider — singleton; chain(primary, env-var fallback) ─
@@ -99,7 +100,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ILaserficheDocumentIngestionService, LaserficheDocumentIngestionService>();
         services.AddScoped<ILaserficheTemplateService, LaserficheTemplateService>();
         services.AddScoped<LaserficheAnalyticsService>();
-        services.AddScoped<ILaserficheAnalyticsService, CachedLaserficheAnalyticsService>();
+        services.AddScoped<ILaserficheAnalyticsService, LaserficheAnalyticsService>();
 
         // ── Health checks ──────────────────────────────────────────────────────
         services.AddHealthChecks()

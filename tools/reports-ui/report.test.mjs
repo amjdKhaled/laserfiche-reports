@@ -49,11 +49,9 @@ test('Web Client launch selects its repository and does not reuse another reposi
   assert.equal(window.document.getElementById('repository-id').value, 'RepoB');
   assert.equal(window.document.getElementById('repository-id').options.length, 1);
   assert(window.document.getElementById('repository-id').disabled);
-  assert(window.document.getElementById('repository-id').classList.contains('hidden'));
-  assert.equal(window.document.getElementById('repository-fixed-name').value, 'RepoB');
-  assert(window.document.getElementById('repository-fixed-name').readOnly);
+  assert(!window.document.getElementById('repository-id').classList.contains('hidden'));
   assert(window.document.getElementById('discover-repositories').classList.contains('hidden'));
-  assert(window.document.getElementById('switch-repository').disabled);
+  assert(!window.document.getElementById('switch-repository').disabled);
   assert(!window.document.getElementById('login-layer').classList.contains('hidden'));
   assert.notEqual(window.document.getElementById('active-repository').textContent, 'RepoA');
   await window.happyDOM.abort();
@@ -308,5 +306,24 @@ test('database status shows the actual repair message instead of hiding the caus
   await window.eval('refreshStatuses()');
   const card=[...window.document.querySelectorAll('.status-card')].find(card=>card.textContent.includes('Supabase'));
   assert(card.textContent.includes('غير متصل'));assert(card.textContent.includes('POOLER_TENANT_ID'));assert(card.textContent.includes('configure-database.ps1'));
+  await window.happyDOM.abort();
+});
+
+test('top tabs and repository login work on first load; delete shares the chat card', async () => {
+  const window = setup();
+  window.location.href = 'http://localhost:5187/?repository=RepoA';
+  window.document.write(readFileSync(root + 'index.html', 'utf8').replace(/<script[^>]*>[\s\S]*?<\/script>/g, ''));
+  window.fetch = async () => ({ok:true,status:200,json:async()=>({authenticated:true,username:'tester',repository:'RepoA',items:[]})});
+  window.eval(readFileSync(root + 'app.js', 'utf8'));
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert(window.document.getElementById('login-layer').classList.contains('hidden'));
+  window.document.getElementById('tab-docs').click();
+  assert(!window.document.getElementById('docs-view').classList.contains('hidden'));
+  window.document.getElementById('tab-chat').click();
+  assert(!window.document.getElementById('chat-view').classList.contains('hidden'));
+  window.document.getElementById('switch-repository').click();
+  assert(!window.document.getElementById('login-layer').classList.contains('hidden'));
+  const css=readFileSync(root+'dashboard-theme.css','utf8');
+  assert(css.includes('.history .history-delete{position:absolute'));
   await window.happyDOM.abort();
 });

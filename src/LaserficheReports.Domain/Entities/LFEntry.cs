@@ -49,6 +49,9 @@ public sealed record LFEntry
     /// <summary>Number of pages for document entries. Null for folders.</summary>
     public int? PageCount { get; init; }
 
+    public bool? IsElectronicDocument { get; init; }
+    public string? Extension { get; init; }
+
     /// <summary>Extension point: raw row number from paginated API response, used for stable sorting.</summary>
     public int? RowNumber { get; init; }
 }
