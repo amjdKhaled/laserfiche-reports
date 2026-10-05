@@ -474,11 +474,18 @@ $('scan-start').onclick = async () => {
     loadDocuments();
   }
 };
+// The Web Client link selects a repository; it does not grant a login session.
+const launchRepository = new URLSearchParams(window.location.search).get('repository')?.trim() || '';
 api('/api/session/status').then(session => {
-  setRepositorySelection(session.repository || '');
-  if (session.authenticated && session.username) openSession(session.username, session.repository, session.server, session.generation);
+  setRepositorySelection(launchRepository || session.repository || '');
+  const matchesLaunch = !launchRepository || launchRepository.toLowerCase() === (session.repository || '').toLowerCase();
+  if (session.authenticated && session.username && matchesLaunch)
+    openSession(session.username, session.repository, session.server, session.generation);
   else $('login-layer').classList.remove('hidden');
-}).catch(() => $('login-layer').classList.remove('hidden'));
+}).catch(() => {
+  setRepositorySelection(launchRepository);
+  $('login-layer').classList.remove('hidden');
+});
 
 $('switch-repository').onclick = () => {
   if (scanning || pendingOperations) { $('active-repository').title='أوقف الفهرسة وانتظر اكتمال الطلب قبل التبديل'; return; }

@@ -11,6 +11,44 @@ function setup() {
   window.eval(readFileSync(root + 'office-export.js', 'utf8'));
   return window;
 }
+test('Web Client button mounts next to Dashboard, encodes Arabic repository and avoids duplicates', async () => {
+  const window = new Window({ url: 'https://lf.local/laserfiche/Browse.aspx', settings: { enableJavaScriptEvaluation: true, suppressInsecureJavaScriptEnvironmentWarning: true } });
+  window.document.write('<input id="WebAccessRepositoryName" value="مستودع & اختبار"><ul id="rightNavbar"><li class="nav-item"><a class="nav-link" id="dashboard" href="http://localhost:5000">Dashboard</a></li><li>ADMIN</li></ul>');
+  const script = readFileSync(new URL('../../integrations/laserfiche-webclient/lf-reports-button.js', import.meta.url), 'utf8')
+    .replace('__LF_REPORTS_URL_JSON__', JSON.stringify('http://localhost:5187/'));
+  window.eval(script);
+  window.document.dispatchEvent(new window.Event('DOMContentLoaded'));
+  const anchor = window.document.getElementById('lf-smart-reports-button');
+  assert(anchor);
+  assert.equal(anchor.className, 'nav-link');
+  assert.equal(anchor.parentNode.nextElementSibling.querySelector('a').id, 'dashboard');
+  assert.equal(new URL(anchor.href).searchParams.get('repository'), 'مستودع & اختبار');
+  assert.equal(new URL(anchor.href).searchParams.get('source'), 'webclient');
+  assert.equal(anchor.target, '_blank');
+  assert(anchor.rel.includes('noopener'));
+  window.eval(script);
+  assert.equal(window.document.querySelectorAll('#lf-smart-reports-button').length, 1);
+  window.document.getElementById('WebAccessRepositoryName').value = 'OtherRepo';
+  anchor.addEventListener('click', event => event.preventDefault());
+  anchor.dispatchEvent(new window.MouseEvent('click', { cancelable: true }));
+  assert.equal(new URL(anchor.href).searchParams.get('repository'), 'OtherRepo');
+  window.document.getElementById('rightNavbar').innerHTML = '<li><a id="dashboard">Dashboard</a></li>';
+  await new Promise(resolve => setTimeout(resolve, 150));
+  assert.equal(window.document.querySelectorAll('#lf-smart-reports-button').length, 1);
+  await window.happyDOM.abort();
+});
+test('Web Client launch selects its repository and does not reuse another repository session', async () => {
+  const window = setup();
+  window.location.href = 'http://localhost:5187/?repository=RepoB&source=webclient';
+  window.document.write(readFileSync(root + 'index.html', 'utf8').replace(/<script[^>]*>[\s\S]*?<\/script>/g, ''));
+  window.fetch = async () => ({ ok: true, status: 200, json: async () => ({authenticated:true,username:'tester',repository:'RepoA'}) });
+  window.eval(readFileSync(root + 'app.js', 'utf8'));
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(window.document.getElementById('repository-id').value, 'RepoB');
+  assert(!window.document.getElementById('login-layer').classList.contains('hidden'));
+  assert.notEqual(window.document.getElementById('active-repository').textContent, 'RepoA');
+  await window.happyDOM.abort();
+});
 const message = {
   text: '# تقرير\n\n| البند | النتيجة | المرجع |\n| --- | --- | --- |\n| الحالة | تحت الإجراء | [1] |',
   generatedAt: '2026-10-03T18:00:00Z', scope: { detail: 'فُحصت 73 وثيقة؛ التقرير جزئي.' },

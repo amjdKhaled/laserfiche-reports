@@ -453,3 +453,6 @@ wrapping tables and horizontal scrolling inside the table on small screens.
 
 See [repository reports setup and limits](docs/REPOSITORY_REPORTS.md), including
 `Laserfiche:WebClientBaseUrl` for a custom Web Client directory.
+# تشغيل التقارير من الشريط العلوي لليزرفيش
+
+لإضافة زر **التقارير الذكية** بجانب Dashboard في Web Client، اتبع [تعليمات التثبيت والإزالة](docs/WEBCLIENT_BUTTON.md). السكربت: `scripts/deploy-webclient-button.ps1`.
