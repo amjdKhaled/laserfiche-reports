@@ -210,6 +210,58 @@ public class ReportTests
     }
 
     private static FieldCondition Condition() => ReportSupport.ParseCondition("إجراء الوثيقة يساوي تحت الاجراء")!;
+    [Theory]
+    [InlineData("كم عدد المجلدات في هذا المخزن؟")]
+    [InlineData("كم مجلد في المستودع؟")]
+    [InlineData("عدد المجلدات")]
+    [InlineData("how many folders in this repository?")]
+    public void FolderCountsAreRecognized(string question) => Assert.True(ReportSupport.IsFolderCountQuestion(question));
+
+    [Theory]
+    [InlineData("كم عدد المجلدات التي فيها إجراء الوثيقة يساوي مقبول؟")]
+    [InlineData("لخص الوثائق الموجودة في المجلدات")]
+    public void FilteredOrContentQuestionsAreNotUnfilteredFolderCounts(string question) => Assert.False(ReportSupport.IsFolderCountQuestion(question));
+
+    [Fact]
+    public async Task FolderCountUsesLiveRepositoryAndExcludesRootWithoutEmbeddings()
+    {
+        var entries = new Entries(73);
+        var configuration = new ConfigurationBuilder().Build();
+        var chat = new ReportsChatService(configuration, new NoEmbeddings(), new Repository(), entries,
+            new NoClients(), new LiveRepositoryReportService(entries, configuration));
+        var result = await chat.AskAsync("كم عدد المجلدات في هذا المخزن؟", default);
+        Assert.Contains("| عدد المجلدات | **1** |", result.Answer);
+        Assert.True(result.Scope!.Exhaustive);
+        Assert.Equal("repo", result.Scope.RepositoryId);
+        Assert.Empty(entries.FieldCalls);
+    }
+
+    [Fact]
+    public async Task EmptyFoldersCountAndInaccessibleFoldersMakeTheCountPartial()
+    {
+        var complete = await Create(new Entries(0)).CountFoldersAsync("repo", default);
+        Assert.Contains("| عدد المجلدات | **1** |", complete.Answer);
+        var partial = await Create(new Entries(0) { DeniedFolderId = 101 }).CountFoldersAsync("repo", default);
+        Assert.False(partial.Scope!.Exhaustive);
+        Assert.Contains("العد جزئي", partial.Answer);
+        Assert.DoesNotContain("| عدد المجلدات |", partial.Answer);
+        await Assert.ThrowsAsync<LaserficheException>(() =>
+            Create(new Entries(0) { FailureFolderId = 101 }).CountFoldersAsync("repo", default));
+    }
+
+    [Fact]
+    public async Task NestedFoldersAreCountedOnceAndConfiguredFolderLimitIsPartial()
+    {
+        var entries = new Entries(0) { WithNestedFolder = true };
+        var complete = await Create(entries).CountFoldersAsync("repo", default);
+        Assert.Contains("| عدد المجلدات | **2** |", complete.Answer);
+        Assert.True(complete.Scope!.Exhaustive);
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            { ["Reports:MaxLiveFolders"] = "1" }).Build();
+        var partial = await new LiveRepositoryReportService(entries, config).CountFoldersAsync("repo", default);
+        Assert.False(partial.Scope!.Exhaustive);
+        Assert.Contains("حد فحص المجلدات", partial.Answer);
+    }
     private static LiveRepositoryReportService Create(Entries entries, int cap = 10000) => new(entries,
         new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         { ["Reports:MaxLiveDocuments"] = cap.ToString() }).Build());
@@ -234,6 +286,9 @@ public class ReportTests
         public bool Enumerated { get; private set; }
         public int? DeniedId { get; init; }
         public int? FailureId { get; init; }
+        public int? DeniedFolderId { get; init; }
+        public int? FailureFolderId { get; init; }
+        public bool WithNestedFolder { get; init; }
         private static LFEntry Document(int id) => new() { Id = id, Name = $"وثيقة {id}", FullPath = $"\\قسم\\وثيقة {id}", EntryType = LFEntryType.Document };
         public Task<LFEntry> GetEntryAsync(int entryId, CancellationToken cancellationToken = default)
         {
@@ -251,7 +306,13 @@ public class ReportTests
         public Task<int> GetRootEntryIdAsync(CancellationToken cancellationToken = default) => Task.FromResult(100);
         public Task<IReadOnlyList<LFEntry>> GetAllFolderChildrenAsync(int entryId, CancellationToken cancellationToken = default)
         {
+            if (entryId == DeniedFolderId) throw new LaserficheException("denied", 403);
+            if (entryId == FailureFolderId) throw new LaserficheException("outage", 503);
             Enumerated = true;
+            if (WithNestedFolder && entryId == 101) return Task.FromResult<IReadOnlyList<LFEntry>>([
+                new LFEntry { Id = 102, EntryType = LFEntryType.Folder },
+                new LFEntry { Id = 102, EntryType = LFEntryType.Folder },
+                new LFEntry { Id = 100, EntryType = LFEntryType.Folder }]);
             return Task.FromResult<IReadOnlyList<LFEntry>>(entryId == 100
                 ? [new LFEntry { Id = 101, EntryType = LFEntryType.Folder }]
                 : Enumerable.Range(1, count).Select(Document).ToArray());

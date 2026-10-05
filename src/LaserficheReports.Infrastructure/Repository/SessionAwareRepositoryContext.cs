@@ -38,14 +38,17 @@ internal sealed class SessionAwareRepositoryContext : IRepositoryContext
     /// <summary>Session key that stores the human-readable source label for UI display.</summary>
     internal const string SessionKeyRepositorySource = "ActiveRepositorySource";
 
+    private readonly RepositoryExecutionContext? _execution;
     private readonly IOptionsMonitor<LaserficheOptions> _optionsMonitor;
     private readonly IHttpContextAccessor _httpContextAccessor;
 
     /// <summary>Initialises the context with live options and an HTTP-context accessor.</summary>
     public SessionAwareRepositoryContext(
         IOptionsMonitor<LaserficheOptions> optionsMonitor,
-        IHttpContextAccessor httpContextAccessor)
+        IHttpContextAccessor httpContextAccessor,
+        RepositoryExecutionContext? execution = null)
     {
+        _execution = execution;
         _optionsMonitor      = optionsMonitor;
         _httpContextAccessor = httpContextAccessor;
     }
@@ -58,6 +61,7 @@ internal sealed class SessionAwareRepositoryContext : IRepositoryContext
     public Task<RepositoryDescriptor> GetActiveRepositoryAsync(
         CancellationToken cancellationToken = default)
     {
+        if (_execution?.Current is { } current) return Task.FromResult(current);
         var opt = _optionsMonitor.CurrentValue;
 
         // Attempt to read the session-stored repository ID.

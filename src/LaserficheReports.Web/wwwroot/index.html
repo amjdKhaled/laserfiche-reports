@@ -4,14 +4,14 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>تقارير ليزرفيش الذكية</title>
-  <link rel="stylesheet" href="/styles.css">
-  <link rel="stylesheet" href="/login.css">
-  <link rel="stylesheet" href="/dashboard-theme.css">
+  <link rel="stylesheet" href="/styles.css?v=20261005-live-2">
+  <link rel="stylesheet" href="/login.css?v=20261005-live-2">
+  <link rel="stylesheet" href="/dashboard-theme.css?v=20261005-live-2">
 </head>
 <body>
   <div class="shell">
     <aside class="sidebar">
-      <div class="brand"><img src="/isb-logo.jpg" class="brand-logo" alt="ISB"><div><strong>تقارير ليزرفيش الذكية</strong><small>تقارير المستندات المحلية</small></div></div>
+      <div class="brand"><img src="/isb-logo.jpg" class="brand-logo" alt="ISB"><div><strong>التقارير الذكية</strong><small>تقارير ليزرفيش</small></div></div>
       <button class="new-chat" id="new-chat">＋ محادثة جديدة</button>
       <div class="side-heading">المحادثات الأخيرة</div>
       <div id="history" class="history"></div>
@@ -20,7 +20,7 @@
     <main class="main">
       <header class="topbar">
         <div><h1>اسأل وثائقك</h1><p>ابحث في حقول Laserfiche ومحتوى الصفحات، مع مصدر لكل إجابة</p></div>
-        <div class="top-actions"><button type="button" id="switch-repository" class="repository-badge" title="تغيير المستودع"><span>المستودع</span> <strong id="active-repository">—</strong> ▾</button><div class="tabs"><button id="tab-chat" class="active">المحادثة</button><button id="tab-docs">الوثائق والنظام</button></div><button id="logout" class="logout">تسجيل الخروج</button></div>
+        <div class="top-actions"><button type="button" id="switch-repository" class="repository-badge" title="تغيير المستودع"><span>المستودع</span> <strong id="active-repository">—</strong> <span id="repository-arrow">▾</span></button><div class="tabs"><button id="tab-chat" class="active">المحادثة</button><button id="tab-docs">الوثائق والنظام</button></div><button id="logout" class="logout">تسجيل الخروج</button></div>
       </header>
       <section id="chat-view" class="view">
         <div id="messages" class="messages">
@@ -34,17 +34,18 @@
       <section id="docs-view" class="view hidden">
         <div class="section-title"><div><h2>حالة الخدمات</h2><p>تأكد من اتصال الخدمات المحلية قبل الفهرسة أو السؤال.</p></div><button id="refresh">تحديث</button></div>
         <div class="status-grid" id="statuses"></div>
-        <div class="section-title"><div><h2>فهرسة وثيقة محددة</h2><p>أدخل أي Entry ID. تُفهرس حقول Laserfiche حتى عندما يكون OCR مؤجلاً.</p></div></div>
+        <details id="manual-ingest" class="hidden"><summary>فهرسة وثيقة محددة</summary><div class="section-title"><div><h2>فهرسة وثيقة محددة</h2><p>أدخل أي Entry ID. تُفهرس حقول Laserfiche حتى عندما يكون OCR مؤجلاً.</p></div></div>
         <form id="ingest-form" class="ingest"><input id="entry-id" type="number" min="1" placeholder="Entry ID مثل 618" required><button type="submit" id="ingest">بدء الفهرسة</button></form>
         <div id="ingest-result" class="feedback" role="status"></div>
+        </details>
         <div class="scan-panel">
-          <div class="section-title"><div><h2>فهرسة المستودع بالكامل</h2><p>يمر على جميع المجلدات والوثائق التي يتيحها حساب Laserfiche الحالي. يمكنك إيقافه واستئنافه.</p></div></div>
-          <div class="scan-actions"><button id="scan-start" type="button">بدء الفهرسة الشاملة</button><button id="scan-pause" type="button" disabled>إيقاف مؤقت</button><button id="scan-reset" type="button">فحص جديد</button></div>
-          <div id="scan-progress" class="scan-progress" role="status">لم تبدأ الفهرسة الشاملة بعد.</div>
+          <div class="section-title"><div><h2>حالة المزامنة</h2><p>تعمل الخدمة في الخلفية حتى بعد إغلاق الصفحة.</p></div></div>
+          <details id="sync-admin" class="hidden"><summary>خيارات إدارية متقدمة</summary><div class="scan-actions"><button id="scan-start" type="button">إعادة بناء الفهرس</button><button id="scan-reset" type="button">مزامنة الآن</button></div></details>
+          <div id="sync-last-event"></div><div id="scan-progress" class="scan-progress" role="status">جارٍ التحقق من حالة خدمة المزامنة…</div>
           <div id="scan-errors" class="scan-errors"></div>
         </div>
-        <div class="section-title"><div><h2>الوثائق المفهرسة</h2><p>تظهر الوثائق التي يمكن للاتصال الحالي قراءتها.</p></div><button id="reload-docs">تحديث القائمة</button></div>
-        <div class="docs-toolbar"><input id="document-search" type="search" placeholder="ابحث باسم الوثيقة أو المسار أو حقول Laserfiche" aria-label="بحث الوثائق"><button id="search-docs" type="button">بحث</button></div>
+        <div class="section-title"><div><h2>وثائق المستودع الحالية</h2><p>تظهر الوثائق التي يمكن للاتصال الحالي قراءتها.</p></div><button id="reload-docs">تحديث القائمة</button></div>
+        <div class="docs-toolbar"><input id="document-search" type="search" placeholder="ابحث باسم الوثيقة أو المسار" aria-label="بحث الوثائق"><button id="search-docs" type="button">بحث</button></div>
         <div id="documents" class="documents"></div>
         <div class="docs-pager"><button id="previous-docs" type="button">السابق</button><span id="documents-page">صفحة 1</span><button id="next-docs" type="button">التالي</button></div>
       </section>
@@ -55,7 +56,8 @@
       <div class="welcome-icon">◈</div>
       <h2>الدخول إلى تقارير ليزرفيش الذكية</h2>
       <p>استخدم حساب Laserfiche للوصول إلى الوثائق المسموح لك بها.</p>
-      <label for="repository-id">المستودع</label>
+      <label id="repository-label" for="repository-id">المستودع</label>
+      
       <select id="repository-id" required aria-describedby="repository-help">
         <option value="">اختر المستودع</option>
         <option value="__manual__">إدخال مستودع آخر…</option>
@@ -71,9 +73,9 @@
       <div id="login-error" role="alert"></div>
     </form>
   </div>
-  <script src="/report-format.js" defer></script>
-  <script src="/report-download.js" defer></script>
-  <script src="/office-export.js" defer></script>
-  <script src="/app.js" defer></script>
+  <script src="/report-format.js?v=20261005-live-2" defer></script>
+  <script src="/report-download.js?v=20261005-live-2" defer></script>
+  <script src="/office-export.js?v=20261005-live-2" defer></script>
+  <script src="/app.js?v=20261005-live-2" defer></script>
 </body>
 </html>

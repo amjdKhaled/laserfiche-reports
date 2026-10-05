@@ -8,12 +8,16 @@ using Npgsql;
 namespace LaserficheReports.Web;
 
 internal sealed record Evidence(int EntryId, string DocumentName, string Path, int? PageNumber,
-    float Similarity, string Text, string TextSource);
+    float Similarity, string Text, string TextSource)
+{
+    [System.Text.Json.Serialization.JsonIgnore] public DateTimeOffset? IndexedModified { get; init; }
+}
 internal sealed record ChatResult(string Answer, IReadOnlyList<Evidence> Sources, AnswerScope? Scope = null)
 {
     public DateTimeOffset GeneratedAt { get; init; } = DateTimeOffset.UtcNow;
     public ReportQuality? Quality { get; init; }
     public int[] RelatedEntryIds { get; init; } = [];
+    public string? DownloadUrl { get; init; }
 }
 internal sealed record ReportQuality(string Status, bool QuoteVerification, string SemanticReview,
     string PromptVersion, int ModelCalls);
@@ -28,13 +32,15 @@ internal sealed class ReportsChatService(
     IRepositoryContext repositories,
     ILaserficheEntryService entries,
     IHttpClientFactory clients,
-    LiveRepositoryReportService liveReports)
+    LiveRepositoryReportService liveReports,
+    LiveQueryService? liveQueries = null, HybridQueryService? hybrid = null)
 {
     private string ConnectionString => configuration["Supabase:PostgresConnectionString"]
         ?? throw new InvalidOperationException("Supabase:PostgresConnectionString is missing.");
 
     public async Task<IndexedDocumentPage> ListAsync(int page, string? search, CancellationToken cancellationToken)
     {
+        if (liveQueries is not null) return await liveQueries.ListAsync(page, search, cancellationToken);
         if (page < 1 || page > 1_000_000) throw new ArgumentOutOfRangeException(nameof(page));
         if (search?.Length > 200) throw new ArgumentException("Search is too long.", nameof(search));
         var repository = await repositories.GetActiveRepositoryAsync(cancellationToken);
@@ -84,6 +90,14 @@ internal sealed class ReportsChatService(
             throw new ArgumentException("Question must contain 1 to 2000 characters.", nameof(question));
 
         var repository = await repositories.GetActiveRepositoryAsync(cancellationToken);
+        if (liveQueries is not null)
+        {
+            var intent = QueryRouter.Route(question);
+            if (intent.Type == QueryType.HybridQuery && hybrid is not null)
+                return await hybrid.AnswerAsync(question, intent, repository.RepositoryId, cancellationToken);
+            if (intent.Type is not (QueryType.ContentSemanticSearch or QueryType.ContentSummary or QueryType.ReportGeneration))
+                return await liveQueries.AnswerAsync(intent, repository.RepositoryId, cancellationToken);
+        }
         var requestedEntries = ReportSupport.RequestedEntries(question);
         if (requestedEntries.Length > 50)
             throw new ArgumentException("حدد حتى 50 وثيقة في السؤال الواحد.", nameof(question));
@@ -91,6 +105,8 @@ internal sealed class ReportsChatService(
             return new ChatResult("# توضيح شروط التقرير\n\nالطلب يتضمن أكثر من شرط أو مقارنة غير مدعومة في فحص الحقول الحالي. " +
                 "اكتب شرطًا واحدًا بهذه الصيغة: «إجراء الوثيقة يساوي تحت الاجراء». لن أعرض عددًا أو قائمة على أنها حصر مؤكد لهذا الطلب.", []);
         var condition = ReportSupport.ParseCondition(question);
+        if (requestedEntries.Length == 0 && ReportSupport.IsFolderCountQuestion(question))
+            return await liveReports.CountFoldersAsync(repository.RepositoryId, cancellationToken);
         if (condition is not null || ReportSupport.IsInventoryQuestion(question) ||
             (requestedEntries.Length > 0 && ReportSupport.IsDocumentMetadataQuestion(question)))
             return await liveReports.CreateAsync(repository.RepositoryId, condition, requestedEntries, cancellationToken);
@@ -142,7 +158,9 @@ internal sealed class ReportsChatService(
                     root.TryGetProperty("document_name", out var name) ? name.GetString() ?? "" : "",
                     root.TryGetProperty("full_path", out var path) ? path.GetString() ?? "" : "",
                     page, reader.GetFloat(2), reader.GetString(0),
-                    root.TryGetProperty("text_source", out var source) ? source.GetString() ?? "" : ""));
+                    root.TryGetProperty("text_source", out var source) ? source.GetString() ?? "" : "")
+                { IndexedModified = root.TryGetProperty("last_modified_time", out var stamp) && stamp.ValueKind == JsonValueKind.String &&
+                    DateTimeOffset.TryParse(stamp.GetString(), out var modified) ? modified : null });
             }
         }
 
@@ -156,7 +174,16 @@ internal sealed class ReportsChatService(
                 if (await CanReadAsync(candidate.EntryId, cancellationToken)) authorized.Add(candidate.EntryId);
                 else denied.Add(candidate.EntryId);
             }
-            if (authorized.Contains(candidate.EntryId)) allowedCandidates.Add(candidate);
+            if (authorized.Contains(candidate.EntryId))
+            {
+                if (liveQueries is null) allowedCandidates.Add(candidate);
+                else
+                {
+                    var current = await entries.GetEntryAsync(candidate.EntryId, cancellationToken);
+                    if (candidate.IndexedModified is not null && current.LastModifiedTime == candidate.IndexedModified)
+                        allowedCandidates.Add(candidate with { DocumentName = current.Name, Path = current.FullPath });
+                }
+            }
         }
         var evidence = ReportSupport.SelectEvidence(allowedCandidates, evidenceLimit);
         var scope = new AnswerScope(hasEntryFilter ? "selected-documents" : "repository",

@@ -1,4 +1,7 @@
 const $ = id => document.getElementById(id);
+// Links from Web Client pin this page to its repository; login is still required.
+const launchRepository = new URLSearchParams(window.location.search).get('repository')?.trim() || '';
+const pendingChats = new Set();
 let storeKey = '';
 let sessionRepository = '';
 let sessionServer = '';
@@ -25,10 +28,23 @@ function el(tag, className, value) {
   return node;
 }
 function selectedRepository() {
+  if (launchRepository) return launchRepository;
   return $('repository-id').value === '__manual__' ? $('repository-manual').value.trim() : $('repository-id').value;
 }
 function setRepositorySelection(id) {
   const select = $('repository-id');
+  if (launchRepository) {
+    const option = el('option', '', launchRepository); option.value = launchRepository;
+    select.replaceChildren(option);
+    select.disabled = true;
+    select.classList.remove('hidden');
+    $('discover-repositories').classList.add('hidden');
+    $('repository-help').textContent = 'تم تحديد المستودع من ليزرفيش. للدخول إلى مستودع آخر، افتح التقارير من ذلك المستودع.';
+    $('switch-repository').disabled = false;
+    $('switch-repository').title = 'المستودع المفتوح من ليزرفيش';
+    $('repository-arrow').classList.add('hidden');
+    id = launchRepository;
+  }
   if (id && !Array.from(select.options).some(option => option.value === id)) {
     const option = el('option', '', id); option.value = id;
     select.insertBefore(option, select.lastElementChild);
@@ -38,6 +54,7 @@ function setRepositorySelection(id) {
   $('repository-manual').required = false;
 }
 $('repository-id').onchange = () => {
+  if (launchRepository) { setRepositorySelection(launchRepository); return; }
   const manual = $('repository-id').value === '__manual__';
   $('repository-manual').classList.toggle('hidden', !manual);
   $('repository-manual').required = manual;
@@ -85,6 +102,7 @@ function openSession(username, repository, server, generation) {
   renderHistory();
   renderMessages();
   renderScan();
+  beginSyncStatus();
 }
 $('login-form').onsubmit = async event => {
   event.preventDefault();
@@ -96,6 +114,8 @@ $('login-form').onsubmit = async event => {
     const session = await api('/api/session/login', { method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password: $('password').value, repositoryId: selectedRepository() }) });
+    if (launchRepository && (session.repository || '').toLowerCase() !== launchRepository.toLowerCase())
+      throw new Error('المستودع الذي أعاده الخادم مختلف عن المستودع المفتوح من ليزرفيش. أعد تسجيل الدخول.');
     $('password').value = '';
     openSession(session.username || username, session.repository, session.server, session.generation);
   } catch (error) { $('login-error').textContent = `تعذر تسجيل الدخول: ${error.message}`; }
@@ -110,15 +130,31 @@ $('logout').onclick = async () => {
     pauseScan = true;
     scan = null;
     $('login-layer').classList.remove('hidden');
+    clearInterval(syncRefresh);
     renderHistory(); renderMessages();
   }
 };
 function renderHistory() {
   $('history').replaceChildren();
   chats.forEach(chat => {
-    const button = el('button', chat.id === active ? 'selected' : '', chat.title);
+    const row = el('div', chat.id === active ? 'history-row selected' : 'history-row');
+    const button = el('button', chat.id === active ? 'history-open selected' : 'history-open', chat.title);
+    button.type = 'button';
     button.onclick = () => { active = chat.id; renderHistory(); renderMessages(); showTab('chat'); };
-    $('history').append(button);
+    const remove = el('button', 'history-delete', '×');
+    remove.type = 'button';
+    remove.title = 'حذف المحادثة';
+    remove.setAttribute('aria-label', `حذف المحادثة: ${chat.title}`);
+    remove.disabled = pendingChats.has(chat.id);
+    remove.onclick = event => {
+      event.stopPropagation();
+      if (pendingChats.has(chat.id)) return;
+      chats = chats.filter(item => item.id !== chat.id);
+      if (active === chat.id) active = null;
+      save(); renderHistory(); renderMessages();
+    };
+    row.append(button, remove);
+    $('history').append(row);
   });
 }
 function renderMessages() {
@@ -190,6 +226,11 @@ function renderMessages() {
             catch (error) { download.textContent = error.message || 'تعذر التحميل'; }
           };
           actions.append(download, format, copy, print);
+          if (/^\/api\/reports\/files\/[A-F0-9]{48}$/.test(message.downloadUrl || '')) {
+            const full = el('a', 'source-link', 'تحميل النتائج الكاملة');
+            full.href = message.downloadUrl + `?repositoryId=${encodeURIComponent(message.repositoryId || sessionRepository)}&sessionGeneration=${encodeURIComponent(sessionGeneration)}`;
+            full.download = 'laserfiche-report.md'; actions.append(full);
+          }
           const open = el('button', '', 'فتح وثائق التقرير في Laserfiche ↗'); open.type = 'button';
           open.disabled = !message.relatedEntryIds?.length;
           open.title = open.disabled ? 'لا توجد وثائق مرتبطة مؤكدة بهذه النتيجة' : 'عرض الوثائق المرتبطة في Web Client';
@@ -251,7 +292,7 @@ function showTab(tab) {
   $('docs-view').classList.toggle('hidden', tab !== 'docs');
   $('tab-chat').classList.toggle('active', tab === 'chat');
   $('tab-docs').classList.toggle('active', tab === 'docs');
-  if (tab === 'docs') { refreshStatuses(); loadDocuments(); }
+  if (tab === 'docs') { refreshStatuses().catch(() => {}); refreshSync(); loadDocuments(); }
 }
 $('tab-chat').onclick = () => showTab('chat');
 $('tab-docs').onclick = () => showTab('docs');
@@ -268,6 +309,7 @@ $('ask-form').onsubmit = async event => {
   const epoch = sessionEpoch;
   const chat = chats.find(c => c.id === active);
   pendingOperations++;
+  pendingChats.add(chat.id);
   chat.messages.push({ role: 'user', text: question });
   $('question').value = '';
   $('send').disabled = true;
@@ -276,10 +318,10 @@ $('ask-form').onsubmit = async event => {
   try {
     const result = await api('/api/reports/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question }) });
     if (epoch !== sessionEpoch) return;
-    chat.messages[chat.messages.length - 1] = { role: 'assistant', repositoryId: sessionRepository, relatedEntryIds: result.relatedEntryIds, text: result.answer, sources: result.sources, scope: result.scope, generatedAt: result.generatedAt, quality: result.quality };
+    chat.messages[chat.messages.length - 1] = { role: 'assistant', repositoryId: sessionRepository, downloadUrl: result.downloadUrl, relatedEntryIds: result.relatedEntryIds, text: result.answer, sources: result.sources, scope: result.scope, generatedAt: result.generatedAt, quality: result.quality };
   } catch (error) {
     chat.messages[chat.messages.length - 1] = { role: 'assistant', text: `تعذر إكمال السؤال: ${error.message}` };
-  } finally { pendingOperations--; $('send').disabled = false; if (epoch === sessionEpoch) { save(); renderMessages(); } }
+  } finally { pendingOperations--; pendingChats.delete(chat.id); $('send').disabled = false; if (epoch === sessionEpoch) { save(); renderHistory(); renderMessages(); } }
 };
 $('question').onkeydown = event => {
   if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); $('ask-form').requestSubmit(); }
@@ -329,8 +371,8 @@ async function loadDocuments() {
       const row = el('div', 'doc'), detail = el('div');
       detail.append(el('strong', '', `${doc.name} · #${doc.entryId}`));
       detail.append(el('small', '', doc.path));
-      const status = doc.status === 'metadata-indexed' ? 'بيانات مفهرسة' : doc.status === 'content-indexed' ? 'محتوى وبيانات مفهرسة' : doc.status;
-      row.append(detail, el('span', 'tag', `${doc.chunkCount} مقطع · ${status}`));
+      const status = doc.status === 'live' ? 'بيانات Laserfiche الحالية' : doc.status === 'metadata-indexed' ? 'بيانات مفهرسة' : doc.status === 'content-indexed' ? 'محتوى وبيانات مفهرسة' : doc.status;
+      row.append(detail, el('span', 'tag', doc.status === 'live' ? status : `${doc.chunkCount} مقطع · ${status}`));
       $('documents').append(row);
     });
   } catch (error) { if (epoch === sessionEpoch) $('documents').replaceChildren(el('div', 'empty', error.message)); }
@@ -356,129 +398,51 @@ $('ingest-form').onsubmit = async event => {
   finally { pendingOperations--; $('ingest').disabled = false; }
 };
 
-function newScan() {
-  return { folders: [0], documents: [], seenFolders: [], seenDocuments: [],
-    foldersDone: 0, documentsDone: 0, skipped: 0, chunks: 0, failed: [], repositoryId: sessionRepository, current: '', notice: '' };
-}
-function saveScan() {
-  try { localStorage.setItem(scanKey, JSON.stringify(scan)); }
-  catch { $('scan-progress').textContent = 'تعذر حفظ نقطة الاستئناف في المتصفح. اترك الصفحة مفتوحة حتى تنتهي العملية.'; }
-}
 function renderScan() {
-  $('scan-start').disabled = scanning;
-  $('scan-reset').disabled = scanning;
-  $('logout').disabled = scanning;
-  $('scan-start').textContent = scan?.folders?.length || scan?.documents?.length || scan?.failed?.length
-    ? 'استئناف الفهرسة' : 'بدء الفهرسة الشاملة';
-  $('scan-pause').disabled = !scanning;
-  if (!scan) {
-    $('scan-progress').textContent = 'لم تبدأ الفهرسة الشاملة بعد.';
-    $('scan-errors').replaceChildren();
-    return;
-  }
-  $('scan-progress').textContent =
-    `${scanning ? 'جارية' : 'متوقفة'} · ${scan.foldersDone} مجلد · ${scan.documentsDone} وثيقة · ${scan.skipped || 0} دون تغيير · ` +
-    `${scan.chunks} مقطع · ${scan.folders.length} مجلد و${scan.documents.length} وثيقة في الانتظار` +
-    (scan.current ? ` · الآن: ${scan.current}` : '') +
-    (scan.notice ? ` · ${scan.notice}` : '');
-  $('scan-errors').replaceChildren();
-  if (scan.failed.length) {
-    $('scan-errors').append(el('strong', '', `${scan.failed.length} إخفاق؛ يمكنك الاستئناف لإعادة المحاولة:`));
-    scan.failed.slice(-10).forEach(item => $('scan-errors').append(el('div', '',
-      `${item.type === 'folder' ? 'مجلد' : 'وثيقة'} #${item.id}: ${item.message}`)));
-  }
+  $('scan-start').textContent = 'إعادة بناء الفهرس';
+  $('scan-reset').textContent = 'مزامنة الآن';
 }
-$('scan-pause').onclick = () => { pauseScan = true; $('scan-pause').disabled = true; };
-$('scan-reset').onclick = () => {
-  if (scanning) return;
-  scan = null;
-  localStorage.removeItem(scanKey);
-  renderScan();
-};
-$('scan-start').onclick = async () => {
-  if (scanning || pendingOperations) return;
-  if (!scan || (!scan.folders.length && !scan.documents.length && !scan.failed.length)) scan = newScan();
-  else if (!scan.folders.length && !scan.documents.length && scan.failed.length) {
-    scan.failed.forEach(item => (item.type === 'folder' ? scan.folders : scan.documents).push(item.id));
-    scan.failed = [];
-  }
-  pauseScan = false;
-  scanning = true;
-  scan.notice = '';
-  renderScan();
-  const seenFolders = new Set(scan.seenFolders);
-  const seenDocuments = new Set(scan.seenDocuments);
+let syncRefresh = null;
+async function refreshSync() {
+  if (!sessionRepository) return;
+  const epoch = sessionEpoch;
   try {
-    while (!pauseScan && (scan.folders.length || scan.documents.length)) {
-      if (scan.documents.length) {
-        const id = scan.documents[0];
-        scan.current = `فهرسة الوثيقة ${id}`; renderScan();
-        try {
-          const result = await api(`/api/ingestion/laserfiche/${id}`, { method: 'POST' });
-          scan.chunks += result.chunkCount || 0;
-          scan.documentsDone++;
-          if (result.wasSkipped) scan.skipped = (scan.skipped || 0) + 1;
-        } catch (error) {
-          if (error.status === 401 || error.status === 409) { pauseScan = true; scan.notice = error.message; break; }
-          if (error.status === 503) {
-            pauseScan = true;
-            scan.notice = `الخدمة المطلوبة غير متاحة: ${error.message}. عالج الاتصال ثم استأنف.`;
-            break;
-          }
-          if (error.status === 500 || error.status === 502) {
-            pauseScan = true;
-            scan.notice = `توقفت الفهرسة عند الوثيقة ${id}: ${error.message}${error.diagnosticId ? ` (رمز التشخيص ${error.diagnosticId})` : ''}. راجع سجل التطبيق ثم استأنف.`;
-            break;
-          }
-          scan.failed.push({ type: 'document', id, message: error.message });
-        }
-        scan.documents.shift();
-      } else {
-        const id = scan.folders[0];
-        scan.current = `فحص المجلد ${id || 'الجذر'}`; renderScan();
-        try {
-          const result = await api(`/api/reports/repository/folders/${id}/children`);
-          if (scan.repositoryId && scan.repositoryId.toLowerCase() !== result.repositoryId.toLowerCase()) {
-            pauseScan = true;
-            scan.notice = 'تغيّر المستودع؛ اضغط فحص جديد لبدء فهرسة المستودع الحالي.';
-            saveScan(); renderScan();
-            break;
-          }
-          scan.repositoryId = result.repositoryId;
-          for (const folder of result.folders) {
-            if (!seenFolders.has(folder.id)) { seenFolders.add(folder.id); scan.folders.push(folder.id); }
-          }
-          for (const doc of result.documents) {
-            if (!seenDocuments.has(doc.id)) { seenDocuments.add(doc.id); scan.documents.push(doc.id); }
-          }
-          scan.foldersDone++;
-        } catch (error) {
-          if (error.status === 401 || error.status === 409) { pauseScan = true; scan.notice = error.message; break; }
-          if (error.status >= 500) {
-            pauseScan = true;
-            scan.notice = `تعذر فحص المجلد ${id}: ${error.message}. راجع سجل التطبيق ثم استأنف.`;
-            break;
-          }
-          scan.failed.push({ type: 'folder', id, message: error.message });
-        }
-        scan.folders.shift();
-      }
-      scan.seenFolders = [...seenFolders];
-      scan.seenDocuments = [...seenDocuments];
-      saveScan(); renderScan();
-    }
-  } finally {
-    scanning = false;
-    scan.current = '';
-    saveScan(); renderScan();
-    loadDocuments();
-  }
-};
+    const state = await api('/api/reports/sync/status');
+    if (epoch !== sessionEpoch) return;
+    const live = state.listener === 'Connected';
+    $('scan-progress').textContent = `${live ? 'المستمع متصل' : 'المستمع غير متصل'} · المفهرس ${state.indexed} / ${state.documents} · في الانتظار ${state.pending} · الأخطاء ${state.failed}` +
+      (state.reconciling ? ' · جارٍ فحص التغييرات' : '') + (state.lastSuccessfulSync ? ` · آخر معالجة ناجحة ${new Date(state.lastSuccessfulSync).toLocaleString('ar-SA')}` : '');
+    $('scan-errors').textContent = state.listenerDetail || '';
+    $('sync-admin').classList.toggle('hidden', !state.admin);
+    if (state.lastEvent) $('sync-last-event').textContent = `آخر حدث: ${state.lastEvent}`;
+  } catch (error) { if (epoch === sessionEpoch) $('scan-progress').textContent = error.message; }
+}
+async function syncAction(action) {
+  if (action === 'rebuild' && !window.confirm('إعادة بناء الفهرس عملية ثقيلة تشمل المستودع الحالي. هل تريد المتابعة؟')) return;
+  try {
+    const result = await api(`/api/reports/sync/${action}`, {method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({confirmation:action === 'rebuild' ? 'REBUILD' : null})});
+    $('scan-errors').textContent = result.message; refreshSync();
+  } catch (error) { $('scan-errors').textContent = error.message; }
+}
+$('scan-reset').onclick = () => syncAction('recover');
+$('scan-start').onclick = () => syncAction('rebuild');
+// This refresh displays backend state only; it never crawls Laserfiche or submits indexing operations.
+function beginSyncStatus() {
+  clearInterval(syncRefresh); refreshSync();
+  syncRefresh = setInterval(() => { if (!document.hidden) refreshSync(); }, 10000);
+}
+setRepositorySelection(launchRepository);
 api('/api/session/status').then(session => {
-  setRepositorySelection(session.repository || '');
-  if (session.authenticated && session.username) openSession(session.username, session.repository, session.server, session.generation);
+  setRepositorySelection(launchRepository || session.repository || '');
+  const matchesLaunch = !launchRepository || launchRepository.toLowerCase() === (session.repository || '').toLowerCase();
+  if (session.authenticated && session.username && matchesLaunch)
+    openSession(session.username, session.repository, session.server, session.generation);
   else $('login-layer').classList.remove('hidden');
-}).catch(() => $('login-layer').classList.remove('hidden'));
+}).catch(() => {
+  setRepositorySelection(launchRepository);
+  $('login-layer').classList.remove('hidden');
+});
 
 $('switch-repository').onclick = () => {
   if (scanning || pendingOperations) { $('active-repository').title='أوقف الفهرسة وانتظر اكتمال الطلب قبل التبديل'; return; }
@@ -486,6 +450,7 @@ $('switch-repository').onclick = () => {
   $('password').value=''; $('repository-id').focus();
 };
 $('discover-repositories').onclick = async () => {
+  if (launchRepository) return;
   $('discover-repositories').disabled=true;
   $('login-error').classList.remove('success');
   try {

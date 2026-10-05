@@ -8,6 +8,7 @@ using LaserficheReports.Infrastructure.Http;
 using LaserficheReports.Infrastructure.OAuth;
 using LaserficheReports.Infrastructure.Options;
 using LaserficheReports.Infrastructure.Repository;
+using LaserficheReports.Infrastructure.Realtime;
 using LaserficheReports.Infrastructure.Services;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -57,6 +58,7 @@ public static class ServiceCollectionExtensions
 
         // ── Repository context — singleton; reads session-scoped override first,
         //    then falls back to live options (supports Desktop Client repo param) ─
+        services.AddSingleton<RepositoryExecutionContext>();
         services.AddSingleton<IRepositoryContext, SessionAwareRepositoryContext>();
 
         // ── Credential provider — singleton; chain(primary, env-var fallback) ─
@@ -99,7 +101,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ILaserficheDocumentIngestionService, LaserficheDocumentIngestionService>();
         services.AddScoped<ILaserficheTemplateService, LaserficheTemplateService>();
         services.AddScoped<LaserficheAnalyticsService>();
-        services.AddScoped<ILaserficheAnalyticsService, CachedLaserficheAnalyticsService>();
+        services.AddScoped<ILaserficheAnalyticsService, LaserficheAnalyticsService>();
 
         // ── Health checks ──────────────────────────────────────────────────────
         services.AddHealthChecks()
@@ -144,10 +146,12 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ISessionCredentialStore, SessionCredentialStore>();
 
         // ── Composite provider: session-first, disk-chain fallback ────────────
-        services.AddSingleton<ICredentialProvider>(sp => new SessionAwareCredentialProvider(
+        services.AddOptions<RealtimeOptions>();
+        services.AddSingleton<ICredentialProvider>(sp => new IndexerCredentialProvider(new SessionAwareCredentialProvider(
             sp.GetRequiredService<ISessionCredentialStore>(),
             sp.GetRequiredService<CredentialChainProvider>(),
-            sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<SessionAwareCredentialProvider>>()));
+            sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<SessionAwareCredentialProvider>>()),
+            sp.GetRequiredService<RepositoryExecutionContext>(),sp.GetRequiredService<IOptions<RealtimeOptions>>()));
     }
 
     /// <summary>

@@ -306,6 +306,31 @@ internal sealed class CompleteLaserficheEntryService : ILaserficheEntryService
         return unique;
     }
 
+    public async IAsyncEnumerable<LFEntry> StreamFolderChildrenAsync(int entryId,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        var repo = await _repositoryContext.GetActiveRepositoryAsync(cancellationToken);
+        using var client = _httpClientFactory.CreateClient("LaserficheAuthenticated");
+        string? next = _adapter.BuildFolderChildrenUrl(repo.RepositoryId, entryId);
+        var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        while (!string.IsNullOrWhiteSpace(next))
+        {
+            if (!visited.Add(next)) throw new LaserficheException("Repeated continuation link.", 502);
+            using var response = await client.GetAsync(next, cancellationToken);
+            var body = await response.Content.ReadAsStringAsync(cancellationToken);
+            if (!response.IsSuccessStatusCode) throw new LaserficheException("Folder enumeration failed.", (int)response.StatusCode);
+            var page = ParsePage(body);
+            foreach (var row in page.Entries)
+            {
+                if (row.Id <= 0) throw new JsonException("Invalid entry ID.");
+                var entry = row.EntryType == LFEntryType.Unknown ? await GetEntryAsync(row.Id, cancellationToken) : row;
+                if (entry.EntryType == LFEntryType.Unknown) throw new JsonException("Unknown entry type.");
+                yield return entry;
+            }
+            next = ResolveNextLink(next, page.NextLink);
+        }
+    }
+
     public async Task<IReadOnlyList<LFEntry>> GetFolderTreeAsync(
         int rootEntryId,
         int depth,
@@ -478,6 +503,8 @@ internal sealed class CompleteLaserficheEntryService : ILaserficheEntryService
         TemplateId = r.TemplateId,
         FileSizeBytes = r.FileSizeBytes ?? r.ElectronicDocumentSize ?? r.ElecDocumentSize,
         PageCount = r.PageCount,
+            IsElectronicDocument = r.IsElectronicDocument,
+            Extension = r.Extension,
         RowNumber = r.RowNumber
     };
 
@@ -570,6 +597,11 @@ internal sealed class CompleteLaserficheEntryService : ILaserficheEntryService
 
         [JsonPropertyName("pageCount")]
         public int? PageCount { get; init; }
+
+        [JsonPropertyName("isElectronicDocument")]
+        public bool? IsElectronicDocument { get; init; }
+        [JsonPropertyName("extension")]
+        public string? Extension { get; init; }
 
         [JsonPropertyName("rowNumber")]
         public int? RowNumber { get; init; }

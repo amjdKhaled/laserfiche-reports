@@ -65,6 +65,13 @@ public interface ILaserficheEntryService
     /// Retrieves a flat list of folder entries up to the requested depth below
     /// <paramref name="rootEntryId"/>, using complete child listings at every level.
     /// </summary>
+    // Default implementation keeps existing adapters compatible. The production decorator streams pages.
+    async IAsyncEnumerable<LFEntry> StreamFolderChildrenAsync(int entryId,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        foreach (var entry in await GetAllFolderChildrenAsync(entryId, cancellationToken)) yield return entry;
+    }
+
     Task<IReadOnlyList<LFEntry>> GetFolderTreeAsync(
         int rootEntryId,
         int depth,

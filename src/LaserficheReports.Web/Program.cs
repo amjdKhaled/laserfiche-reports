@@ -5,8 +5,10 @@ using LaserficheReports.Infrastructure.Configuration;
 using LaserficheReports.Infrastructure.Extensions;
 using LaserficheReports.Web;
 using Npgsql;
+using LaserficheReports.Infrastructure.Realtime;
 
 var builder = WebApplication.CreateBuilder(args);
+builder.Host.UseWindowsService(options => options.ServiceName = "LaserficheReportsIndexer");
 
 // Configuration layering (last source wins): shipped defaults, legacy local
 // settings, installer settings, runtime-discovered/admin settings, developer
@@ -55,6 +57,13 @@ builder.Services.AddSession(options =>
 builder.Services.AddLaserficheInfrastructure(builder.Configuration);
 builder.Services.AddScoped<ReportsChatService>();
 builder.Services.AddScoped<LiveRepositoryReportService>();
+builder.Services.AddScoped<LiveQueryService>();
+builder.Services.AddScoped<HybridQueryService>();
+builder.Services.AddSingleton<LiveReportFiles>();
+builder.Services.Configure<RealtimeOptions>(builder.Configuration.GetSection("Realtime"));
+builder.Services.AddSingleton<RealtimeStateStore>();
+builder.Services.AddSingleton<LaserficheRealtimeSyncService>();
+builder.Services.AddHostedService(provider => provider.GetRequiredService<LaserficheRealtimeSyncService>());
 builder.Services.AddHttpClient("ReportsGraph", client =>
 {
     var baseUrl = builder.Configuration["ReportsGraph:BaseUrl"] ?? "http://127.0.0.1:8766";
@@ -164,6 +173,7 @@ app.MapGet("/api/app/status", (IConfiguration config) => Results.Ok(new
 }));
 
 app.MapReportSessions();
+app.MapRealtime();
 app.MapReportLinks();
 
 app.MapGet("/api/graph/status", async (IHttpClientFactory factory, CancellationToken cancellationToken) =>
@@ -269,13 +279,13 @@ app.MapPost("/api/reports/chat", async (ChatQuestion request, ReportsChatService
     catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException)
     {
         app.Logger.LogWarning(exception, "LangGraph unavailable during chat.");
-        return Results.Json(new { error = "Local LangGraph or Ollama is unavailable.",
-            detail = exception.Message }, statusCode: 503);
+        return Results.Json(new { error = "content_analysis_unavailable",
+            detail = "تعذر الاتصال بخدمة تحليل المحتوى. تحقق من خدمات الذكاء الاصطناعي المحلية ثم أعد المحاولة." }, statusCode: 503);
     }
     catch (InvalidOperationException exception)
     {
         app.Logger.LogWarning(exception, "Embedding or LangGraph failed during chat.");
-        return Results.Json(new { error = "local_ai_unavailable", message = exception.Message },
+        return Results.Json(new { error = "local_ai_unavailable", message = "خدمة تحليل المحتوى غير متاحة حاليًا. راجع إعدادات الفهرس والخدمات المحلية." },
             statusCode: StatusCodes.Status503ServiceUnavailable);
     }
     catch (Exception exception) when (exception is not OperationCanceledException)

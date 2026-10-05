@@ -20,8 +20,22 @@
 
 .table-export-actions{margin-top:0;margin-bottom:18px;border-top:0;justify-content:flex-start}
 
-.brand strong{font-size:20px;line-height:1.5;overflow-wrap:anywhere}
+.brand>div{min-width:0;flex:1}.brand strong{font-size:16px;line-height:1.5;white-space:nowrap;overflow-wrap:normal}
+.history-row{display:flex;align-items:center;gap:4px;border-radius:9px;margin-bottom:5px}
+.history-row.selected{background:#edf3ff}
+.history .history-open{min-width:0;flex:1;width:auto}
+.history .history-delete{flex:none;width:32px;max-height:none;padding:6px 0;text-align:center;font-size:22px;line-height:1.4;color:#7b879a}
+.history .history-delete:hover{background:#fff0f0;color:#a93636}
+.history .history-delete:disabled{opacity:.4;cursor:wait}
+.repository-badge:disabled{opacity:1;cursor:default}
 .service-diagnostic,.service-hint{font-size:12px;line-height:1.8;overflow-wrap:anywhere;text-align:right}
 .service-diagnostic{color:#a93636}.service-hint{color:#698094}
 .status-card:has(.service-diagnostic){grid-column:span 2}
 @media(max-width:760px){.status-card:has(.service-diagnostic){grid-column:1/-1}}
+
+/* Two sibling controls form one card; no nested buttons and no second delete row. */
+.history-row{position:relative;display:block;background:transparent}
+.history .history-open{display:block;width:100%;padding-inline-end:44px;max-height:none;min-height:44px}
+.history .history-delete{position:absolute;inset-inline-end:5px;top:50%;transform:translateY(-50%);width:30px;height:30px;padding:0;display:grid;place-items:center;background:transparent}
+.topbar,.top-actions,.tabs{position:relative;z-index:1}.top-actions button{pointer-events:auto}
+.login-layer.hidden{display:none!important;pointer-events:none}

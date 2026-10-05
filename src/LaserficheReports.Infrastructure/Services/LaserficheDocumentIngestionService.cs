@@ -1,3 +1,4 @@
+using LaserficheReports.Infrastructure.Realtime;
 using System.Text.Json;
 using System.Globalization;
 using LaserficheReports.Application.DTOs;
@@ -51,9 +52,15 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
         _logger = logger;
     }
 
-    public async Task<DocumentIngestionResult> IngestMetadataAsync(
-        int entryId,
-        CancellationToken cancellationToken = default)
+    public Task<DocumentIngestionResult> IngestMetadataAsync(int entryId, CancellationToken cancellationToken = default) =>
+        IngestCoreAsync(entryId, false, cancellationToken);
+
+    public Task<DocumentIngestionResult> ReindexContentAsync(int entryId, CancellationToken cancellationToken = default, bool rebuild = false) =>
+        IngestCoreAsync(entryId, true, cancellationToken, rebuild);
+
+    private async Task<DocumentIngestionResult> IngestCoreAsync(
+        int entryId, bool force,
+        CancellationToken cancellationToken = default, bool rebuild = false)
     {
         if (entryId <= 0)
         {
@@ -85,7 +92,7 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
             .GetEntryFieldsAsync(entryId, cancellationToken)
             .ConfigureAwait(false);
 
-        if (!_ocrOptions.Enabled)
+        if (!force)
         {
             var current = await TryGetCurrentIndexAsync(repository.RepositoryId, entry, fields,
                 cancellationToken).ConfigureAwait(false);
@@ -291,6 +298,8 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
             }
         }
 
+        if (contentFailureCount > 0)
+            throw new InvalidOperationException("Content extraction was incomplete; the previous index was preserved for retry.");
         var ingestionStatus = hasUsableText ? "content-indexed" : "metadata-indexed";
         var textSource = ResolveTextSource(laserficheTextPageCount, ocrTextPageCount);
         var contentDiagnostic = ResolveContentDiagnostic(
@@ -299,6 +308,10 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
             ocrAttemptCount,
             ocrTextPageCount,
             contentFailureCount);
+        var contentHash = IndexFingerprint.Hash(JsonSerializer.Serialize(pageTexts.OrderBy(x => x.PageNumber)));
+        var pipelineVersion = IndexFingerprint.Hash($"v2|{_localAiOptions.EmbeddingModel}|{_localAiOptions.EffectiveEmbeddingDimensions}|{_localAiOptions.EffectiveChunkSize}|{_localAiOptions.EffectiveChunkOverlap}|{_ocrOptions.Enabled}");
+        if (!rebuild && hasUsableText && await HasCurrentContentAsync(repository.RepositoryId, entryId, contentHash, pipelineVersion, cancellationToken))
+            return await RefreshMetadataAsync(entryId, cancellationToken);
         var chunks = BuildSearchChunks(entry, fields, pageTexts,
             _localAiOptions.EffectiveChunkSize, _localAiOptions.EffectiveChunkOverlap);
         var embeddings = chunks.Count > 0
@@ -324,12 +337,18 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
             ocrCorrectedPageCount,
             ocrCorrectionModel,
             contentDiagnostic);
+        var indexMetadata = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(metadata)!;
+        indexMetadata["content_hash"] = JsonSerializer.SerializeToElement(contentHash);
+        indexMetadata["metadata_hash"] = JsonSerializer.SerializeToElement(IndexFingerprint.Metadata(entry, fields));
+        indexMetadata["index_version"] = JsonSerializer.SerializeToElement(pipelineVersion);
+        metadata = JsonSerializer.Serialize(indexMetadata);
         var content = BuildIndexedContent(entry, fields, pageTexts);
 
         await using var connection = new NpgsqlConnection(_options.PostgresConnectionString);
         await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
 
+        await LockEntryAsync(connection, transaction, repository.RepositoryId, entryId, cancellationToken);
         var (documentRowId, wasInserted) = await UpsertDocumentAsync(
             connection,
             transaction,
@@ -622,6 +641,7 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
             repository_id = repositoryId,
             entry_id = entry.Id,
             document_name = entry.Name,
+            last_modified_time = entry.LastModifiedTime,
             full_path = entry.FullPath,
             folder_path = entry.FolderPath,
             template_id = entry.TemplateId,
@@ -731,6 +751,7 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
         await using var connection = new NpgsqlConnection(_options.PostgresConnectionString);
         await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        await LockEntryAsync(connection, transaction, repositoryId, entry.Id, cancellationToken);
         const string deleteSql = """
             delete from public.documents where metadata ->> 'source' = 'laserfiche-reports'
               and metadata ->> 'record_type' = 'document-chunk'
@@ -769,6 +790,7 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
             creator = entry.Creator,
             creation_time = entry.CreationTime,
             last_modified_time = entry.LastModifiedTime,
+            metadata_hash = IndexFingerprint.Metadata(entry, fields),
             fields = fields.Select(field => new { id = field.FieldDefinitionId, name = field.FieldName,
                 value = field.Value, type = field.FieldType, is_multi_value = field.IsMultiValue }),
             chunk_count = total,
@@ -783,6 +805,18 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
             parent.Parameters.AddWithValue("update", update);
             parent.Parameters.AddWithValue("id", documentRowId);
             await parent.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+        await using (var updateChunks = new NpgsqlCommand("""
+            update public.documents set metadata = metadata || cast(@update as jsonb)
+            where metadata->>'source'='laserfiche-reports' and metadata->>'record_type'='document-chunk'
+              and lower(metadata->>'repository_id')=lower(@repository) and metadata->>'entry_id'=@entry;
+            """, connection, transaction))
+        {
+            updateChunks.Parameters.AddWithValue("update", JsonSerializer.Serialize(new { document_name=entry.Name, full_path=entry.FullPath,
+                folder_path=entry.FolderPath, template_name=entry.TemplateName, template_id=entry.TemplateId, last_modified_time=entry.LastModifiedTime }));
+            updateChunks.Parameters.AddWithValue("repository", repositoryId);
+            updateChunks.Parameters.AddWithValue("entry", entry.Id.ToString(CultureInfo.InvariantCulture));
+            await updateChunks.ExecuteNonQueryAsync(cancellationToken);
         }
         for (var index = 0; index < chunks.Count; index++)
         {
@@ -829,6 +863,56 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
+    private async Task<bool> HasCurrentContentAsync(string repository, int entry, string hash, string version, CancellationToken ct)
+    {
+        await using var db = new NpgsqlConnection(_options.PostgresConnectionString); await db.OpenAsync(ct);
+        await using var c = new NpgsqlCommand("""
+          select exists(select 1 from public.documents where metadata->>'source'='laserfiche-reports'
+            and metadata->>'record_type'='document-metadata' and lower(metadata->>'repository_id')=lower(@r)
+            and metadata->>'entry_id'=@id and metadata->>'content_hash'=@hash and metadata->>'index_version'=@version
+            and metadata->>'ingestion_status'='content-indexed' and metadata->>'embedding_status'='complete'
+            and (metadata->>'chunk_count')::int = (select count(*) from public.documents c
+              where c.metadata->>'source'='laserfiche-reports' and c.metadata->>'record_type'='document-chunk'
+              and lower(c.metadata->>'repository_id')=lower(@r) and c.metadata->>'entry_id'=@id and c.embedding is not null));
+          """,db);
+        c.Parameters.AddWithValue("r",repository);c.Parameters.AddWithValue("id",entry.ToString(CultureInfo.InvariantCulture));
+        c.Parameters.AddWithValue("hash",hash);c.Parameters.AddWithValue("version",version);
+        return (bool)(await c.ExecuteScalarAsync(ct))!;
+    }
+    public async Task<DocumentIngestionResult> RefreshMetadataAsync(int entryId, CancellationToken ct = default)
+    {
+        var repository = await _repositoryContext.GetActiveRepositoryAsync(ct);
+        var entry = await _entries.GetEntryAsync(entryId,ct);
+        var fields = await _entries.GetEntryFieldsAsync(entryId,ct);
+        await using var db=new NpgsqlConnection(_options.PostgresConnectionString);await db.OpenAsync(ct);
+        await using var c=new NpgsqlCommand("""
+          select id from public.documents where metadata->>'source'='laserfiche-reports'
+            and metadata->>'record_type'='document-metadata' and lower(metadata->>'repository_id')=lower(@r)
+            and metadata->>'entry_id'=@id order by id desc limit 1;
+          """,db);c.Parameters.AddWithValue("r",repository.RepositoryId);c.Parameters.AddWithValue("id",entryId.ToString(CultureInfo.InvariantCulture));
+        var id=await c.ExecuteScalarAsync(ct);
+        if(id is null)return await ReindexContentAsync(entryId,ct);
+        return await RefreshMetadataChunksAsync((long)id,repository.RepositoryId,entry,fields,ct);
+    }
+    public async Task DeleteAsync(int entryId, CancellationToken ct = default)
+    {
+        var repo=await _repositoryContext.GetActiveRepositoryAsync(ct);
+        await using var db=new NpgsqlConnection(_options.PostgresConnectionString);await db.OpenAsync(ct);
+        await using var tx=await db.BeginTransactionAsync(ct);await LockEntryAsync(db,tx,repo.RepositoryId,entryId,ct);
+        await using var c=new NpgsqlCommand("""
+          delete from public.documents where metadata->>'source'='laserfiche-reports'
+            and metadata->>'record_type' in ('document-metadata','document-chunk')
+            and lower(metadata->>'repository_id')=lower(@r) and metadata->>'entry_id'=@id;
+          """,db,tx);c.Parameters.AddWithValue("r",repo.RepositoryId);c.Parameters.AddWithValue("id",entryId.ToString(CultureInfo.InvariantCulture));
+        await c.ExecuteNonQueryAsync(ct);await tx.CommitAsync(ct);
+    }
+    private static async Task LockEntryAsync(NpgsqlConnection db,NpgsqlTransaction tx,string repository,int entry,CancellationToken ct)
+    {
+        await using var c=new NpgsqlCommand("select pg_advisory_xact_lock(hashtextextended(@key,0))",db,tx);
+        c.Parameters.AddWithValue("key",repository.ToLowerInvariant()+"|"+entry.ToString(CultureInfo.InvariantCulture));
+        await c.ExecuteNonQueryAsync(ct);
+    }
+
     private const string UpsertDocumentSql = """
         WITH updated AS (
             UPDATE public.documents
@@ -837,7 +921,7 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
                 embedding = NULL
             WHERE metadata ->> 'source' = @source
               AND metadata ->> 'record_type' = @recordType
-              AND metadata ->> 'repository_id' = @repositoryId
+              AND lower(metadata ->> 'repository_id') = lower(@repositoryId)
               AND metadata ->> 'entry_id' = @entryId
             RETURNING id
         ),
@@ -857,7 +941,7 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
         DELETE FROM public.documents
         WHERE metadata ->> 'source' = @source
           AND metadata ->> 'record_type' = 'document-chunk'
-          AND metadata ->> 'repository_id' = @repositoryId
+          AND lower(metadata ->> 'repository_id') = lower(@repositoryId)
           AND metadata ->> 'entry_id' = @entryId;
         """;
 
