@@ -1,7 +1,7 @@
 name: Verify Reports
 on:
   push:
-    branches: [feature/reports-chat-langgraph]
+    branches: [feature/reports-chat-langgraph, refactor/laserfiche-first-live-data]
   pull_request:
 jobs:
   dotnet:
@@ -12,6 +12,8 @@ jobs:
         with:
           dotnet-version: '8.0.x'
       - run: dotnet test LaserficheReports.sln --configuration Release
+      - run: dotnet build src/LaserficheReports.Web
+      - run: python tools/live-query-smoke.py --dotnet dotnet
       - shell: pwsh
         run: |
           $parseErrors = $null

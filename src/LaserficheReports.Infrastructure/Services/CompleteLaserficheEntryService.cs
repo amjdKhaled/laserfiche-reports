@@ -216,16 +216,27 @@ internal sealed class CompleteLaserficheEntryService : ILaserficheEntryService
         if (pageSize < 1)
             throw new ArgumentOutOfRangeException(nameof(pageSize), "Page size must be at least 1.");
 
-        var allEntries = await GetAllFolderChildrenAsync(entryId, cancellationToken)
-            .ConfigureAwait(false);
-        var skip = (page - 1) * pageSize;
-
+        if (pageSize > 150) throw new ArgumentOutOfRangeException(nameof(pageSize));
+        var repo = await _repositoryContext.GetActiveRepositoryAsync(cancellationToken);
+        var url = _adapter.BuildFolderChildrenUrl(repo.RepositoryId, entryId);
+        url += (url.Contains('?') ? "&" : "?") + $"$skip={checked((page - 1) * pageSize)}&$top={pageSize}&$count=true&$orderby=id%20asc";
+        using var client = _httpClientFactory.CreateClient("LaserficheAuthenticated");
+        using var response = await client.GetAsync(url, cancellationToken);
+        var body = await response.Content.ReadAsStringAsync(cancellationToken);
+        if (!response.IsSuccessStatusCode) throw new LaserficheException("Folder listing failed.", (int)response.StatusCode);
+        var parsed = ParsePage(body);
+        using var json = JsonDocument.Parse(body);
+        int? total = null;
+        if (json.RootElement.ValueKind == JsonValueKind.Object)
+            foreach (var key in new[] { "@odata.count", "totalCount", "count" })
+                if (json.RootElement.TryGetProperty(key, out var count) && count.TryGetInt32(out var value)) { total = value; break; }
+        var hasMore = total.HasValue ? (long)page * pageSize < total : !string.IsNullOrEmpty(parsed.NextLink) || parsed.Entries.Count >= pageSize;
         return new PagedResult<LFEntry>
         {
-            Items = allEntries.Skip(skip).Take(pageSize).ToList().AsReadOnly(),
-            TotalCount = allEntries.Count,
-            PageNumber = page,
-            PageSize = pageSize
+            Items = parsed.Entries.Take(pageSize).ToArray(),
+            TotalCount = total ?? checked((page - 1) * pageSize + parsed.Entries.Count),
+            TotalCountIsExact = total.HasValue || !hasMore, HasMore = hasMore,
+            PageNumber = page, PageSize = pageSize
         };
     }
 

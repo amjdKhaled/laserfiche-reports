@@ -221,7 +221,8 @@ public sealed class RepositoryServiceDiscoveryTests
         var status  = await service.TestConnectionAsync();
 
         Assert.False(status.IsConnected);
-        Assert.Contains("Connection refused", status.ErrorMessage);
+        Assert.Contains("تعذر الاتصال", status.ErrorMessage);
+        Assert.DoesNotContain("Connection refused", status.ErrorMessage);
     }
 
     // ── Requirement 11: Login is independent of repository discovery ──────────

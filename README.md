@@ -1,4 +1,24 @@
-# Laserfiche Reports
+# تقارير ليزرفيش الذكية — Laserfiche Reports
+
+## Current mode: live Laserfiche metadata
+
+The active flow is question → validated backend tool → Laserfiche API → exact backend report → optional local AI analysis.
+No Supabase, OCR, embeddings, vector search, LangGraph or manual indexing is required by the web application. Existing database rows and old feature files are preserved and inactive.
+
+1. Copy `src/LaserficheReports.Web/appsettings.Local.example.json` to `appsettings.Local.json` in the same directory.
+2. Set `Laserfiche:ServerUrl` and your repository. Select the repository and authenticate through the existing login form.
+3. Set `LocalAI:ChatModel` to a chat model already installed in Ollama. For LM Studio use `LocalAI:Provider=LMStudio` and its local server base URL (without `/v1`). Basic counts, field queries and metadata do not require the model.
+4. Run `dotnet restore`, `dotnet build`, and `dotnet run --project src/LaserficheReports.Web`.
+5. Open `http://127.0.0.1:5187`. Ask about counts, field equality, templates, dates, folder contents or an entry ID.
+
+For date queries, `Reports:TimeZone` defaults to `Asia/Riyadh`; `Reports:DateFormat` must match the Laserfiche server's date-search locale.
+Search and folder results are paginated. Reports aggregate matching records up to `Reports:MaxReportRows`, then fail explicitly if completeness cannot be guaranteed. The browser shows a small preview and provides page navigation. A report's download contains the displayed report/preview, not an export of every matching record.
+
+See [implementation and validation report](docs/LASERFICHE_FIRST_IMPLEMENTATION.md) for architecture, limitations, measurements and tests.
+
+## Archived implementation reference
+
+The material below describes the earlier OCR/RAG prototype. Its database migrations, startup steps, graph server and indexing workflow are not part of the current web request path.
 
 Fully local, on-premise AI reporting and chat for Laserfiche.
 

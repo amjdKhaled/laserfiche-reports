@@ -37,8 +37,7 @@ public static class ServiceCollectionExtensions
         // ── Options ───────────────────────────────────────────────────────────
         services.AddOptions<LaserficheOptions>()
             .Bind(configuration.GetSection(LaserficheOptions.SectionName))
-            .ValidateDataAnnotations()
-            .ValidateOnStart();
+            .ValidateDataAnnotations();
 
         services.AddOptions<SupabaseOptions>()
             .Bind(configuration.GetSection(SupabaseOptions.SectionName));
@@ -93,10 +92,13 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ILaserficheFieldDefinitionService, LaserficheFieldDefinitionService>();
         services.AddScoped<ILaserficheSearchService, LaserficheSearchService>();
         services.AddScoped<ILaserficheDocumentService, LaserficheDocumentService>();
-        services.AddScoped<ILocalOcrService, PaddleOcrLocalService>();
-        services.AddScoped<IOcrTextCorrectionService, OllamaOcrTextCorrectionService>();
-        services.AddScoped<ITextEmbeddingService, OllamaTextEmbeddingService>();
-        services.AddScoped<ILaserficheDocumentIngestionService, LaserficheDocumentIngestionService>();
+        if (configuration.GetValue("Features:EnableLegacyIndexing", false))
+        {
+            services.AddScoped<ILocalOcrService, PaddleOcrLocalService>();
+            services.AddScoped<IOcrTextCorrectionService, OllamaOcrTextCorrectionService>();
+            services.AddScoped<ITextEmbeddingService, OllamaTextEmbeddingService>();
+            services.AddScoped<ILaserficheDocumentIngestionService, LaserficheDocumentIngestionService>();
+        }
         services.AddScoped<ILaserficheTemplateService, LaserficheTemplateService>();
         services.AddScoped<LaserficheAnalyticsService>();
         services.AddScoped<ILaserficheAnalyticsService, CachedLaserficheAnalyticsService>();
@@ -156,6 +158,7 @@ public static class ServiceCollectionExtensions
     private static void RegisterHttpClients(IServiceCollection services)
     {
         services.AddTransient<BearerTokenHandler>();
+        services.AddTransient<TransientReadHandler>();
         services.AddTransient<LaserficheRequestLoggingHandler>();
 
         services.AddHttpClient("LaserficheRaw", (sp, client) =>
@@ -169,7 +172,8 @@ public static class ServiceCollectionExtensions
         {
             AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate
         })
-        .AddHttpMessageHandler<LaserficheRequestLoggingHandler>();
+        .AddHttpMessageHandler<LaserficheRequestLoggingHandler>()
+        .AddHttpMessageHandler<TransientReadHandler>();
 
         services.AddHttpClient("LaserficheAuthenticated", (sp, client) =>
         {
@@ -183,7 +187,8 @@ public static class ServiceCollectionExtensions
             AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate
         })
         .AddHttpMessageHandler<BearerTokenHandler>()
-        .AddHttpMessageHandler<LaserficheRequestLoggingHandler>();
+        .AddHttpMessageHandler<LaserficheRequestLoggingHandler>()
+        .AddHttpMessageHandler<TransientReadHandler>();
 
         // Unauthenticated, short-timeout client used ONLY by API-version
         // auto-detection probes. No resilience pipeline: a failed probe should

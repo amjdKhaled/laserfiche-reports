@@ -4,7 +4,7 @@ using LaserficheReports.Domain.Exceptions;
 using LaserficheReports.Infrastructure.Configuration;
 using LaserficheReports.Infrastructure.Extensions;
 using LaserficheReports.Web;
-using Npgsql;
+using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -42,6 +42,10 @@ builder.Configuration.AddJsonFile(
 // process working directory. Example: Laserfiche__ServerUrl=https://localhost.
 builder.Configuration.AddEnvironmentVariables();
 
+builder.Host.UseSerilog((context, log) => log.MinimumLevel.Information().WriteTo.File(
+    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "LaserficheReports", "logs", "reports-.log"),
+    rollingInterval: RollingInterval.Day, fileSizeLimitBytes: 10 * 1024 * 1024, rollOnFileSizeLimit: true, retainedFileCountLimit: 14));
+
 builder.Services.AddDataProtection();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddDistributedMemoryCache();
@@ -54,21 +58,14 @@ builder.Services.AddSession(options =>
 });
 builder.Services.AddLaserficheInfrastructure(builder.Configuration);
 builder.Services.AddScoped<ReportsChatService>();
-builder.Services.AddScoped<LiveRepositoryReportService>();
-builder.Services.AddHttpClient("ReportsGraph", client =>
+builder.Services.AddScoped<LaserficheToolExecutor>();
+builder.Services.AddScoped<LiveAiClient>();
+builder.Services.AddSingleton<SessionRequestRegistry>();
+builder.Services.AddHttpClient("LiveAI", client =>
 {
-    var baseUrl = builder.Configuration["ReportsGraph:BaseUrl"] ?? "http://127.0.0.1:8766";
-    var uri = new Uri(baseUrl);
-    if (uri.Scheme != Uri.UriSchemeHttp ||
-        uri.Host is not ("127.0.0.1" or "localhost" or "::1"))
-        throw new InvalidOperationException("ReportsGraph:BaseUrl must be local HTTP.");
-    client.BaseAddress = new Uri(uri.AbsoluteUri.TrimEnd('/') + "/");
-    client.Timeout = TimeSpan.FromSeconds(ReportsGraphTimeout.ResolveSeconds(builder.Configuration));
-}).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
-{
-    AllowAutoRedirect = false,
-    UseProxy = false
-});
+    client.BaseAddress = new Uri((builder.Configuration["LocalAI:BaseUrl"] ?? "http://localhost:11434").TrimEnd('/') + "/");
+    client.Timeout = TimeSpan.FromSeconds(Math.Clamp(builder.Configuration.GetValue("LocalAI:TimeoutSeconds", 600), 10, 1800));
+}).AddHttpMessageHandler<LaserficheReports.Infrastructure.Http.TransientReadHandler>();
 
 var app = builder.Build();
 var startedAtUtc = DateTimeOffset.UtcNow;
@@ -107,48 +104,81 @@ app.Use(async (context, next) =>
     await next();
 });
 app.UseSession();
-// Serialize requests sharing a browser session, including requests from other tabs.
-// Commit before releasing: a repository switch cannot race an in-flight report.
+// Serialize only session mutations. Reads snapshot session state while holding
+// the gate briefly, then execute independently. Repository changes cancel old work.
 var sessionGates = Enumerable.Range(0, 64).Select(_ => new SemaphoreSlim(1, 1)).ToArray();
 app.Use(async (context, next) =>
 {
     if (!context.Request.Path.StartsWithSegments("/api")) { await next(); return; }
+    var started = System.Diagnostics.Stopwatch.StartNew();
+    var correlationId = context.TraceIdentifier;
+    context.Response.Headers["X-Correlation-ID"] = correlationId;
+    var mutation = context.Request.Path == "/api/session/login" || context.Request.Path == "/api/session/logout";
     var cookie = context.Request.Cookies[".LaserficheReports.Session"] ?? "new-session";
     var gate = sessionGates[(StringComparer.Ordinal.GetHashCode(cookie) & int.MaxValue) % sessionGates.Length];
-    await gate.WaitAsync(context.RequestAborted);
+    var held = false;
+    var originalToken = context.RequestAborted;
+    CancellationTokenSource? deadline = null;
     try
     {
-        await context.Session.LoadAsync(context.RequestAborted);
+        await gate.WaitAsync(originalToken); held = true;
+        await context.Session.LoadAsync(originalToken);
+        var registry = context.RequestServices.GetRequiredService<SessionRequestRegistry>();
         var expected = context.Request.Headers["X-Reports-Repository"].ToString();
         if (string.IsNullOrEmpty(expected)) expected = context.Request.Query["repositoryId"].ToString();
         var generation = context.Request.Headers["X-Reports-Session"].ToString();
         if (string.IsNullOrEmpty(generation)) generation = context.Request.Query["sessionGeneration"].ToString();
-        var repository = await context.RequestServices.GetRequiredService<IRepositoryContext>()
-            .GetActiveRepositoryAsync(context.RequestAborted);
+        var repository = await context.RequestServices.GetRequiredService<IRepositoryContext>().GetActiveRepositoryAsync(originalToken);
         if (!context.Request.Path.StartsWithSegments("/api/session") &&
             ((!string.IsNullOrEmpty(expected) && !string.Equals(expected, repository.RepositoryId, StringComparison.OrdinalIgnoreCase)) ||
              (!string.IsNullOrEmpty(generation) && generation != context.Session.GetString("ReportsGeneration"))))
         {
-            context.Response.StatusCode = 409;
-            await context.Response.WriteAsJsonAsync(new { error = "تغيّر المستودع في جلسة أخرى. أعد تسجيل الدخول إلى المستودع المطلوب." });
-            return;
+            await WriteProblem(context, 409, "تغيّر المستودع. أعد تسجيل الدخول إلى المستودع المطلوب."); return;
         }
+        if (mutation) registry.Cancel(context.Session.Id);
+        var scopeToken = mutation ? CancellationToken.None : registry.Get(context.Session.Id, context.Session.GetString("ReportsGeneration") ?? "");
+        deadline = CancellationTokenSource.CreateLinkedTokenSource(originalToken, scopeToken);
+        var seconds = context.Request.Path.Value?.EndsWith("/status") == true
+            ? builder.Configuration.GetValue("Reports:HealthTimeoutSeconds", 8)
+            : context.Request.Path.StartsWithSegments("/api/reports/chat")
+                ? builder.Configuration.GetValue("LocalAI:TimeoutSeconds", 600) + builder.Configuration.GetValue("Reports:QueryTimeoutSeconds", 120)
+                : builder.Configuration.GetValue("Reports:QueryTimeoutSeconds", 120);
+        deadline.CancelAfter(TimeSpan.FromSeconds(Math.Clamp(seconds, 1, 2000)));
+        context.RequestAborted = deadline.Token;
+        if (!mutation) { gate.Release(); held = false; }
         await next();
     }
-    catch (LaserficheException error) when (!context.Response.HasStarted)
+    catch (Exception error)
     {
-        context.Response.StatusCode = error.StatusCode is 401 or 403 or 404 ? error.StatusCode : 502;
-        await context.Response.WriteAsJsonAsync(new { error = "تعذر الوصول إلى Laserfiche. تحقق من المستودع وبيانات الدخول وصلاحيات الوثيقة." });
-    }
-    catch (ArgumentException error) when (!context.Response.HasStarted)
-    {
-        context.Response.StatusCode = 400;
-        await context.Response.WriteAsJsonAsync(new { error = error.Message });
+        if (!originalToken.IsCancellationRequested)
+        {
+            app.Logger.LogWarning("Request failed. Type={ErrorType} CorrelationId={CorrelationId}", error.GetType().Name, correlationId);
+            var (status, message) = error switch
+            {
+                ArgumentException => (400, error.Message),
+                LaserficheException e when e.StatusCode == 401 => (401, "بيانات الدخول غير صالحة أو انتهت الجلسة."),
+                LaserficheException e when e.StatusCode == 403 => (403, "لا تملك صلاحية الوصول إلى البيانات المطلوبة."),
+                LaserficheException e when e.StatusCode == 404 => (404, "المستودع أو الإدخال غير موجود."),
+                TimeoutException or OperationCanceledException => (504, "انتهت مهلة الطلب أو أُلغي بعد تغيير المستودع. يمكنك إعادة المحاولة."),
+                InvalidOperationException => (422, error.Message),
+                _ => (503, "تعذر الاتصال بالخدمة المطلوبة. تحقق من حالة Laserfiche والذكاء الاصطناعي.")
+            };
+            if (!context.Response.HasStarted) await WriteProblem(context, status, message);
+            else if (context.Response.ContentType?.StartsWith("text/event-stream") == true)
+                await context.Response.WriteAsync("event: error\ndata: " + System.Text.Json.JsonSerializer.Serialize(new { message, correlationId }) + "\n\n", originalToken);
+        }
     }
     finally
     {
-        try { await context.Session.CommitAsync(CancellationToken.None); }
-        finally { gate.Release(); }
+        context.RequestAborted = originalToken;
+        deadline?.Dispose();
+        if (held)
+        {
+            try { if (mutation) await context.Session.CommitAsync(CancellationToken.None); }
+            finally { gate.Release(); }
+        }
+        app.Logger.LogInformation("[PERF] Operation=API Path={Path} DurationMs={DurationMs} CorrelationId={CorrelationId}",
+            context.Request.Path, started.ElapsedMilliseconds, correlationId);
     }
 });
 app.UseDefaultFiles();
@@ -158,46 +188,14 @@ app.MapGet("/api/app/status", (IConfiguration config) => Results.Ok(new
 {
     application = "Laserfiche Reports",
     mode = "local-only",
-    ocrEnabled = config.GetValue("Ocr:Enabled", false),
+    ocrEnabled = false,
+    ragEnabled = false, vectorSearchEnabled = false, legacyIndexingEnabled = false, dataSource = "Laserfiche",
     processId = Environment.ProcessId,
     startedAtUtc
 }));
 
 app.MapReportSessions();
 app.MapReportLinks();
-
-app.MapGet("/api/graph/status", async (IHttpClientFactory factory, CancellationToken cancellationToken) =>
-{
-    try
-    {
-        using var response = await factory.CreateClient("ReportsGraph").GetAsync("health", cancellationToken);
-        return response.IsSuccessStatusCode
-            ? Results.Ok(new { status = "ready", engine = "LangGraph" })
-            : Results.Json(new { status = "unavailable" }, statusCode: 503);
-    }
-    catch (HttpRequestException)
-    {
-        return Results.Json(new { status = "unavailable" }, statusCode: 503);
-    }
-});
-
-app.MapGet("/api/embeddings/status", async (ITextEmbeddingService embeddings,
-    IConfiguration configuration, CancellationToken cancellationToken) =>
-{
-    try
-    {
-        var prefix = configuration["LocalAI:QueryEmbeddingPrefix"] ?? "search_query: ";
-        var result = await embeddings.CreateEmbeddingsAsync([prefix + "health"], cancellationToken);
-        return Results.Ok(new { status = "ready", model = configuration["LocalAI:EmbeddingModel"],
-            dimensions = result[0].Length });
-    }
-    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
-    catch (Exception exception)
-    {
-        app.Logger.LogWarning(exception, "Local embedding readiness check failed.");
-        return Results.Json(new { status = "unavailable", error = "ollama_embedding_unavailable" }, statusCode: 503);
-    }
-});
 
 app.MapGet("/api/reports/documents", async (int? page, string? search, ReportsChatService chat,
     ISessionCredentialStore sessions, CancellationToken cancellationToken) =>
@@ -208,83 +206,63 @@ app.MapGet("/api/reports/documents", async (int? page, string? search, ReportsCh
     return Results.Ok(await chat.ListAsync(page ?? 1, search, cancellationToken));
 });
 
-// One complete folder at a time keeps the user-specific Laserfiche session
-// attached to every request and lets a client checkpoint a large repository scan.
 app.MapGet("/api/reports/repository/folders/{folderId:int}/children", async (
-    int folderId, ILaserficheEntryService entries, IRepositoryContext repositories,
-    ISessionCredentialStore sessions, CancellationToken cancellationToken) =>
+    int folderId, int? page, ILaserficheEntryService entries, IRepositoryContext repositories,
+    ISessionCredentialStore sessions, CancellationToken ct) =>
 {
-    if (await sessions.TryGetAsync(cancellationToken) is null) return Results.Unauthorized();
-    if (folderId < 0) return Results.BadRequest(new { error = "Folder ID cannot be negative." });
-    var rootId = folderId == 0
-        ? await entries.GetRootEntryIdAsync(cancellationToken)
-        : folderId;
-    var children = await entries.GetAllFolderChildrenAsync(rootId, cancellationToken);
-    var repository = await repositories.GetActiveRepositoryAsync(cancellationToken);
-    return Results.Ok(new
-    {
-        repositoryId = repository.RepositoryId,
-        folderId = rootId,
-        folders = children.Where(entry => entry.EntryType == LFEntryType.Folder)
-            .Select(entry => new { id = entry.Id, name = entry.Name }),
-        documents = children.Where(entry => entry.EntryType == LFEntryType.Document)
-            .Select(entry => new { id = entry.Id, name = entry.Name,
-                modified = entry.LastModifiedTime })
-    });
+    if (await sessions.TryGetAsync(ct) is null) return Results.Unauthorized();
+    if (folderId < 0 || page is < 1 or > 1000000) return Results.BadRequest(new { error = "رقم المجلد أو الصفحة غير صالح." });
+    var root = folderId == 0 ? await entries.GetRootEntryIdAsync(ct) : folderId;
+    var children = await entries.GetEntryChildrenAsync(root, page ?? 1, 50, ct);
+    return Results.Ok(new { items = children.Items, page = page ?? 1, pageSize = 50,
+        totalCount = children.TotalCountIsExact ? (int?)children.TotalCount : null, hasMore = children.HasNextPage });
 });
 
 app.MapPost("/api/reports/chat", async (ChatQuestion request, ReportsChatService chat,
-    ISessionCredentialStore sessions, CancellationToken cancellationToken) =>
+    ISessionCredentialStore sessions, CancellationToken ct) =>
 {
-    if (await sessions.TryGetAsync(cancellationToken) is null) return Results.Unauthorized();
-    try
+    if (await sessions.TryGetAsync(ct) is null) return Results.Unauthorized();
+    return Results.Ok(await chat.AskAsync(request.Question, ct, request.PreviousQuery));
+});
+
+app.MapPost("/api/reports/chat/stream", async (ChatQuestion request, ReportsChatService chat,
+    ISessionCredentialStore sessions, LiveAiClient ai, HttpContext http, CancellationToken ct) =>
+{
+    if (await sessions.TryGetAsync(ct) is null) { http.Response.StatusCode = 401; return; }
+    http.Response.ContentType = "text/event-stream; charset=utf-8";
+    http.Response.Headers.CacheControl = "no-cache";
+    async Task Send(string kind, object data)
     {
-        return Results.Ok(await chat.AskAsync(request.Question, cancellationToken));
+        await http.Response.WriteAsync("event: " + kind + "\ndata: " + System.Text.Json.JsonSerializer.Serialize(data,
+            new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web)) + "\n\n", ct);
+        await http.Response.Body.FlushAsync(ct);
     }
-    catch (ArgumentException exception)
+    var result = await chat.AskAsync(request.Question, ct, request.PreviousQuery,
+        status => Send("status", new { message = status }));
+    await Send("result", result);
+    if (result.Query?.Intent == "report" && result.Answer.Length < 24000)
     {
-        return Results.BadRequest(new { error = exception.Message });
+        try
+        {
+            await Send("delta", new { text = "\n\n## تحليل الذكاء الاصطناعي\n\n" });
+            await foreach (var text in ai.AnalyzeAsync(request.Question, result.Answer, ct))
+                await Send("delta", new { text });
+        }
+        catch (Exception error) when (error is not OperationCanceledException)
+        {
+            app.Logger.LogWarning("AI analysis failed. Type={Type}", error.GetType().Name);
+            await Send("delta", new { text = "\nتعذر إكمال التحليل بالذكاء الاصطناعي. البيانات والجدول أعلاه من Laserfiche مباشرة." });
+        }
     }
-    catch (LaserficheException exception)
-    {
-        app.Logger.LogWarning(exception, "Laserfiche access check failed during chat.");
-        return Results.Json(new { error = "laserfiche_unavailable",
-            message = "تعذر التحقق من صلاحية قراءة الوثائق في Laserfiche. تحقق من الاتصال ثم أعد المحاولة." },
-            statusCode: StatusCodes.Status503ServiceUnavailable);
-    }
-    catch (PostgresException exception)
-    {
-        app.Logger.LogError(exception, "Document search failed in PostgreSQL.");
-        var problem = DatabaseDiagnostics.Describe(exception);
-        return Results.Json(new { error = problem.Error, message = problem.Message,
-            sqlState = problem.SqlState }, statusCode: StatusCodes.Status503ServiceUnavailable);
-    }
-    catch (NpgsqlException exception)
-    {
-        app.Logger.LogError(exception, "Document database unavailable during chat.");
-        return Results.Json(new { error = "supabase_database_unavailable",
-            message = "قاعدة البيانات غير متاحة. تحقق من اتصال Supabase/PostgreSQL." },
-            statusCode: StatusCodes.Status503ServiceUnavailable);
-    }
-    catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException)
-    {
-        app.Logger.LogWarning(exception, "LangGraph unavailable during chat.");
-        return Results.Json(new { error = "Local LangGraph or Ollama is unavailable.",
-            detail = exception.Message }, statusCode: 503);
-    }
-    catch (InvalidOperationException exception)
-    {
-        app.Logger.LogWarning(exception, "Embedding or LangGraph failed during chat.");
-        return Results.Json(new { error = "local_ai_unavailable", message = exception.Message },
-            statusCode: StatusCodes.Status503ServiceUnavailable);
-    }
-    catch (Exception exception) when (exception is not OperationCanceledException)
-    {
-        var diagnosticId = Guid.NewGuid().ToString("N")[..8];
-        app.Logger.LogError(exception, "Chat failed. DiagnosticId={DiagnosticId}", diagnosticId);
-        return Results.Json(new { error = "chat_failed", message = "تعذرت معالجة السؤال. راجع سجل التطبيق.", diagnosticId },
-            statusCode: StatusCodes.Status500InternalServerError);
-    }
+});
+
+app.MapGet("/api/ai/status", async (IHttpClientFactory factory, IConfiguration config, CancellationToken ct) =>
+{
+    using var client = factory.CreateClient("LiveAI");
+    var openAi = LiveAiClient.UsesOpenAi(config["LocalAI:Provider"]);
+    using var response = await client.GetAsync(openAi ? "v1/models" : "api/tags", ct);
+    response.EnsureSuccessStatusCode();
+    return Results.Ok(new { status = "ready", model = config["LocalAI:ChatModel"], modelConfigured = !string.IsNullOrWhiteSpace(config["LocalAI:ChatModel"]) });
 });
 
 app.MapGet("/api/laserfiche/status", async (
@@ -336,180 +314,16 @@ app.MapGet("/api/laserfiche/documents/{entryId:int}/pages/{pageNumber:int}/image
         enableRangeProcessing: false);
 });
 
-app.MapPost("/api/ingestion/laserfiche/{entryId:int}", async (
-    int entryId,
-    ILaserficheDocumentIngestionService ingestion,
-    ISessionCredentialStore sessions,
-    CancellationToken cancellationToken) =>
-{
-    if (await sessions.TryGetAsync(cancellationToken) is null) return Results.Unauthorized();
-    if (entryId <= 0)
-    {
-        return Results.BadRequest(new { error = "Entry ID must be positive." });
-    }
-
-    try
-    {
-        var result = await ingestion.IngestMetadataAsync(entryId, cancellationToken);
-        return Results.Ok(result);
-    }
-    catch (LocalOcrException exception)
-    {
-        return Results.Json(new
-        {
-            error = "local_ocr_unavailable",
-            message = exception.Message,
-            preservedExistingIndex = true
-        }, statusCode: StatusCodes.Status503ServiceUnavailable);
-    }
-    catch (PostgresException exception)
-    {
-        var problem = DatabaseDiagnostics.Describe(exception);
-        return Results.Json(new
-        {
-            error = problem.Error,
-            message = problem.Message,
-            sqlState = problem.SqlState,
-            preservedExistingIndex = true
-        }, statusCode: StatusCodes.Status503ServiceUnavailable);
-    }
-    catch (NpgsqlException exception)
-    {
-        return Results.Json(new
-        {
-            error = "supabase_database_unavailable",
-            message = "The local Supabase/PostgreSQL database is unavailable. Check Supabase:PostgresConnectionString and the database service.",
-            databaseError = exception.Message,
-            preservedExistingIndex = true
-        }, statusCode: StatusCodes.Status503ServiceUnavailable);
-    }
-    catch (LaserficheException exception)
-    {
-        app.Logger.LogWarning(exception, "Laserfiche ingestion failed for Entry {EntryId}.", entryId);
-        var operation = exception.Message.Contains("entry fields", StringComparison.OrdinalIgnoreCase)
-            ? "entry_fields"
-            : exception.Message.Contains("Document pages", StringComparison.OrdinalIgnoreCase)
-                ? "document_pages"
-                : exception.Message.Contains("Page text", StringComparison.OrdinalIgnoreCase)
-                    ? "page_text"
-                    : "entry";
-        var operationLabel = operation switch
-        {
-            "entry_fields" => "حقول الوثيقة",
-            "document_pages" => "قائمة صفحات الوثيقة",
-            "page_text" => "نص الصفحة",
-            _ => "الوثيقة"
-        };
-        var status = exception.StatusCode switch
-        {
-            401 or 429 or >= 500 => StatusCodes.Status503ServiceUnavailable,
-            403 => StatusCodes.Status403Forbidden,
-            404 => StatusCodes.Status404NotFound,
-            _ => StatusCodes.Status422UnprocessableEntity
-        };
-        return Results.Json(new { error = "laserfiche_entry_failed",
-            message = $"تعذرت قراءة {operationLabel} {entryId} من Laserfiche (HTTP {exception.StatusCode}).",
-            operation, upstreamStatus = exception.StatusCode, preservedExistingIndex = true }, statusCode: status);
-    }
-    catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException or InvalidOperationException)
-    {
-        app.Logger.LogWarning(exception, "Local dependency failed during ingestion of Entry {EntryId}.", entryId);
-        return Results.Json(new { error = "ingestion_dependency_unavailable", message = exception.Message,
-            preservedExistingIndex = true }, statusCode: StatusCodes.Status503ServiceUnavailable);
-    }
-    catch (Exception exception) when (exception is not OperationCanceledException)
-    {
-        var diagnosticId = Guid.NewGuid().ToString("N")[..8];
-        app.Logger.LogError(exception, "Ingestion failed for Entry {EntryId}. DiagnosticId={DiagnosticId}", entryId, diagnosticId);
-        return Results.Json(new { error = "ingestion_failed", message = "تعذرت فهرسة الوثيقة. راجع سجل التطبيق.",
-            diagnosticId, preservedExistingIndex = true }, statusCode: StatusCodes.Status500InternalServerError);
-    }
-});
-
-app.MapGet("/api/ocr/status", async (
-    IHttpClientFactory httpClientFactory,
-    CancellationToken cancellationToken) =>
-{
-    try
-    {
-        var client = httpClientFactory.CreateClient("PaddleOcr");
-        using var response = await client.GetAsync("health", cancellationToken);
-        var body = await response.Content.ReadAsStringAsync(cancellationToken);
-
-        if (!response.IsSuccessStatusCode)
-        {
-            return Results.Json(new
-            {
-                isReady = false,
-                statusCode = (int)response.StatusCode,
-                error = "PaddleOCR worker returned an unsuccessful health response."
-            }, statusCode: StatusCodes.Status503ServiceUnavailable);
-        }
-
-        return Results.Content(body, "application/json; charset=utf-8", statusCode: StatusCodes.Status200OK);
-    }
-    catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException)
-    {
-        return Results.Json(new
-        {
-            isReady = false,
-            error = "PaddleOCR worker is unavailable. Start tools/paddleocr-vl/start.ps1."
-        }, statusCode: StatusCodes.Status503ServiceUnavailable);
-    }
-});
-
-app.MapGet("/api/database/status", async (
-    IConfiguration configuration,
-    CancellationToken cancellationToken) =>
-{
-    var connectionString = configuration["Supabase:PostgresConnectionString"];
-    if (string.IsNullOrWhiteSpace(connectionString))
-    {
-        return Results.Json(new
-        {
-            status = "unavailable",
-            error = "supabase_connection_string_missing"
-        }, statusCode: StatusCodes.Status503ServiceUnavailable);
-    }
-
-    try
-    {
-        var settings = new NpgsqlConnectionStringBuilder(connectionString);
-        await using var connection = new NpgsqlConnection(connectionString);
-        await connection.OpenAsync(cancellationToken);
-        await using var command = new NpgsqlCommand("SELECT 1;", connection);
-        await command.ExecuteScalarAsync(cancellationToken);
-
-        return Results.Ok(new
-        {
-            status = "ready",
-            host = settings.Host,
-            port = settings.Port,
-            database = settings.Database,
-            username = settings.Username
-        });
-    }
-    catch (PostgresException exception)
-    {
-        var problem = DatabaseDiagnostics.Describe(exception);
-        return Results.Json(new { status = "unavailable", error = problem.Error,
-            message = problem.Message, sqlState = problem.SqlState },
-            statusCode: StatusCodes.Status503ServiceUnavailable);
-    }
-    catch (Exception exception) when (exception is NpgsqlException or ArgumentException)
-    {
-        return Results.Json(new
-        {
-            status = "unavailable",
-            error = "supabase_connection_failed",
-            message = exception.Message
-        }, statusCode: StatusCodes.Status503ServiceUnavailable);
-    }
-});
-
-app.MapHealthChecks("/health");
+app.MapGet("/health", () => Results.Ok(new { status = "ready" }));
 
 app.Run();
 
-internal sealed record ChatQuestion(string Question);
+static Task WriteProblem(HttpContext context, int status, string message)
+{
+    context.Response.StatusCode = status;
+    return context.Response.WriteAsJsonAsync(new { type = "about:blank", title = message, status,
+        detail = message, message, correlationId = context.TraceIdentifier }, options: (System.Text.Json.JsonSerializerOptions?)null, contentType: "application/problem+json", cancellationToken: CancellationToken.None);
+}
+
+internal sealed record ChatQuestion(string Question, RepositoryQuery? PreviousQuery = null);
 internal sealed record LoginRequest(string Username, string Password, string? RepositoryId = null);

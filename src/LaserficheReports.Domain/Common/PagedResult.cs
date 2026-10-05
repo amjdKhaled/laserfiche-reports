@@ -12,6 +12,9 @@ public sealed record PagedResult<T>
     /// <summary>Total number of items across all pages.</summary>
     public int TotalCount { get; init; }
 
+    public bool TotalCountIsExact { get; init; } = true;
+    public bool? HasMore { get; init; }
+
     /// <summary>Current 1-based page number.</summary>
     public int PageNumber { get; init; } = 1;
 
@@ -19,7 +22,7 @@ public sealed record PagedResult<T>
     public int PageSize { get; init; } = 25;
 
     /// <summary><c>true</c> when more pages are available after the current one.</summary>
-    public bool HasNextPage => PageNumber * PageSize < TotalCount;
+    public bool HasNextPage => HasMore ?? ((long)PageNumber * PageSize < TotalCount);
 
     /// <summary><c>true</c> when the current page is not the first.</summary>
     public bool HasPreviousPage => PageNumber > 1;

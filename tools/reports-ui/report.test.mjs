@@ -235,7 +235,7 @@ test('late report from another repository is not saved or displayed in the new s
   window.document.write(readFileSync(root+'index.html','utf8').replace(/<script[^>]*>[\s\S]*?<\/script>/g,''));
   window.fetch=async(url,options)=>url==='/api/session/status'
     ? {ok:true,status:200,json:async()=>({authenticated:true,username:'tester',repository:'RepoA',server:'https://localhost',generation:'first'})}
-    : new Promise(resolve=>{resolveChat=resolve;sentHeaders=options.headers;});
+    : url === '/api/reports/chat/stream' ? new Promise(resolve=>{resolveChat=resolve;sentHeaders=options.headers;}) : {ok:true,status:200,json:async()=>({isConnected:true})};
   window.eval(readFileSync(root+'app.js','utf8'));await new Promise(r=>setTimeout(r,20));
   window.document.getElementById('question').value='سؤال';
   window.document.getElementById('ask-form').dispatchEvent(new window.Event('submit',{cancelable:true}));
@@ -300,16 +300,18 @@ test('repository select discovers IDs and submits an explicit manual repository'
   assert.equal(window.document.title,'تقارير ليزرفيش الذكية');
   await window.happyDOM.abort();
 });
-test('database status shows the actual repair message instead of hiding the cause', async()=>{
+test('live status checks only Laserfiche and AI and indexing controls are removed', async()=>{
   const window=setup();window.document.write(readFileSync(root+'index.html','utf8').replace(/<script[^>]*>[\s\S]*?<\/script>/g,''));
-  window.fetch=async url=>({ok:url!=='/api/database/status',status:url==='/api/database/status'?503:200,json:async()=>url==='/api/database/status'?{message:'اضبط POOLER_TENANT_ID من ملف Supabase المحلي'}:{authenticated:true,username:'tester',repository:'RepoA',ocrEnabled:false}});
+  const called=[];
+  window.fetch=async url=>{called.push(url);return {ok:true,status:200,json:async()=>({authenticated:true,username:'tester',repository:'RepoA',isConnected:true})};};
   window.eval(readFileSync(root+'app.js','utf8'));await new Promise(r=>setTimeout(r,20));
   await window.eval('refreshStatuses()');
-  const card=[...window.document.querySelectorAll('.status-card')].find(card=>card.textContent.includes('Supabase'));
-  assert(card.textContent.includes('غير متصل'));assert(card.textContent.includes('POOLER_TENANT_ID'));assert(card.textContent.includes('configure-database.ps1'));
+  assert(called.includes('/api/laserfiche/status'));assert(called.includes('/api/ai/status'));
+  assert(!called.some(url=>/database|embeddings|ocr|graph|ingestion/.test(url)));
+  assert.equal(window.document.getElementById('scan-start'),null);
+  assert.equal(window.document.getElementById('ingest-form'),null);
   await window.happyDOM.abort();
 });
-
 
 test('top tabs respond while startup status is pending and late status cannot reopen login', async () => {
   const window = setup(); let finishStatus;
