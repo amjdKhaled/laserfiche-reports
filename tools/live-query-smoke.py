@@ -11,7 +11,9 @@ import json
 import os
 from pathlib import Path
 import re
+import socket
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -102,10 +104,16 @@ class Fixture(BaseHTTPRequestHandler):
         return self.reply({},404)
 
 def main():
+    if hasattr(sys.stdout, 'reconfigure'): sys.stdout.reconfigure(encoding='utf-8')
     parser=argparse.ArgumentParser();parser.add_argument('--dotnet',default='dotnet');args=parser.parse_args()
     server=ThreadingHTTPServer(('127.0.0.1',0),Fixture);threading.Thread(target=server.serve_forever,daemon=True).start()
     lf=f'http://127.0.0.1:{server.server_port}'
-    appport=server.server_port+1;base=f'http://127.0.0.1:{appport}'
+    # An adjacent ephemeral port can already belong to another Windows service.
+    # Ask the OS for a separate available port instead of assuming port + 1 is free.
+    with socket.socket() as reservation:
+        reservation.bind(('127.0.0.1', 0))
+        appport = reservation.getsockname()[1]
+    base=f'http://127.0.0.1:{appport}'
     env={**os.environ,'ASPNETCORE_URLS':base,'Laserfiche__ServerUrl':lf,'Laserfiche__ApiVersion':'v2',
          'Laserfiche__RepositoryId':'TestRepo','LocalAI__BaseUrl':lf,'LocalAI__ChatModel':'fixture-model',
          'Reports__QueryTimeoutSeconds':'3','Reports__HealthTimeoutSeconds':'2',
