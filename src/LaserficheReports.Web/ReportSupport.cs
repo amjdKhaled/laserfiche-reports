@@ -42,6 +42,11 @@ internal static partial class ReportSupport
     internal static bool IsInventoryQuestion(string question) => InventoryRegex().IsMatch(
         Regex.Replace(question.Trim().TrimEnd('؟', '?', '.', '!'), @"\s+", " "));
 
+    internal static bool IsFolderCountQuestion(string question) => FolderCountRegex().IsMatch(
+        Regex.Replace(Regex.Replace(question.Trim().TrimEnd('؟', '?', '.', '!')
+            .Normalize(NormalizationForm.FormC), @"[\p{Mn}\u0640]", "")
+            .Replace('أ', 'ا').Replace('إ', 'ا').Replace('آ', 'ا'), @"\s+", " "));
+
     internal static bool IsDocumentMetadataQuestion(string question) => MetadataQuestionRegex().IsMatch(question);
 
     internal static bool NeedsFilterClarification(string question) =>
@@ -128,6 +133,8 @@ internal static partial class ReportSupport
     private static partial Regex MetadataQuestionRegex();
     [GeneratedRegex(@"^(?:(?:اعرض|اذكر|اعطني|أعطني|اعطيني|أعطيني|وريني|طلع|ابغا|أبغا|ابي|أبي|أريد|اريد|قائمة|تقرير عن|ما هي|ماهي|ايش|وش|ما|كم عدد|عدد)\s+)?(?:(?:لي|تقرير|قائمة|بكل|عن|بجميع)\s+)*(?:جميع\s+|كل\s+)?(?:الوثائق|المستندات|الملفات)\s*(?:(?:الموجود[ةه]?|المتاحة)\s*)?(?:في\s*(?:(?:هذا|هذي|كل|جميع)\s+)?(?:المستودع|مستودع|المخزن|المخزن هذا|الريبو|(?:ال\s*)?(?:repasetory|repository|repo)))?$|^(?:كم\s+(?:وثيقة|مستند|ملف)\s+في\s+(?:هذا\s+)?(?:المستودع|المخزن)|(?:list|show|count)\s+(?:me\s+)?(?:all\s+)?documents(?:\s+(?:in|from)\s+(?:this\s+|the\s+)?repository)?)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex InventoryRegex();
+    [GeneratedRegex(@"^(?:(?:كم|ما|ما هو|ماهو|ايش|وش)\s+)?(?:عدد\s+)?(?:المجلدات|مجلدات|المجلد|مجلد)\s*(?:(?:الموجودة|الموجوده|المتاحة|المتاحه)\s*)?(?:في\s+(?:(?:هذا|هذي|هذه|كل|جميع)\s+)?(?:المستودع|مستودع|المخزن|مخزن|الريبو|الريبازيتوري|repository|repo))?$|^(?:(?:count|how many)\s+(?:all\s+)?folders(?:\s+(?:are\s+)?in\s+(?:this\s+|the\s+)?(?:repository|repo))?)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex FolderCountRegex();
     [GeneratedRegex(@"(?:\s+(?:و|أو|او|and|or)\s+[^؟?]*?(?:الحقل|حقل|التصنيف|موعد|تاريخ|اجراء|إجراء)|(?:>=|<=|!=|≠)|(?:أكبر من|اصغر من|أصغر من|اقل من|أقل من|قبل تاريخ|بعد تاريخ))", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex CompoundFilterRegex();
     [GeneratedRegex(@"(?:\b(?:not\s+equal(?:s)?|does\s+not\s+equal|unequal)\b|(?:لا|ليس|ليست|غير)\s+(?:يساوي|تساوي|مساوي[ةه]?|مساو[ٍي])|(?:>=|<=|!=|≠)|(?:أكبر من|اصغر من|أصغر من|اقل من|أقل من|قبل تاريخ|بعد تاريخ))", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]

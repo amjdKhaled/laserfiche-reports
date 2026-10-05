@@ -39,7 +39,8 @@
     anchor.title = 'فتح تقارير ليزرفيش الذكية للمستودع الحالي';
     anchor.setAttribute('aria-label', anchor.title);
     if (dashboard) anchor.className = dashboard.className;
-    anchor.style.cssText = 'color:inherit;white-space:nowrap;cursor:pointer;';
+    anchor.style.cssText = 'white-space:nowrap;cursor:pointer;';
+    anchor.style.setProperty('color', '#ffffff', 'important');
     anchor.addEventListener('click', function () { anchor.href = destination(); });
 
     const dashboardItem = dashboard && dashboard.closest('li');
