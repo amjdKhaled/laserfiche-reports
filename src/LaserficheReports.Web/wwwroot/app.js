@@ -1,4 +1,7 @@
 const $ = id => document.getElementById(id);
+// Web Client links preselect a repository; the normal login form remains available.
+const launchRepository = new URLSearchParams(window.location.search).get('repository')?.trim() || '';
+const pendingChats = new Set();
 let storeKey = '';
 let sessionRepository = '';
 let sessionServer = '';
@@ -104,8 +107,11 @@ $('login-form').onsubmit = async event => {
 $('logout').onclick = async () => {
   if (scanning || pendingOperations) return;
   try { await api('/api/session/logout', { method: 'POST' }); }
+  catch (error) { $('login-error').textContent = `تعذر إنهاء جلسة الخادم: ${error.message}`; }
   finally {
     sessionEpoch++;
+    sessionRepository = ''; sessionServer = ''; sessionGeneration = '';
+    $('active-repository').textContent = '—';
     chats = []; active = null;
     pauseScan = true;
     scan = null;
@@ -116,9 +122,24 @@ $('logout').onclick = async () => {
 function renderHistory() {
   $('history').replaceChildren();
   chats.forEach(chat => {
-    const button = el('button', chat.id === active ? 'selected' : '', chat.title);
+    const row = el('div', chat.id === active ? 'history-row selected' : 'history-row');
+    const button = el('button', chat.id === active ? 'history-open selected' : 'history-open', chat.title);
+    button.type = 'button';
     button.onclick = () => { active = chat.id; renderHistory(); renderMessages(); showTab('chat'); };
-    $('history').append(button);
+    const remove = el('button', 'history-delete', '×');
+    remove.type = 'button';
+    remove.title = 'حذف المحادثة';
+    remove.setAttribute('aria-label', `حذف المحادثة: ${chat.title}`);
+    remove.disabled = pendingChats.has(chat.id);
+    remove.onclick = event => {
+      event.stopPropagation();
+      if (pendingChats.has(chat.id)) return;
+      chats = chats.filter(item => item.id !== chat.id);
+      if (active === chat.id) active = null;
+      save(); renderHistory(); renderMessages();
+    };
+    row.append(button, remove);
+    $('history').append(row);
   });
 }
 function renderMessages() {
@@ -268,6 +289,7 @@ $('ask-form').onsubmit = async event => {
   const epoch = sessionEpoch;
   const chat = chats.find(c => c.id === active);
   pendingOperations++;
+  pendingChats.add(chat.id);
   chat.messages.push({ role: 'user', text: question });
   $('question').value = '';
   $('send').disabled = true;
@@ -279,7 +301,7 @@ $('ask-form').onsubmit = async event => {
     chat.messages[chat.messages.length - 1] = { role: 'assistant', repositoryId: sessionRepository, relatedEntryIds: result.relatedEntryIds, text: result.answer, sources: result.sources, scope: result.scope, generatedAt: result.generatedAt, quality: result.quality };
   } catch (error) {
     chat.messages[chat.messages.length - 1] = { role: 'assistant', text: `تعذر إكمال السؤال: ${error.message}` };
-  } finally { pendingOperations--; $('send').disabled = false; if (epoch === sessionEpoch) { save(); renderMessages(); } }
+  } finally { pendingOperations--; pendingChats.delete(chat.id); $('send').disabled = false; if (epoch === sessionEpoch) { save(); renderHistory(); renderMessages(); } }
 };
 $('question').onkeydown = event => {
   if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); $('ask-form').requestSubmit(); }
@@ -474,11 +496,20 @@ $('scan-start').onclick = async () => {
     loadDocuments();
   }
 };
-api('/api/session/status').then(session => {
-  setRepositorySelection(session.repository || '');
-  if (session.authenticated && session.username) openSession(session.username, session.repository, session.server, session.generation);
+setRepositorySelection(launchRepository);
+const startupEpoch = sessionEpoch;
+api('/api/session/status', { signal: AbortSignal.timeout(10000) }).then(session => {
+  if (sessionEpoch !== startupEpoch) return;
+  setRepositorySelection(launchRepository || session.repository || '');
+  const matchesLaunch = !launchRepository || launchRepository.toLowerCase() === (session.repository || '').toLowerCase();
+  if (session.authenticated && session.username && matchesLaunch)
+    openSession(session.username, session.repository, session.server, session.generation);
   else $('login-layer').classList.remove('hidden');
-}).catch(() => $('login-layer').classList.remove('hidden'));
+}).catch(() => {
+  if (sessionEpoch !== startupEpoch) return;
+  setRepositorySelection(launchRepository);
+  $('login-layer').classList.remove('hidden');
+});
 
 $('switch-repository').onclick = () => {
   if (scanning || pendingOperations) { $('active-repository').title='أوقف الفهرسة وانتظر اكتمال الطلب قبل التبديل'; return; }
