@@ -20,7 +20,15 @@
 
 .table-export-actions{margin-top:0;margin-bottom:18px;border-top:0;justify-content:flex-start}
 
-.brand strong{font-size:20px;line-height:1.5;overflow-wrap:anywhere}
+.brand>div{min-width:0;flex:1}.brand strong{font-size:16px;line-height:1.5;white-space:nowrap;overflow-wrap:normal}
+/* Two sibling buttons share one card; deletion never wraps below the title. */
+.history-row{position:relative;display:block;border-radius:9px;margin-bottom:5px;overflow:hidden}
+.history-row.selected,.history-row:hover{background:#edf3ff}
+.history .history-open{min-width:0;width:100%;padding-inline-end:42px;max-height:none}
+.history .history-delete{position:absolute;inset-inline-end:5px;top:50%;transform:translateY(-50%);width:30px;height:30px;max-height:none;padding:0;display:grid;place-items:center;text-align:center;font-size:22px;line-height:1;color:#7b879a;border-radius:7px}
+.history .history-delete:hover{background:#fff0f0;color:#a93636}
+.history .history-delete:disabled{opacity:.4;cursor:wait}
+.history button:focus-visible{outline:2px solid var(--primary);outline-offset:-2px}
 .service-diagnostic,.service-hint{font-size:12px;line-height:1.8;overflow-wrap:anywhere;text-align:right}
 .service-diagnostic{color:#a93636}.service-hint{color:#698094}
 .status-card:has(.service-diagnostic){grid-column:span 2}

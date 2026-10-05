@@ -4,14 +4,14 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>تقارير ليزرفيش الذكية</title>
-  <link rel="stylesheet" href="/styles.css">
-  <link rel="stylesheet" href="/login.css">
-  <link rel="stylesheet" href="/dashboard-theme.css">
+  <link rel="stylesheet" href="/styles.css?v=20261005-ui2">
+  <link rel="stylesheet" href="/login.css?v=20261005-ui2">
+  <link rel="stylesheet" href="/dashboard-theme.css?v=20261005-ui2">
 </head>
 <body>
   <div class="shell">
     <aside class="sidebar">
-      <div class="brand"><img src="/isb-logo.jpg" class="brand-logo" alt="ISB"><div><strong>تقارير ليزرفيش الذكية</strong><small>تقارير المستندات المحلية</small></div></div>
+      <div class="brand"><img src="/isb-logo.jpg" class="brand-logo" alt="ISB"><div><strong>التقارير الذكية</strong><small>تقارير ليزرفيش</small></div></div>
       <button class="new-chat" id="new-chat">＋ محادثة جديدة</button>
       <div class="side-heading">المحادثات الأخيرة</div>
       <div id="history" class="history"></div>
@@ -20,7 +20,7 @@
     <main class="main">
       <header class="topbar">
         <div><h1>اسأل وثائقك</h1><p>ابحث في حقول Laserfiche ومحتوى الصفحات، مع مصدر لكل إجابة</p></div>
-        <div class="top-actions"><button type="button" id="switch-repository" class="repository-badge" title="تغيير المستودع"><span>المستودع</span> <strong id="active-repository">—</strong> ▾</button><div class="tabs"><button id="tab-chat" class="active">المحادثة</button><button id="tab-docs">الوثائق والنظام</button></div><button id="logout" class="logout">تسجيل الخروج</button></div>
+        <div class="top-actions"><button type="button" id="switch-repository" class="repository-badge" title="تغيير المستودع"><span>المستودع</span> <strong id="active-repository">—</strong> <span id="repository-arrow">▾</span></button><div class="tabs"><button id="tab-chat" class="active">المحادثة</button><button id="tab-docs">الوثائق والنظام</button></div><button id="logout" class="logout">تسجيل الخروج</button></div>
       </header>
       <section id="chat-view" class="view">
         <div id="messages" class="messages">
@@ -71,9 +71,9 @@
       <div id="login-error" role="alert"></div>
     </form>
   </div>
-  <script src="/report-format.js" defer></script>
-  <script src="/report-download.js" defer></script>
-  <script src="/office-export.js" defer></script>
-  <script src="/app.js" defer></script>
+  <script src="/report-format.js?v=20261005-ui2" defer></script>
+  <script src="/report-download.js?v=20261005-ui2" defer></script>
+  <script src="/office-export.js?v=20261005-ui2" defer></script>
+  <script src="/app.js?v=20261005-ui2" defer></script>
 </body>
 </html>
