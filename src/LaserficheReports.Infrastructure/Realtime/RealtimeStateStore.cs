@@ -23,7 +23,16 @@ public sealed class RealtimeStateStore
             metadata_hash text not null, modified text, content_hash text, indexed integer not null default 0,
             generation text, primary key(repository,entry));
           """);
+        using var schema = Command(db,"pragma table_info(repositories)");
+        using var reader = schema.ExecuteReader(); var initialized = false;
+        while(reader.Read()) initialized |= reader.GetString(1) == "initialized";
+        reader.Close();
+        if(!initialized) Execute(db,"alter table repositories add column initialized integer not null default 0");
     }
+    public bool Initialized(string key)
+    {Ensure(key);using var db=Open();using var c=Command(db,"select initialized from repositories where key=$r",("$r",key));return Convert.ToInt32(c.ExecuteScalar())!=0;}
+    public void MarkInitialized(string key)
+    {using var db=Open();Execute(db,"update repositories set initialized=1 where key=$r",("$r",key));}
     private SqliteConnection Open() { var db = new SqliteConnection(_connectionString); db.Open(); return db; }
     private static void Execute(SqliteConnection db, string sql, params (string,object?)[] args)
     { using var c = Command(db,sql,args); c.ExecuteNonQuery(); }
@@ -45,9 +54,9 @@ public sealed class RealtimeStateStore
         Execute(db,resetCheckpoint?"update repositories set cursor=$s,last_event=coalesce($label,last_event) where key=$r":"update repositories set cursor=max(cursor,$s), last_event=coalesce($label,last_event) where key=$r",
             ("$r",key),("$s",sequence),("$label",label));Execute(db,"COMMIT");
     }
-    public SyncWork? Next(string key)
+    public SyncWork? Next(string key,bool reconciliation=false)
     {
-        using var db=Open();using var c=Command(db,"select entry,change,version,attempts from work where repository=$r and failed=0 and due<=$now order by case when entry=0 then 1 else 0 end,due limit 1",("$r",key),("$now",DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()));
+        using var db=Open();using var c=Command(db,"select entry,change,version,attempts from work where repository=$r and failed=0 and due<=$now and (($reconcile=1 and entry=0) or ($reconcile=0 and entry>0)) order by due limit 1",("$r",key),("$now",DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()),("$reconcile",reconciliation?1:0));
         using var reader=c.ExecuteReader();return reader.Read()?new SyncWork(key,reader.GetInt32(0),(EntryChange)reader.GetInt32(1),reader.GetInt64(2),reader.GetInt32(3)):null;
     }
     // Compare-and-delete prevents a newer event from being lost while the old version is executing.
@@ -68,8 +77,14 @@ public sealed class RealtimeStateStore
     public void Seen(string key,int id,string hash,string? modified,string generation,bool indexed)
     {using var db=Open();Execute(db,"""
        insert into manifest(repository,entry,metadata_hash,modified,generation,indexed) values($r,$id,$h,$m,$g,$i)
-       on conflict(repository,entry) do update set metadata_hash=$h,modified=$m,generation=$g,indexed=$i;
+       on conflict(repository,entry) do update set metadata_hash=$h,modified=$m,generation=$g,
+         indexed=case when manifest.indexed=1 and manifest.metadata_hash=$h and coalesce(manifest.modified,'')=coalesce($m,'') then 1 else $i end;
        """,("$r",key),("$id",id),("$h",hash),("$m",modified),("$g",generation),("$i",indexed?1:0));}
+    public void IndexCompleted(string key,int id,string hash,string? modified,bool indexed)
+    {using var db=Open();Execute(db,"""
+       insert into manifest(repository,entry,metadata_hash,modified,generation,indexed) values($r,$id,$h,$m,'event',$i)
+       on conflict(repository,entry) do update set metadata_hash=$h,modified=$m,indexed=$i;
+       """,("$r",key),("$id",id),("$h",hash),("$m",modified),("$i",indexed?1:0));}
     public void MarkIndexed(string key,int id) {using var db=Open();Execute(db,"update manifest set indexed=1 where repository=$r and entry=$id",("$r",key),("$id",id));}
     public void Remove(string key,int id) {using var db=Open();Execute(db,"delete from manifest where repository=$r and entry=$id",("$r",key),("$id",id));}
     public IEnumerable<int> Unseen(string key,string generation)

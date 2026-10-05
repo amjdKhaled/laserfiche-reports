@@ -46,7 +46,7 @@ internal sealed class LiveQueryService(ILaserficheEntryService entries, ILaserfi
         var detail=$"تم الحصر مباشرة من Laserfiche وفق صلاحيات حسابك، دون Top-K. وقت انتهاء الفحص: {DateTimeOffset.UtcNow:O}. التغييرات أثناء الفحص قد تؤثر على النتائج؛ هذا ليس لقطة معاملات للمستودع.";
         if(total>500)detail+=" يعرض الرد أول 500 نتيجة فقط؛ العدد يشمل جميع النتائج المفحوصة.";
         var count=intent.Kind=="images"?$"الصور المؤكدة: **{imageCount}**."+(unknownImages>0?$" تعذر تحديد نوع {unknownImages} صفحة؛ عدد الصور جزئي.":""):$"عدد النتائج: **{total}**.";
-        if(writer is not null){await writer.WriteLineAsync("\n"+count+"\n\n"+detail);await writer.FlushAsync(ct);}
+        if(writer is not null){await writer.WriteLineAsync("\n"+count+"\n\n"+detail);await writer.FlushAsync(ct);files!.Complete(artifact!.Value.Token);}
         return new ChatResult(count+"\n\n"+detail+"\n\n| الرقم | الاسم | المسار | البيانات |\n| --- | --- | --- | --- |\n"+rows,evidence,Scope(total) with {Detail=detail,Exhaustive=unknownImages==0}) { DownloadUrl=artifact is not null?$"/api/reports/files/{artifact.Value.Token}":null };
         AnswerScope Scope(int count)=>new("repository",repository,count,0,true,"المصدر: Laserfiche API الحالي؛ النطاق يتبع صلاحيات حسابك.",intent.EntryIds);
     }
@@ -80,6 +80,11 @@ internal sealed class LiveQueryService(ILaserficheEntryService entries, ILaserfi
             if(intent.DateMode=="created-today"&&(entry.CreationTime is null || TimeZoneInfo.ConvertTime(entry.CreationTime.Value,zone).Date!=start))continue;
             if(intent.DateMode=="modified-recent"&&!(entry.LastModifiedTime>=DateTimeOffset.UtcNow.AddDays(-7)))continue;
             var current=entry;
+            if(intent.Extension is not null)
+            {
+                if(current.Extension is null)current=await entries.GetEntryAsync(entry.Id,ct);
+                if(!string.Equals(current.Extension?.TrimStart('.'),intent.Extension,StringComparison.OrdinalIgnoreCase))continue;
+            }
             if(intent.Kind=="electronic")
             {
                 if(current.IsElectronicDocument is null)current=await entries.GetEntryAsync(entry.Id,ct);

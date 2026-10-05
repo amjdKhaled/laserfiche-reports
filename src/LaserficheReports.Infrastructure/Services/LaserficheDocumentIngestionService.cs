@@ -870,7 +870,10 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
           select exists(select 1 from public.documents where metadata->>'source'='laserfiche-reports'
             and metadata->>'record_type'='document-metadata' and lower(metadata->>'repository_id')=lower(@r)
             and metadata->>'entry_id'=@id and metadata->>'content_hash'=@hash and metadata->>'index_version'=@version
-            and metadata->>'ingestion_status'='content-indexed' and metadata->>'embedding_status'='complete');
+            and metadata->>'ingestion_status'='content-indexed' and metadata->>'embedding_status'='complete'
+            and (metadata->>'chunk_count')::int = (select count(*) from public.documents c
+              where c.metadata->>'source'='laserfiche-reports' and c.metadata->>'record_type'='document-chunk'
+              and lower(c.metadata->>'repository_id')=lower(@r) and c.metadata->>'entry_id'=@id and c.embedding is not null));
           """,db);
         c.Parameters.AddWithValue("r",repository);c.Parameters.AddWithValue("id",entry.ToString(CultureInfo.InvariantCulture));
         c.Parameters.AddWithValue("hash",hash);c.Parameters.AddWithValue("version",version);

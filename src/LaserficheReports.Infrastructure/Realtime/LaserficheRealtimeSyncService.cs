@@ -59,8 +59,8 @@ public sealed class LaserficheRealtimeSyncService(IServiceScopeFactory scopes,Re
         if(!options.Value.Enabled){state.SetListener(key,"Disabled");return;}
         using var context=execution.Enter(repository);
         // Initial/recovery work is durable even when the SDK is absent. Live status remains Failed.
-        if(state.Status(key).Documents==0)state.Accept(key,0,EntryChange.Reconcile,0,label:"Initial repository synchronization");
-        await Task.WhenAll(ListenAsync(key,repository,ct),ProcessAsync(key,ct));
+        if(!state.Initialized(key))state.Accept(key,0,EntryChange.Reconcile,0,label:"Initial repository synchronization");
+        await Task.WhenAll(ListenAsync(key,repository,ct),ProcessAsync(key,ct),ProcessReconciliationAsync(key,ct));
     }
     private async Task ListenAsync(string key,RepositoryDescriptor repository,CancellationToken ct)
     {
@@ -157,7 +157,7 @@ public sealed class LaserficheRealtimeSyncService(IServiceScopeFactory scopes,Re
                         var result=work.Change==EntryChange.Metadata&&previous?.Indexed==true
                             ?await ingestion.RefreshMetadataAsync(entry.Id,ct):await ingestion.ReindexContentAsync(entry.Id,ct,work.Change==EntryChange.Rebuild);
                         state.SetHealth(key,"vector","Connected");
-                        state.Seen(key,entry.Id,IndexFingerprint.Metadata(entry,fields),entry.LastModifiedTime?.ToString("O"),"event",
+                        state.IndexCompleted(key,entry.Id,IndexFingerprint.Metadata(entry,fields),entry.LastModifiedTime?.ToString("O"),
                             result.IngestionStatus=="content-indexed"&&string.IsNullOrEmpty(result.ContentDiagnostic));
                         if(result.IngestionStatus!="content-indexed"&&entry.PageCount is >0)
                             throw new InvalidOperationException("Document content is not yet available for indexing.");
@@ -175,6 +175,22 @@ public sealed class LaserficheRealtimeSyncService(IServiceScopeFactory scopes,Re
                 if(ex is Npgsql.NpgsqlException)state.SetHealth(key,"vector","Disconnected");
                 state.Fail(work,options.Value.MaxAttempts,ex.GetType().Name); // Protected logs contain technical details; queue contains no credentials.
             }
+        }
+    }
+    private async Task ProcessReconciliationAsync(string key,CancellationToken ct)
+    {
+        while(!ct.IsCancellationRequested)
+        {
+            var work=state.Next(key,true);
+            if(work is null){try{await Task.Delay(250,ct);}catch(OperationCanceledException){break;}continue;}
+            try
+            {
+                using var scope=scopes.CreateScope();
+                await ReconcileAsync(key,work.Change==EntryChange.Rebuild,scope.ServiceProvider.GetRequiredService<ILaserficheEntryService>(),ct);
+                state.Complete(work);
+            }
+            catch(OperationCanceledException) when(ct.IsCancellationRequested){break;}
+            catch(Exception ex){logger.LogError(ex,"Metadata reconciliation failed for {Repository}",key);state.SetHealth(key,"api","Disconnected");state.Fail(work,options.Value.MaxAttempts,ex.GetType().Name);}
         }
     }
     private async Task ReconcileAsync(string key,bool rebuild,ILaserficheEntryService entries,CancellationToken ct)
@@ -195,7 +211,7 @@ public sealed class LaserficheRealtimeSyncService(IServiceScopeFactory scopes,Re
             }
             // Only after a complete successful traversal. A failed/denied folder never causes bulk deletion.
             foreach(var id in state.Unseen(key,generation))state.Accept(key,id,EntryChange.Content,0,label:$"Verify missing entry {id}");
-            state.SetHealth(key,"api","Connected");
+            state.SetHealth(key,"api","Connected");state.MarkInitialized(key);
         }
         finally {state.SetReconciling(key,false);}
     }

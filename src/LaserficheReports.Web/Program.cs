@@ -8,7 +8,7 @@ using Npgsql;
 using LaserficheReports.Infrastructure.Realtime;
 
 var builder = WebApplication.CreateBuilder(args);
-builder.Host.UseWindowsService(options => options.ServiceName = "Laserfiche Reports AI Indexer");
+builder.Host.UseWindowsService(options => options.ServiceName = "LaserficheReportsIndexer");
 
 // Configuration layering (last source wins): shipped defaults, legacy local
 // settings, installer settings, runtime-discovered/admin settings, developer

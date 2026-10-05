@@ -11,6 +11,9 @@ public sealed class QueryRouterTests
     [InlineData("اعرض الوثائق داخل مجلد 123", (int)QueryType.FolderQuery)]
     [InlineData("لخص الوثائق التي إجراء الوثيقة فيها تحت الإجراء", (int)QueryType.HybridQuery)]
     [InlineData("لخص جميع الوثائق", (int)QueryType.HybridQuery)]
+    [InlineData("كم وثيقة تستخدم قالب X؟", (int)QueryType.TemplateQuery)]
+    [InlineData("عدد ملفات PDF", (int)QueryType.RepositoryStatistics)]
+    [InlineData("ما أهم المشاكل الموجودة في وثائق إدارة الموارد البشرية؟", (int)QueryType.HybridQuery)]
     [InlineData("ما القرارات المذكورة في المحتوى؟", (int)QueryType.ContentSemanticSearch)]
     public void LiveAndContentQueriesUseDifferentSources(string question,int type)=>Assert.Equal(type,(int)QueryRouter.Route(question).Type);
     [Fact] public void HybridExtractsExactFieldBeforeContentRetrieval()

@@ -66,7 +66,7 @@ internal sealed class HybridQueryService(LiveQueryService live,IConfiguration co
             }
         }
         var detail=$"مطابق من Laserfiche: {matching}. وثائق بمحتوى محلل: {indexed}. غير متاحة أو في انتظار الفهرسة: {matching-indexed} (منها {stale} بفهرس قديم). التحليل على دفعات من جميع المقاطع المتاحة، دون اختيار عينة Top-K.";
-        await writer.WriteLineAsync("\n"+detail);await writer.FlushAsync(ct);
+        await writer.WriteLineAsync("\n"+detail);await writer.FlushAsync(ct);files.Complete(artifact.Token);
         var link=$"/api/reports/files/{artifact.Token}";
         var complete=matching==indexed;
         return new ChatResult(detail+$"\n\n[تحميل التقرير الكامل لجميع الوثائق المطابقة]({link})\n\n"+preview.ToString(),sources,

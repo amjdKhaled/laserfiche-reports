@@ -14,8 +14,10 @@ internal sealed class LiveReportFiles(IOptions<RealtimeOptions> options)
             if(_files.TryRemove(pair.Key,out var old))File.Delete(old.Path);
         var directory=Path.Combine(options.Value.StateDirectory,"reports");Directory.CreateDirectory(directory);
         var token=Convert.ToHexString(RandomNumberGenerator.GetBytes(24));var path=Path.Combine(directory,token+".md");
-        _files[token]=new(path,repository,session,DateTimeOffset.UtcNow.AddHours(1));return(token,path);
+        _files[token]=new(path,repository,session,DateTimeOffset.UtcNow.AddHours(8));return(token,path);
     }
+    public void Complete(string token)
+    {if(_files.TryGetValue(token,out var file))_files[token]=file with {Expires=DateTimeOffset.UtcNow.AddHours(1)};}
     public string? Resolve(string token,string repository,string session)=>
         _files.TryGetValue(token,out var file)&&file.Repository==repository&&file.Session==session&&file.Expires>DateTimeOffset.UtcNow?file.Path:null;
 }

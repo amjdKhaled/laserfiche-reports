@@ -1,9 +1,10 @@
 [CmdletBinding()]
 param([Parameter(Mandatory=$true)][string]$Repository,
-      [System.Management.Automation.PSCredential]$Credential = (Get-Credential))
+      [System.Management.Automation.PSCredential]$Credential = (Get-Credential),
+      [string]$StateDirectory = (Join-Path $env:ProgramData 'LaserficheReports\realtime'))
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Security
-$directory = Join-Path $env:ProgramData 'LaserficheReports\realtime\credentials'
+$directory = Join-Path $StateDirectory 'credentials'
 New-Item -ItemType Directory -Path $directory -Force | Out-Null
 # Machine-bound DPAPI + ACL, not portable plaintext. Re-create on each target computer.
 & icacls $directory /inheritance:r /grant '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-19:(OI)(CI)R' | Out-Null

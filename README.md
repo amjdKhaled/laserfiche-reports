@@ -456,3 +456,7 @@ See [repository reports setup and limits](docs/REPOSITORY_REPORTS.md), including
 # تشغيل التقارير من الشريط العلوي لليزرفيش
 
 لإضافة زر **التقارير الذكية** بجانب Dashboard في Web Client، اتبع [تعليمات التثبيت والإزالة](docs/WEBCLIENT_BUTTON.md). السكربت: `scripts/deploy-webclient-button.ps1`.
+
+### Live data and automatic content synchronization
+
+See [API-first data, notification listener, service installation and verification](docs/API_FIRST_REALTIME.md). Metadata and counts use the current Laserfiche API session; background content indexing uses the installed Windows RepositoryAccess SDK with a durable queue. Normal use no longer requires a browser scan button.
