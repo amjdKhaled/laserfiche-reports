@@ -39,7 +39,7 @@ internal static class ReportSessionEndpoints
             http.Session.SetString("ReportsGeneration", Guid.NewGuid().ToString("N"));
             http.Session.SetString("ActiveRepositoryId", id);
             http.Session.SetString("AuthenticationScopeMethod", "Reports");
-            http.Session.SetString("AuthenticationScopeSubject", http.Session.Id);
+            http.Session.SetString("AuthenticationScopeSubject", http.Session.Id + ":" + http.Session.GetString("ReportsGeneration"));
             var repository = await repositories.GetActiveRepositoryAsync(ct);
             if (!await auth.TryAuthenticateAsync(repository, request.Username, request.Password, ct))
             {

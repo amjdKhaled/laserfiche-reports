@@ -47,6 +47,9 @@ internal static partial class ReportSupport
             .Normalize(NormalizationForm.FormC), @"[\p{Mn}\u0640]", "")
             .Replace('أ', 'ا').Replace('إ', 'ا').Replace('آ', 'ا'), @"\s+", " "));
 
+    internal static bool IsNoTemplateQuestion(string question) =>
+        Regex.IsMatch(question, @"(?:بدون|بلا|لا\s+(?:تحتوي|يوجد|يوجد\s+بها|تملك)|ليس\s+(?:لها|فيها)|غير\s+مرتبطة|without|no)\s*(?:على\s+)?(?:اي\s+|أي\s+|a\s+)?(?:ال)?(?:قالب|قوالب|تمبلت|templates?)(?:\b|\s|$)", RegexOptions.IgnoreCase);
+
     internal static bool IsDocumentMetadataQuestion(string question) => MetadataQuestionRegex().IsMatch(question);
 
     internal static bool NeedsFilterClarification(string question) =>

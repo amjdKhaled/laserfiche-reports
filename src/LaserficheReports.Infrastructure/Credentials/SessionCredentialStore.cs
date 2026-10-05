@@ -93,9 +93,8 @@ internal sealed class SessionCredentialStore : ISessionCredentialStore
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "SessionCredentialStore: failed to unprotect session password. Clearing stale entry.");
-            session.Remove(SessionKeyUsername);
-            session.Remove(SessionKeyPasswordProtected);
+            _logger.LogWarning(ex, "SessionCredentialStore: failed to unprotect session password. Login is required.");
+            // Read-only requests must not overwrite a newer login snapshot.
             return Task.FromResult<LaserficheCredential?>(null);
         }
 

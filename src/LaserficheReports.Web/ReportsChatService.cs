@@ -70,11 +70,17 @@ internal sealed class ReportsChatService(
                 reader.IsDBNull(4) || !int.TryParse(reader.GetString(4), out var count) ? 0 : count,
                 reader.IsDBNull(5) ? null : reader.GetString(5)));
         }
+        await reader.DisposeAsync();
+        await connection.CloseAsync();
         // Never expose an indexed document that the active repository credential cannot read.
-        foreach (var candidate in candidates.Take(50))
+        using var concurrency = new SemaphoreSlim(4, 4);
+        var checkedCandidates = await Task.WhenAll(candidates.Take(50).Select(async candidate =>
         {
-            if (await CanReadAsync(candidate.EntryId, cancellationToken)) result.Add(candidate);
-        }
+            await concurrency.WaitAsync(cancellationToken);
+            try { return (Candidate: candidate, Allowed: await CanReadAsync(candidate.EntryId, cancellationToken)); }
+            finally { concurrency.Release(); }
+        }));
+        result.AddRange(checkedCandidates.Where(item => item.Allowed).Select(item => item.Candidate));
         return new IndexedDocumentPage(result, page, candidates.Count > 50);
     }
 
@@ -93,6 +99,8 @@ internal sealed class ReportsChatService(
         var condition = ReportSupport.ParseCondition(question);
         if (requestedEntries.Length == 0 && ReportSupport.IsFolderCountQuestion(question))
             return await liveReports.CountFoldersAsync(repository.RepositoryId, cancellationToken);
+        if (condition is null && ReportSupport.IsNoTemplateQuestion(question))
+            return await liveReports.CreateAsync(repository.RepositoryId, null, requestedEntries, cancellationToken, withoutTemplate: true);
         if (condition is not null || ReportSupport.IsInventoryQuestion(question) ||
             (requestedEntries.Length > 0 && ReportSupport.IsDocumentMetadataQuestion(question)))
             return await liveReports.CreateAsync(repository.RepositoryId, condition, requestedEntries, cancellationToken);

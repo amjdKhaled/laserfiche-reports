@@ -4,11 +4,12 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>تقارير ليزرفيش الذكية</title>
-  <link rel="stylesheet" href="/styles.css?v=20261005-ui2">
-  <link rel="stylesheet" href="/login.css?v=20261005-ui2">
-  <link rel="stylesheet" href="/dashboard-theme.css?v=20261005-ui2">
+  <link rel="stylesheet" href="/styles.css?v=20261005-loading3">
+  <link rel="stylesheet" href="/login.css?v=20261005-loading3">
+  <link rel="stylesheet" href="/dashboard-theme.css?v=20261005-loading3">
 </head>
 <body>
+  <div id="startup-loading" class="startup-loading" role="status" aria-live="polite"><div class="loading-card"><span class="loading-spinner" aria-hidden="true"></span><strong>جارٍ تجهيز تقارير ليزرفيش...</strong><p>نتحقق من الجلسة. ستفتح الواجهة حتى إذا تعذر تحميل بعض المعلومات.</p></div></div>
   <div class="shell">
     <aside class="sidebar">
       <div class="brand"><img src="/isb-logo.jpg" class="brand-logo" alt="ISB"><div><strong>التقارير الذكية</strong><small>تقارير ليزرفيش</small></div></div>
@@ -22,6 +23,8 @@
         <div><h1>اسأل وثائقك</h1><p>ابحث في حقول Laserfiche ومحتوى الصفحات، مع مصدر لكل إجابة</p></div>
         <div class="top-actions"><button type="button" id="switch-repository" class="repository-badge" title="تغيير المستودع"><span>المستودع</span> <strong id="active-repository">—</strong> <span id="repository-arrow">▾</span></button><div class="tabs"><button id="tab-chat" class="active">المحادثة</button><button id="tab-docs">الوثائق والنظام</button></div><button id="logout" class="logout">تسجيل الخروج</button></div>
       </header>
+      <div id="data-state" class="data-state" role="status" aria-live="polite">جارٍ التحقق من حالة المعلومات...</div>
+      <div id="request-state" class="request-state hidden" role="status"><span id="request-progress"></span><button id="cancel-chat" type="button">إلغاء الطلب</button></div>
       <section id="chat-view" class="view">
         <div id="messages" class="messages">
           <div class="welcome"><div class="welcome-icon">✦</div><h2>معلومات وثائقك في مكان واحد</h2><p>اسأل عن التصنيف والمواعيد والحقول، أو ابحث داخل الصفحات المفهرسة. تظهر المصادر مع كل إجابة.</p>
@@ -40,7 +43,7 @@
         <div class="scan-panel">
           <div class="section-title"><div><h2>فهرسة المستودع بالكامل</h2><p>يمر على جميع المجلدات والوثائق التي يتيحها حساب Laserfiche الحالي. يمكنك إيقافه واستئنافه.</p></div></div>
           <div class="scan-actions"><button id="scan-start" type="button">بدء الفهرسة الشاملة</button><button id="scan-pause" type="button" disabled>إيقاف مؤقت</button><button id="scan-reset" type="button">فحص جديد</button></div>
-          <div id="scan-progress" class="scan-progress" role="status">لم تبدأ الفهرسة الشاملة بعد.</div>
+          <div id="scan-progress" class="scan-progress" role="status">جارٍ قراءة حالة الفهرسة...</div>
           <div id="scan-errors" class="scan-errors"></div>
         </div>
         <div class="section-title"><div><h2>الوثائق المفهرسة</h2><p>تظهر الوثائق التي يمكن للاتصال الحالي قراءتها.</p></div><button id="reload-docs">تحديث القائمة</button></div>
@@ -71,9 +74,9 @@
       <div id="login-error" role="alert"></div>
     </form>
   </div>
-  <script src="/report-format.js?v=20261005-ui2" defer></script>
-  <script src="/report-download.js?v=20261005-ui2" defer></script>
-  <script src="/office-export.js?v=20261005-ui2" defer></script>
-  <script src="/app.js?v=20261005-ui2" defer></script>
+  <script src="/report-format.js?v=20261005-loading3" defer></script>
+  <script src="/report-download.js?v=20261005-loading3" defer></script>
+  <script src="/office-export.js?v=20261005-loading3" defer></script>
+  <script src="/app.js?v=20261005-loading3" defer></script>
 </body>
 </html>
