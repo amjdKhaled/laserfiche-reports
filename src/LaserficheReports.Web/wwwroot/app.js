@@ -21,6 +21,7 @@ let currentChatRequest = null;
 let statusLoadVersion = 0;
 let documentLoadVersion = 0;
 let indexedAvailable = null;
+let scanCheckpointSaved = true;
 function save() {
   try { localStorage.setItem(storeKey, JSON.stringify(chats.slice(0, 30))); historySaved = true; }
   catch { historySaved = false; }
@@ -64,7 +65,12 @@ async function api(url, options) {
   let response, body;
   try {
     response = await fetch(url, { ...requestOptions, signal, headers });
-    body = await response.json().catch(() => ({}));
+    try { body = await response.json(); }
+    catch (error) {
+      if (signal.aborted) throw error;
+      if (response.ok) throw new Error('تعذر قراءة رد الخادم. أعد المحاولة وتحقق من سجل التطبيق.');
+      body = {};
+    }
   } catch (error) {
     if (timeout.aborted) throw new Error('انتهت مهلة تحميل المعلومات. يمكنك متابعة استخدام الواجهة والمحاولة مجددًا.');
     if (requestOptions.signal?.aborted) throw new Error('تم إلغاء الطلب. يمكنك إعادة السؤال.');
@@ -93,6 +99,7 @@ function openSession(username, repository, server, generation) {
   $('statuses').replaceChildren();
   $('ingest-result').textContent = '';
   indexedAvailable = null;
+  scanCheckpointSaved = true;
   $('data-state').textContent = 'جارٍ تحميل حالة الخدمات والوثائق...';
   $('request-state').classList.add('hidden');
   const identity = [sessionServer, sessionRepository, username].map(value => encodeURIComponent(value.toLowerCase())).join(':');
@@ -332,6 +339,7 @@ $('ask-form').onsubmit = async event => {
   try {
     const result = await api('/api/reports/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question }), signal: controller.signal });
     if (epoch !== sessionEpoch) return;
+    if (typeof result.answer !== 'string' || !result.answer.trim()) throw new Error('لم ترجع خدمة التحليل تقريرًا. أعد المحاولة وتحقق من LangGraph وOllama.');
     chat.messages[chat.messages.length - 1] = { role: 'assistant', repositoryId: sessionRepository, relatedEntryIds: result.relatedEntryIds, text: result.answer, sources: result.sources, scope: result.scope, generatedAt: result.generatedAt, quality: result.quality };
   } catch (error) {
     chat.messages[chat.messages.length - 1] = { role: 'assistant', text: `تعذر إكمال السؤال: ${error.message}` };
@@ -425,8 +433,8 @@ function newScan() {
     foldersDone: 0, documentsDone: 0, skipped: 0, chunks: 0, failed: [], repositoryId: sessionRepository, current: '', notice: '' };
 }
 function saveScan() {
-  try { localStorage.setItem(scanKey, JSON.stringify(scan)); }
-  catch { $('scan-progress').textContent = 'تعذر حفظ نقطة الاستئناف في المتصفح. اترك الصفحة مفتوحة حتى تنتهي العملية.'; }
+  try { localStorage.setItem(scanKey, JSON.stringify(scan)); scanCheckpointSaved = true; }
+  catch { scanCheckpointSaved = false; }
 }
 function renderScan() {
   $('scan-start').disabled = scanning;
@@ -446,7 +454,8 @@ function renderScan() {
     `${scanning ? 'جارية' : complete ? 'مكتملة' : 'متوقفة'} · ${scan.foldersDone} مجلد · ${scan.documentsDone} وثيقة · ${scan.skipped || 0} دون تغيير · ` +
     `${scan.chunks} مقطع · ${scan.folders.length} مجلد و${scan.documents.length} وثيقة في الانتظار` +
     (scan.current ? ` · الآن: ${scan.current}` : '') +
-    (scan.notice ? ` · ${scan.notice}` : '');
+    (scan.notice ? ` · ${scan.notice}` : '') +
+    (!scanCheckpointSaved ? ' · تعذر حفظ نقطة الاستئناف في المتصفح. اترك الصفحة مفتوحة حتى تنتهي العملية.' : '');
   $('scan-errors').replaceChildren();
   if (scan.failed.length) {
     $('scan-errors').append(el('strong', '', `${scan.failed.length} إخفاق؛ يمكنك الاستئناف لإعادة المحاولة:`));

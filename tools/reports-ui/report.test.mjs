@@ -172,7 +172,7 @@ test('chat saves report time/scope and displays download for a valid empty resul
   const window = setup();
   window.document.write(readFileSync(root + 'index.html', 'utf8').replace(/<script[^>]*>[\s\S]*?<\/script>/g, ''));
   window.fetch = async url => ({ ok: true, status: 200, json: async () => url === '/api/session/status'
-    ? { authenticated: true, username: 'tester', repository: 'RepoA', server: 'https://localhost' } : { ...message, sources: [] } });
+    ? { authenticated: true, username: 'tester', repository: 'RepoA', server: 'https://localhost' } : { answer: message.text, ...message, sources: [] } });
   window.eval(readFileSync(root + 'app.js', 'utf8'));
   await new Promise(resolve => setTimeout(resolve, 20));
   window.document.getElementById('question').value = 'عدد الوثائق؟';
@@ -420,5 +420,21 @@ test('short request timeout reports failure without blocking navigation', async 
   await assert.rejects(window.eval("api('/slow', {timeoutMs: 20})"), /انتهت مهلة تحميل/);
   window.document.getElementById('tab-chat').click();
   assert(!window.document.getElementById('chat-view').classList.contains('hidden'));
+  await window.happyDOM.abort();
+});
+
+
+test('an empty successful AI response becomes a visible retryable error', async () => {
+  const window = setup();
+  window.document.write(readFileSync(root + 'index.html', 'utf8').replace(/<script[^>]*>[\s\S]*?<\/script>/g, ''));
+  window.fetch = async url => ({ok:true,status:200,json:async()=>url === '/api/reports/chat'
+    ? {} : {authenticated:true,username:'tester',repository:'RepoA',items:[],ocrEnabled:false}});
+  window.eval(readFileSync(root + 'app.js', 'utf8'));
+  await new Promise(resolve => setTimeout(resolve, 20));
+  window.document.getElementById('question').value = 'لخص الوثيقة 618';
+  window.document.getElementById('ask-form').dispatchEvent(new window.Event('submit', {cancelable:true}));
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert(window.document.getElementById('messages').textContent.includes('لم ترجع خدمة التحليل تقريرًا'));
+  assert(!window.document.getElementById('send').disabled);
   await window.happyDOM.abort();
 });
