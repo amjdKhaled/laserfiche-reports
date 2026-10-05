@@ -11,7 +11,7 @@
 <body>
   <div class="shell">
     <aside class="sidebar">
-      <div class="brand"><img src="/isb-logo.jpg" class="brand-logo" alt="ISB"><div><strong>تقارير ليزرفيش الذكية</strong><small>تقارير المستندات المحلية</small></div></div>
+      <div class="brand"><img src="/isb-logo.jpg" class="brand-logo" alt="ISB"><div><strong>التقارير الذكية</strong><small>تقارير ليزرفيش</small></div></div>
       <button class="new-chat" id="new-chat">＋ محادثة جديدة</button>
       <div class="side-heading">المحادثات الأخيرة</div>
       <div id="history" class="history"></div>
@@ -20,7 +20,7 @@
     <main class="main">
       <header class="topbar">
         <div><h1>اسأل وثائقك</h1><p>ابحث في حقول Laserfiche ومحتوى الصفحات، مع مصدر لكل إجابة</p></div>
-        <div class="top-actions"><button type="button" id="switch-repository" class="repository-badge" title="تغيير المستودع"><span>المستودع</span> <strong id="active-repository">—</strong> ▾</button><div class="tabs"><button id="tab-chat" class="active">المحادثة</button><button id="tab-docs">الوثائق والنظام</button></div><button id="logout" class="logout">تسجيل الخروج</button></div>
+        <div class="top-actions"><button type="button" id="switch-repository" class="repository-badge" title="تغيير المستودع"><span>المستودع</span> <strong id="active-repository">—</strong> <span id="repository-arrow">▾</span></button><div class="tabs"><button id="tab-chat" class="active">المحادثة</button><button id="tab-docs">الوثائق والنظام</button></div><button id="logout" class="logout">تسجيل الخروج</button></div>
       </header>
       <section id="chat-view" class="view">
         <div id="messages" class="messages">
@@ -55,7 +55,8 @@
       <div class="welcome-icon">◈</div>
       <h2>الدخول إلى تقارير ليزرفيش الذكية</h2>
       <p>استخدم حساب Laserfiche للوصول إلى الوثائق المسموح لك بها.</p>
-      <label for="repository-id">المستودع</label>
+      <label id="repository-label" for="repository-id">المستودع</label>
+      <input id="repository-fixed-name" class="hidden" readonly aria-label="المستودع المفتوح من ليزرفيش">
       <select id="repository-id" required aria-describedby="repository-help">
         <option value="">اختر المستودع</option>
         <option value="__manual__">إدخال مستودع آخر…</option>

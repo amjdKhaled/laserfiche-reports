@@ -11,6 +11,111 @@ function setup() {
   window.eval(readFileSync(root + 'office-export.js', 'utf8'));
   return window;
 }
+test('Web Client button mounts next to Dashboard, encodes Arabic repository and avoids duplicates', async () => {
+  const window = new Window({ url: 'https://lf.local/laserfiche/Browse.aspx', settings: { enableJavaScriptEvaluation: true, suppressInsecureJavaScriptEnvironmentWarning: true } });
+  window.document.write('<input id="WebAccessRepositoryName" value="مستودع & اختبار"><ul id="rightNavbar"><li class="nav-item"><a class="nav-link" id="dashboard" href="http://localhost:5000">Dashboard</a></li><li>ADMIN</li></ul>');
+  const script = readFileSync(new URL('../../integrations/laserfiche-webclient/lf-reports-button.js', import.meta.url), 'utf8')
+    .replace('__LF_REPORTS_URL_JSON__', JSON.stringify('http://localhost:5187/'));
+  window.eval(script);
+  window.document.dispatchEvent(new window.Event('DOMContentLoaded'));
+  const anchor = window.document.getElementById('lf-smart-reports-button');
+  assert(anchor);
+  assert.equal(anchor.className, 'nav-link');
+  assert.equal(anchor.style.color, '#ffffff');
+  assert.equal(anchor.style.getPropertyPriority('color'), 'important');
+  assert.equal(anchor.parentNode.nextElementSibling.querySelector('a').id, 'dashboard');
+  assert.equal(new URL(anchor.href).searchParams.get('repository'), 'مستودع & اختبار');
+  assert.equal(new URL(anchor.href).searchParams.get('source'), 'webclient');
+  assert.equal(anchor.target, '_blank');
+  assert(anchor.rel.includes('noopener'));
+  window.eval(script);
+  assert.equal(window.document.querySelectorAll('#lf-smart-reports-button').length, 1);
+  window.document.getElementById('WebAccessRepositoryName').value = 'OtherRepo';
+  anchor.addEventListener('click', event => event.preventDefault());
+  anchor.dispatchEvent(new window.MouseEvent('click', { cancelable: true }));
+  assert.equal(new URL(anchor.href).searchParams.get('repository'), 'OtherRepo');
+  window.document.getElementById('rightNavbar').innerHTML = '<li><a id="dashboard">Dashboard</a></li>';
+  await new Promise(resolve => setTimeout(resolve, 150));
+  assert.equal(window.document.querySelectorAll('#lf-smart-reports-button').length, 1);
+  await window.happyDOM.abort();
+});
+test('Web Client launch selects its repository and does not reuse another repository session', async () => {
+  const window = setup();
+  window.location.href = 'http://localhost:5187/?repository=RepoB&source=webclient';
+  window.document.write(readFileSync(root + 'index.html', 'utf8').replace(/<script[^>]*>[\s\S]*?<\/script>/g, ''));
+  window.fetch = async () => ({ ok: true, status: 200, json: async () => ({authenticated:true,username:'tester',repository:'RepoA'}) });
+  window.eval(readFileSync(root + 'app.js', 'utf8'));
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(window.document.getElementById('repository-id').value, 'RepoB');
+  assert.equal(window.document.getElementById('repository-id').options.length, 1);
+  assert(window.document.getElementById('repository-id').disabled);
+  assert(window.document.getElementById('repository-id').classList.contains('hidden'));
+  assert.equal(window.document.getElementById('repository-fixed-name').value, 'RepoB');
+  assert(window.document.getElementById('repository-fixed-name').readOnly);
+  assert(window.document.getElementById('discover-repositories').classList.contains('hidden'));
+  assert(window.document.getElementById('switch-repository').disabled);
+  assert(!window.document.getElementById('login-layer').classList.contains('hidden'));
+  assert.notEqual(window.document.getElementById('active-repository').textContent, 'RepoA');
+  await window.happyDOM.abort();
+});
+test('Web Client login always submits its pinned repository and restores matching history', async () => {
+  const window = setup(); let loginBody;
+  window.location.href = 'http://localhost:5187/?repository=RepoB&source=webclient';
+  window.document.write(readFileSync(root + 'index.html', 'utf8').replace(/<script[^>]*>[\s\S]*?<\/script>/g, ''));
+  window.fetch = async (url, options) => {
+    if (url === '/api/session/login') {
+      loginBody = JSON.parse(options.body);
+      return { ok:true, status:200, json:async()=>({ authenticated:true, username:'tester', repository:loginBody.repositoryId }) };
+    }
+    return { ok:true, status:200, json:async()=>({ authenticated:false, repository:'ConfiguredRepo' }) };
+  };
+  window.eval(readFileSync(root + 'app.js', 'utf8'));
+  await new Promise(resolve => setTimeout(resolve, 20));
+  window.document.getElementById('repository-manual').value = 'OtherRepo';
+  window.document.getElementById('username').value = 'tester';
+  window.document.getElementById('password').value = 'password';
+  window.document.getElementById('login-form').dispatchEvent(new window.Event('submit', { cancelable:true }));
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(loginBody.repositoryId, 'RepoB');
+  assert.equal(window.document.getElementById('active-repository').textContent, 'RepoB');
+  assert(window.document.getElementById('login-layer').classList.contains('hidden'));
+  assert.equal(window.document.getElementById('repository-id').options.length, 1);
+  await window.happyDOM.abort();
+});
+test('deleting a chat persists deletion, clears active messages and leaves other repositories untouched', async () => {
+  const window = setup();
+  window.document.write(readFileSync(root + 'index.html', 'utf8').replace(/<script[^>]*>[\s\S]*?<\/script>/g, ''));
+  window.fetch = async () => ({ ok:true, status:200, json:async()=>({ authenticated:true,username:'tester',repository:'RepoA' }) });
+  window.eval(readFileSync(root + 'app.js', 'utf8'));
+  await new Promise(resolve => setTimeout(resolve, 20));
+  window.localStorage.setItem('laserfiche-reports-chat-v2::repoa:tester', JSON.stringify([
+    {id:'a',title:'محادثة أولى',messages:[{role:'user',text:'نص خاص'}]},
+    {id:'b',title:'محادثة ثانية',messages:[]} ]));
+  window.eval("openSession('tester','RepoA','','');");
+  window.document.querySelector('.history-open').click();
+  const otherKey = 'laserfiche-reports-chat-v2::repob:tester';
+  window.localStorage.setItem(otherKey, JSON.stringify([{id:'other',title:'Other repository'}]));
+  window.document.querySelector('.history-delete').click();
+  assert.equal(window.document.querySelectorAll('.history-row').length, 1);
+  assert(!window.document.getElementById('messages').textContent.includes('نص خاص'));
+  assert.equal(JSON.parse(window.localStorage.getItem(otherKey))[0].id, 'other');
+  window.eval("openSession('tester','RepoA','','');");
+  assert.equal(window.document.querySelectorAll('.history-row').length, 1);
+  assert(window.document.getElementById('history').textContent.includes('محادثة ثانية'));
+  window.document.querySelector('.history-open').click();
+  let resolveChat;
+  window.fetch = async () => await new Promise(resolve => { resolveChat = resolve; });
+  window.document.getElementById('question').value = 'سؤال جديد';
+  window.document.getElementById('ask-form').dispatchEvent(new window.Event('submit', { cancelable:true }));
+  const pendingDelete = window.document.querySelector('.history-delete');
+  assert(pendingDelete.disabled);
+  pendingDelete.click();
+  assert.equal(window.document.querySelectorAll('.history-row').length, 1);
+  resolveChat({ ok:true, status:200, json:async()=>({ answer:'تقرير جديد', sources:[] }) });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert(!window.document.querySelector('.history-delete').disabled);
+  await window.happyDOM.abort();
+});
 const message = {
   text: '# تقرير\n\n| البند | النتيجة | المرجع |\n| --- | --- | --- |\n| الحالة | تحت الإجراء | [1] |',
   generatedAt: '2026-10-03T18:00:00Z', scope: { detail: 'فُحصت 73 وثيقة؛ التقرير جزئي.' },

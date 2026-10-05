@@ -8,6 +8,48 @@ namespace LaserficheReports.Web;
 /// <summary>Live metadata reports never rely on top-k chunks or model-generated counts.</summary>
 internal sealed class LiveRepositoryReportService(ILaserficheEntryService entries, IConfiguration configuration)
 {
+    public async Task<ChatResult> CountFoldersAsync(string repositoryId, CancellationToken cancellationToken)
+    {
+        var root = await entries.GetRootEntryIdAsync(cancellationToken);
+        var queue = new Queue<int>();
+        var visited = new HashSet<int>();
+        var documents = new HashSet<int>();
+        queue.Enqueue(root);
+        var count = 0;
+        var skipped = 0;
+        var truncated = false;
+        var maxFolders = Math.Clamp(configuration.GetValue<int?>("Reports:MaxLiveFolders") ?? 100000, 1, 1000000);
+        while (queue.Count > 0)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var id = queue.Dequeue();
+            if (!visited.Add(id)) continue;
+            if (id != root && count >= maxFolders) { truncated = true; break; }
+            IReadOnlyList<LFEntry> children;
+            try { children = await entries.GetAllFolderChildrenAsync(id, cancellationToken); }
+            catch (LaserficheException ex) when (ex.StatusCode is 403 or 404) { skipped++; continue; }
+            // Count only folders whose contents were successfully checked, including empty folders.
+            if (id != root) count++;
+            foreach (var child in children)
+            {
+                if (child.EntryType is LFEntryType.Folder or LFEntryType.RecordSeries) queue.Enqueue(child.Id);
+                else if (child.EntryType == LFEntryType.Document) documents.Add(child.Id);
+            }
+        }
+        var complete = skipped == 0 && !truncated;
+        var detail = complete
+            ? "تم فحص جميع المجلدات المتاحة لحسابك مباشرة من Laserfiche، بما فيها المجلدات الفرعية والفارغة."
+            : "العد جزئي؛ لا يمثل إجمالي المستودع." +
+              (skipped > 0 ? $" تعذر فحص {skipped} مجلدًا." : "") +
+              (truncated ? " تم بلوغ حد فحص المجلدات المهيأ." : "");
+        var label = complete ? "عدد المجلدات" : "عدد المجلدات المؤكد في الجزء المفحوص";
+        var report = $"# تقرير عدد المجلدات\n\nتاريخ إعداد التقرير: {DateTimeOffset.UtcNow:yyyy-MM-dd HH:mm} UTC\n\n" +
+            $"| البند | النتيجة |\n| --- | --- |\n| المستودع | {ReportSupport.Cell(repositoryId)} |\n| {label} | **{count}** |\n\n" +
+            detail + "\n\nالمصدر: تعداد المجلدات من واجهة Laserfiche API الحالية؛ لا يعتمد على فهرس الوثائق أو OCR. " +
+            "جذر المستودع مستبعد من العدد، وسلاسل السجلات محسوبة كمجلدات. النطاق يتبع صلاحيات حسابك.";
+        return new ChatResult(report, [], new AnswerScope("repository", repositoryId, documents.Count, 0, complete, detail, []));
+    }
+
     public async Task<ChatResult> CreateAsync(string repositoryId, FieldCondition? condition,
         IReadOnlyList<int> requestedIds, CancellationToken cancellationToken)
     {
