@@ -17,6 +17,11 @@ let scanKey = '';
 let documentsPage = 1;
 let hasMoreDocuments = false;
 let historySaved = true;
+let currentChatRequest = null;
+let statusLoadVersion = 0;
+let documentLoadVersion = 0;
+let indexedAvailable = null;
+let scanCheckpointSaved = true;
 function save() {
   try { localStorage.setItem(storeKey, JSON.stringify(chats.slice(0, 30))); historySaved = true; }
   catch { historySaved = false; }
@@ -51,8 +56,26 @@ async function api(url, options) {
   const headers = new Headers(options?.headers || {});
   if (sessionRepository) headers.set('X-Reports-Repository', sessionRepository);
   if (sessionGeneration) headers.set('X-Reports-Session', sessionGeneration);
-  const response = await fetch(url, { ...options, headers });
-  const body = await response.json().catch(() => ({}));
+  const { timeoutMs, ...requestOptions } = options || {};
+  const duration = timeoutMs ?? (url === '/api/reports/chat' ? 14400000 :
+    url.startsWith('/api/ingestion/') ? 1800000 : url.startsWith('/api/reports/documents') ? 60000 :
+    url.includes('/folders/') ? 120000 : url === '/api/session/login' || url === '/api/session/repositories' ? 120000 : 15000);
+  const timeout = AbortSignal.timeout(duration);
+  const signal = requestOptions.signal ? AbortSignal.any([requestOptions.signal, timeout]) : timeout;
+  let response, body;
+  try {
+    response = await fetch(url, { ...requestOptions, signal, headers });
+    try { body = await response.json(); }
+    catch (error) {
+      if (signal.aborted) throw error;
+      if (response.ok) throw new Error('تعذر قراءة رد الخادم. أعد المحاولة وتحقق من سجل التطبيق.');
+      body = {};
+    }
+  } catch (error) {
+    if (timeout.aborted) throw new Error('انتهت مهلة تحميل المعلومات. يمكنك متابعة استخدام الواجهة والمحاولة مجددًا.');
+    if (requestOptions.signal?.aborted) throw new Error('تم إلغاء الطلب. يمكنك إعادة السؤال.');
+    throw error;
+  }
   if (epoch !== sessionEpoch) throw new Error('تغيّرت جلسة المستودع؛ تم تجاهل نتيجة الطلب السابق.');
   if ([401, 409].includes(response.status) && url !== '/api/session/login') $('login-layer').classList.remove('hidden');
   if (!response.ok) {
@@ -75,19 +98,30 @@ function openSession(username, repository, server, generation) {
   $('documents').replaceChildren();
   $('statuses').replaceChildren();
   $('ingest-result').textContent = '';
+  indexedAvailable = null;
+  scanCheckpointSaved = true;
+  $('data-state').textContent = 'جارٍ تحميل حالة الخدمات والوثائق...';
+  $('request-state').classList.add('hidden');
   const identity = [sessionServer, sessionRepository, username].map(value => encodeURIComponent(value.toLowerCase())).join(':');
   historySaved = true;
   storeKey = `laserfiche-reports-chat-v2:${identity}`;
   scanKey = `laserfiche-reports-scan-v2:${identity}`;
   try { chats = JSON.parse(localStorage.getItem(storeKey) || '[]'); }
   catch { chats = []; }
+  if (!Array.isArray(chats)) chats = [];
+  chats.forEach(chat => chat.messages?.forEach(message => {
+    if (message.pending) { message.pending = false; message.text = 'انقطع انتظار التقرير عند إغلاق الصفحة. أعد إرسال السؤال للحصول على نتيجة جديدة.'; }
+  }));
   try { scan = JSON.parse(localStorage.getItem(scanKey) || 'null'); }
   catch { scan = null; }
+  if (scan && !['folders', 'documents', 'seenFolders', 'seenDocuments', 'failed'].every(key => Array.isArray(scan[key]))) scan = null;
   active = null;
   $('login-layer').classList.add('hidden');
   renderHistory();
   renderMessages();
   renderScan();
+  refreshStatuses();
+  loadDocuments();
 }
 $('login-form').onsubmit = async event => {
   event.preventDefault();
@@ -272,7 +306,7 @@ function showTab(tab) {
   $('docs-view').classList.toggle('hidden', tab !== 'docs');
   $('tab-chat').classList.toggle('active', tab === 'chat');
   $('tab-docs').classList.toggle('active', tab === 'docs');
-  if (tab === 'docs') { refreshStatuses(); loadDocuments(); }
+  if (tab === 'docs' && !$('statuses').children.length) { refreshStatuses(); loadDocuments(); }
 }
 $('tab-chat').onclick = () => showTab('chat');
 $('tab-docs').onclick = () => showTab('docs');
@@ -290,57 +324,73 @@ $('ask-form').onsubmit = async event => {
   const chat = chats.find(c => c.id === active);
   pendingOperations++;
   pendingChats.add(chat.id);
+  const controller = new AbortController();
+  currentChatRequest = controller;
+  const startedAt = Date.now();
+  $('request-state').classList.remove('hidden');
+  const updateProgress = () => { if (epoch === sessionEpoch) $('request-progress').textContent = `جارٍ إعداد التقرير · ${Math.floor((Date.now() - startedAt) / 1000)} ثانية · يمكنك التنقل بين التبويبات`; };
+  updateProgress();
+  const progressTimer = setInterval(updateProgress, 1000);
   chat.messages.push({ role: 'user', text: question });
   $('question').value = '';
   $('send').disabled = true;
-  chat.messages.push({ role: 'assistant', text: 'جاري تحليل الوثائق وتجهيز التقرير. قد يستغرق ذلك وقتًا بحسب حجم الأدلة وسرعة النموذج؛ اترك الصفحة مفتوحة...' });
-  renderHistory(); renderMessages();
+  chat.messages.push({ role: 'assistant', pending: true, text: 'جاري تحليل الوثائق وتجهيز التقرير. قد يستغرق ذلك وقتًا بحسب حجم الأدلة وسرعة النموذج؛ اترك الصفحة مفتوحة...' });
+  save(); renderHistory(); renderMessages();
   try {
-    const result = await api('/api/reports/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question }) });
+    const result = await api('/api/reports/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question }), signal: controller.signal });
     if (epoch !== sessionEpoch) return;
+    if (typeof result.answer !== 'string' || !result.answer.trim()) throw new Error('لم ترجع خدمة التحليل تقريرًا. أعد المحاولة وتحقق من LangGraph وOllama.');
     chat.messages[chat.messages.length - 1] = { role: 'assistant', repositoryId: sessionRepository, relatedEntryIds: result.relatedEntryIds, text: result.answer, sources: result.sources, scope: result.scope, generatedAt: result.generatedAt, quality: result.quality };
   } catch (error) {
     chat.messages[chat.messages.length - 1] = { role: 'assistant', text: `تعذر إكمال السؤال: ${error.message}` };
-  } finally { pendingOperations--; pendingChats.delete(chat.id); $('send').disabled = false; if (epoch === sessionEpoch) { save(); renderHistory(); renderMessages(); } }
+  } finally { clearInterval(progressTimer); if (currentChatRequest === controller) { currentChatRequest = null; $('request-state').classList.add('hidden'); } pendingOperations--; pendingChats.delete(chat.id); $('send').disabled = false; if (epoch === sessionEpoch) { save(); renderHistory(); renderMessages(); } }
 };
+$('cancel-chat').onclick = () => currentChatRequest?.abort();
 $('question').onkeydown = event => {
   if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); $('ask-form').requestSubmit(); }
 };
 async function refreshStatuses() {
-  const epoch = sessionEpoch;
-  const appStatus = await api('/api/app/status').catch(() => ({}));
-  if (epoch !== sessionEpoch) return;
+  const epoch = sessionEpoch, version = ++statusLoadVersion;
   const services = [['Laserfiche', '/api/laserfiche/status'], ['Supabase', '/api/database/status'],
     ['Ollama Embeddings', '/api/embeddings/status'], ['LangGraph', '/api/graph/status'], ['OCR', '/api/ocr/status']];
   $('statuses').replaceChildren();
   const cards = services.map(([name]) => {
     const card = el('div', 'status-card');
-    card.append(el('strong', '', name));
-    $('statuses').append(card);
-    return card;
+    card.append(el('strong', '', name), el('span', 'status-loading', 'جارٍ التحقق...'));
+    $('statuses').append(card); return card;
   });
+  const appStatus = api('/api/app/status').catch(() => ({}));
+  let unavailable = 0;
   await Promise.all(services.map(async ([name, url], index) => {
-    const deferred = name === 'OCR' && appStatus.ocrEnabled === false;
-    let healthy = false;
-    let diagnostic = '';
-    try { if (!deferred) {
-      const data = await api(url);
-      healthy = data.status !== 'unavailable' && data.isConnected !== false && data.authenticationSucceeded !== false;
-    } } catch(error) { diagnostic = error.message; }
-    cards[index].append(el('span', deferred ? 'deferred' : healthy ? 'ok' : 'bad',
-      deferred ? 'مؤجل' : healthy ? 'متصل' : 'غير متصل'));
-    if (name === 'Supabase' && diagnostic && epoch === sessionEpoch) {
-      cards[index].append(el('p', 'service-diagnostic', diagnostic));
-      cards[index].append(el('p', 'service-hint', 'لضبط الاتصال المحلي شغّل scripts\\configure-database.ps1 من مجلد المشروع، ثم أعد تشغيل التطبيق وحدّث الحالة.'));
-    }
+    let diagnostic = '', label = 'متصل', className = 'ok';
+    try {
+      const deferred = name === 'OCR' && (await appStatus).ocrEnabled === false;
+      if (deferred) { label = 'مؤجل'; className = 'deferred'; }
+      else {
+        const data = await api(url);
+        if (data.status === 'unavailable' || data.isConnected === false || data.authenticationSucceeded === false)
+          throw new Error('الخدمة غير متاحة حاليًا.');
+      }
+    } catch (error) { diagnostic = error.message; label = 'غير متصل'; className = 'bad'; unavailable++; }
+    if (epoch !== sessionEpoch || version !== statusLoadVersion) return;
+    cards[index].querySelector('span').replaceWith(el('span', className, label));
+    if (diagnostic) cards[index].append(el('p', 'service-diagnostic', diagnostic));
+    if (name === 'Supabase' && diagnostic)
+      cards[index].append(el('p', 'service-hint', 'لضبط الاتصال المحلي شغّل scripts\\configure-database.ps1 من مجلد المشروع.'));
   }));
+  if (epoch === sessionEpoch && version === statusLoadVersion)
+    $('data-state').textContent = unavailable ? `اكتمل الفحص؛ ${unavailable} خدمة غير متاحة. يمكنك استخدام الواجهة وإعادة المحاولة من تحديث.` : 'اكتمل تحميل حالة الخدمات. الواجهة جاهزة.';
 }
 async function loadDocuments() {
-  const epoch = sessionEpoch;
+  const epoch = sessionEpoch, version = ++documentLoadVersion;
   $('documents').replaceChildren(el('div', 'empty', 'جاري تحميل الوثائق...'));
   try {
     const search = $('document-search').value.trim();
     const result = await api(`/api/reports/documents?page=${documentsPage}&search=${encodeURIComponent(search)}`);
+    if (epoch !== sessionEpoch || version !== documentLoadVersion) return;
+    if (!Array.isArray(result.items)) throw new Error('تعذر قراءة قائمة الوثائق من الخادم.');
+    indexedAvailable = result.items.length > 0;
+    renderScan();
     $('documents').replaceChildren();
     hasMoreDocuments = result.hasMore;
     $('previous-docs').disabled = documentsPage === 1;
@@ -355,7 +405,7 @@ async function loadDocuments() {
       row.append(detail, el('span', 'tag', `${doc.chunkCount} مقطع · ${status}`));
       $('documents').append(row);
     });
-  } catch (error) { if (epoch === sessionEpoch) $('documents').replaceChildren(el('div', 'empty', error.message)); }
+  } catch (error) { if (epoch === sessionEpoch && version === documentLoadVersion) $('documents').replaceChildren(el('div', 'empty', error.message)); }
 }
 $('refresh').onclick = refreshStatuses;
 $('reload-docs').onclick = loadDocuments;
@@ -383,8 +433,8 @@ function newScan() {
     foldersDone: 0, documentsDone: 0, skipped: 0, chunks: 0, failed: [], repositoryId: sessionRepository, current: '', notice: '' };
 }
 function saveScan() {
-  try { localStorage.setItem(scanKey, JSON.stringify(scan)); }
-  catch { $('scan-progress').textContent = 'تعذر حفظ نقطة الاستئناف في المتصفح. اترك الصفحة مفتوحة حتى تنتهي العملية.'; }
+  try { localStorage.setItem(scanKey, JSON.stringify(scan)); scanCheckpointSaved = true; }
+  catch { scanCheckpointSaved = false; }
 }
 function renderScan() {
   $('scan-start').disabled = scanning;
@@ -394,15 +444,18 @@ function renderScan() {
     ? 'استئناف الفهرسة' : 'بدء الفهرسة الشاملة';
   $('scan-pause').disabled = !scanning;
   if (!scan) {
-    $('scan-progress').textContent = 'لم تبدأ الفهرسة الشاملة بعد.';
+    $('scan-progress').textContent = indexedAvailable ? 'توجد وثائق مفهرسة في الخادم. لا يوجد سجل محفوظ للفحص الشامل في هذا المتصفح والحساب؛ هذا لا يعني أن المستودع لم يُفهرس.' : 'لا يوجد سجل محفوظ للفحص الشامل في هذا المتصفح والحساب. راجع قائمة الوثائق لمعرفة حالة الفهرس.';
     $('scan-errors').replaceChildren();
     return;
   }
+  const complete = !scan.folders.length && !scan.documents.length && !scan.failed.length;
+  $('scan-start').textContent = complete ? 'إعادة الفهرسة الشاملة' : scanning ? 'الفهرسة جارية' : 'استئناف الفهرسة';
   $('scan-progress').textContent =
-    `${scanning ? 'جارية' : 'متوقفة'} · ${scan.foldersDone} مجلد · ${scan.documentsDone} وثيقة · ${scan.skipped || 0} دون تغيير · ` +
+    `${scanning ? 'جارية' : complete ? 'مكتملة' : 'متوقفة'} · ${scan.foldersDone} مجلد · ${scan.documentsDone} وثيقة · ${scan.skipped || 0} دون تغيير · ` +
     `${scan.chunks} مقطع · ${scan.folders.length} مجلد و${scan.documents.length} وثيقة في الانتظار` +
     (scan.current ? ` · الآن: ${scan.current}` : '') +
-    (scan.notice ? ` · ${scan.notice}` : '');
+    (scan.notice ? ` · ${scan.notice}` : '') +
+    (!scanCheckpointSaved ? ' · تعذر حفظ نقطة الاستئناف في المتصفح. اترك الصفحة مفتوحة حتى تنتهي العملية.' : '');
   $('scan-errors').replaceChildren();
   if (scan.failed.length) {
     $('scan-errors').append(el('strong', '', `${scan.failed.length} إخفاق؛ يمكنك الاستئناف لإعادة المحاولة:`));
@@ -427,7 +480,8 @@ $('scan-start').onclick = async () => {
   pauseScan = false;
   scanning = true;
   scan.notice = '';
-  renderScan();
+  scan.startedAt ||= new Date().toISOString();
+  saveScan(); renderScan();
   const seenFolders = new Set(scan.seenFolders);
   const seenDocuments = new Set(scan.seenDocuments);
   try {
@@ -492,13 +546,14 @@ $('scan-start').onclick = async () => {
   } finally {
     scanning = false;
     scan.current = '';
+    if (!scan.folders.length && !scan.documents.length && !scan.failed.length) scan.completedAt = new Date().toISOString();
     saveScan(); renderScan();
     loadDocuments();
   }
 };
 setRepositorySelection(launchRepository);
 const startupEpoch = sessionEpoch;
-api('/api/session/status', { signal: AbortSignal.timeout(10000) }).then(session => {
+api('/api/session/status', { timeoutMs: 10000 }).then(session => {
   if (sessionEpoch !== startupEpoch) return;
   setRepositorySelection(launchRepository || session.repository || '');
   const matchesLaunch = !launchRepository || launchRepository.toLowerCase() === (session.repository || '').toLowerCase();
@@ -509,7 +564,8 @@ api('/api/session/status', { signal: AbortSignal.timeout(10000) }).then(session 
   if (sessionEpoch !== startupEpoch) return;
   setRepositorySelection(launchRepository);
   $('login-layer').classList.remove('hidden');
-});
+  $('data-state').textContent = 'تعذر فحص الجلسة. يمكنك تسجيل الدخول والمحاولة مجددًا.';
+}).finally(() => $('startup-loading').classList.add('hidden'));
 
 $('switch-repository').onclick = () => {
   if (scanning || pendingOperations) { $('active-repository').title='أوقف الفهرسة وانتظر اكتمال الطلب قبل التبديل'; return; }

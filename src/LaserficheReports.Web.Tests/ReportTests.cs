@@ -262,6 +262,29 @@ public class ReportTests
         Assert.False(partial.Scope!.Exhaustive);
         Assert.Contains("حد فحص المجلدات", partial.Answer);
     }
+    [Theory]
+    [InlineData("ماهي الوثائق التي لا تحتوي على قوالب او template", true)]
+    [InlineData("اعرض الوثائق بدون قالب", true)]
+    [InlineData("documents without a template", true)]
+    [InlineData("لخص قالب العقود", false)]
+    public void NoTemplateIntentIsRecognized(string question, bool expected) =>
+        Assert.Equal(expected, ReportSupport.IsNoTemplateQuestion(question));
+
+    [Fact]
+    public async Task NoTemplateQueryUsesLiveEntriesWithoutInvokingEmbeddingsOrGraph()
+    {
+        var entries = new Entries(4) { WithTemplates = true };
+        var configuration = new ConfigurationBuilder().Build();
+        var chat = new ReportsChatService(configuration, new NoEmbeddings(), new Repository(), entries,
+            new NoClients(), new LiveRepositoryReportService(entries, configuration));
+        var result = await chat.AskAsync("ماهي الوثائق التي لا تحتوي على قوالب او template", default);
+        Assert.True(result.Scope!.Exhaustive);
+        Assert.Equal(4, result.Scope.DocumentCount);
+        Assert.Equal(new[] { 1, 3 }, result.RelatedEntryIds);
+        Assert.Contains("بدون قالب", result.Answer);
+        Assert.Empty(entries.FieldCalls);
+    }
+
     private static LiveRepositoryReportService Create(Entries entries, int cap = 10000) => new(entries,
         new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         { ["Reports:MaxLiveDocuments"] = cap.ToString() }).Build());
@@ -289,12 +312,14 @@ public class ReportTests
         public int? DeniedFolderId { get; init; }
         public int? FailureFolderId { get; init; }
         public bool WithNestedFolder { get; init; }
+        public bool WithTemplates { get; init; }
         private static LFEntry Document(int id) => new() { Id = id, Name = $"وثيقة {id}", FullPath = $"\\قسم\\وثيقة {id}", EntryType = LFEntryType.Document };
         public Task<LFEntry> GetEntryAsync(int entryId, CancellationToken cancellationToken = default)
         {
             if (entryId == DeniedId) throw new LaserficheException("denied", 403);
             if (entryId == FailureId) throw new LaserficheException("outage", 503);
-            return Task.FromResult(Document(entryId));
+            return Task.FromResult(WithTemplates && entryId % 2 == 0
+                ? Document(entryId) with { TemplateId = 10, TemplateName = "قالب" } : Document(entryId));
         }
         public Task<IReadOnlyList<LFFieldValue>> GetEntryFieldsAsync(int entryId, CancellationToken cancellationToken = default)
         {

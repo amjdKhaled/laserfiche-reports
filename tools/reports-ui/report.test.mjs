@@ -172,7 +172,7 @@ test('chat saves report time/scope and displays download for a valid empty resul
   const window = setup();
   window.document.write(readFileSync(root + 'index.html', 'utf8').replace(/<script[^>]*>[\s\S]*?<\/script>/g, ''));
   window.fetch = async url => ({ ok: true, status: 200, json: async () => url === '/api/session/status'
-    ? { authenticated: true, username: 'tester', repository: 'RepoA', server: 'https://localhost' } : { ...message, sources: [] } });
+    ? { authenticated: true, username: 'tester', repository: 'RepoA', server: 'https://localhost' } : { answer: message.text, ...message, sources: [] } });
   window.eval(readFileSync(root + 'app.js', 'utf8'));
   await new Promise(resolve => setTimeout(resolve, 20));
   window.document.getElementById('question').value = 'عدد الوثائق؟';
@@ -225,6 +225,7 @@ test('repository histories and scan checkpoints never migrate across repositorie
   assert(window.document.getElementById('history').textContent.includes('Repository A confidential'));
   assert(!window.document.getElementById('history').textContent.includes('unscoped'));
   window.eval("openSession('tester','RepoB','https://localhost','new-generation')");
+  await new Promise(r=>setTimeout(r,20));
   assert.equal(window.document.getElementById('history').textContent,'');
   assert.equal(window.document.getElementById('active-repository').textContent,'RepoB');
   await window.happyDOM.abort();
@@ -233,9 +234,9 @@ test('repository histories and scan checkpoints never migrate across repositorie
 test('late report from another repository is not saved or displayed in the new session', async()=>{
   const window=setup();let resolveChat, sentHeaders;
   window.document.write(readFileSync(root+'index.html','utf8').replace(/<script[^>]*>[\s\S]*?<\/script>/g,''));
-  window.fetch=async(url,options)=>url==='/api/session/status'
-    ? {ok:true,status:200,json:async()=>({authenticated:true,username:'tester',repository:'RepoA',server:'https://localhost',generation:'first'})}
-    : new Promise(resolve=>{resolveChat=resolve;sentHeaders=options.headers;});
+  window.fetch=async(url,options)=>url==='/api/reports/chat'
+    ? new Promise(resolve=>{resolveChat=resolve;sentHeaders=options.headers;})
+    : {ok:true,status:200,json:async()=>({authenticated:true,username:'tester',repository:'RepoA',server:'https://localhost',generation:'first',items:[]})};
   window.eval(readFileSync(root+'app.js','utf8'));await new Promise(r=>setTimeout(r,20));
   window.document.getElementById('question').value='سؤال';
   window.document.getElementById('ask-form').dispatchEvent(new window.Event('submit',{cancelable:true}));
@@ -330,5 +331,110 @@ test('top tabs respond while startup status is pending and late status cannot re
   await new Promise(resolve => setTimeout(resolve, 20));
   assert(window.document.getElementById('login-layer').classList.contains('hidden'));
   assert.equal(window.document.getElementById('active-repository').textContent, 'RepoA');
+  await window.happyDOM.abort();
+});
+
+
+test('startup failure dismisses loading and permits normal login', async () => {
+  const window = setup();
+  window.document.write(readFileSync(root + 'index.html', 'utf8').replace(/<script[^>]*>[\s\S]*?<\/script>/g, ''));
+  window.fetch = async () => { throw new Error('offline'); };
+  window.eval(readFileSync(root + 'app.js', 'utf8'));
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert(window.document.getElementById('startup-loading').classList.contains('hidden'));
+  assert(!window.document.getElementById('login-layer').classList.contains('hidden'));
+  assert(window.document.getElementById('data-state').textContent.includes('تعذر'));
+  await window.happyDOM.abort();
+});
+
+test('status placeholders appear before a slow response and tabs remain usable', async () => {
+  const window = setup(); let finishStatus;
+  window.document.write(readFileSync(root + 'index.html', 'utf8').replace(/<script[^>]*>[\s\S]*?<\/script>/g, ''));
+  window.fetch = async url => url === '/api/laserfiche/status'
+    ? await new Promise(resolve => { finishStatus = resolve; })
+    : {ok:true,status:200,json:async()=>({authenticated:true,username:'tester',repository:'RepoA',items:[],ocrEnabled:false})};
+  window.eval(readFileSync(root + 'app.js', 'utf8'));
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(window.document.querySelectorAll('.status-card').length, 5);
+  assert(window.document.querySelector('.status-card').textContent.includes('جارٍ التحقق'));
+  window.document.getElementById('tab-docs').click();
+  assert(!window.document.getElementById('docs-view').classList.contains('hidden'));
+  finishStatus({ok:false,status:503,json:async()=>({message:'تعذر الاتصال'})});
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert(window.document.getElementById('data-state').textContent.includes('غير متاحة'));
+  await window.happyDOM.abort();
+});
+
+test('completed full scan persists across session reload and indexed rows do not imply an unstarted index', async () => {
+  const window = setup();
+  window.document.write(readFileSync(root + 'index.html', 'utf8').replace(/<script[^>]*>[\s\S]*?<\/script>/g, ''));
+  window.fetch = async url => ({ok:true,status:200,json:async()=> url.includes('/children')
+    ? {repositoryId:'RepoA',folders:[],documents:[{id:618}]}
+    : url.includes('/ingestion/') ? {chunkCount:2,ingestionStatus:'content-indexed'}
+    : {authenticated:true,username:'tester',repository:'RepoA',items:[{entryId:618,name:'وثيقة',chunkCount:2}],ocrEnabled:false}});
+  window.eval(readFileSync(root + 'app.js', 'utf8'));
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert(!window.document.getElementById('scan-progress').textContent.includes('لم تبدأ'));
+  window.document.getElementById('scan-start').click();
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert(window.document.getElementById('scan-progress').textContent.includes('مكتملة'));
+  const checkpoint = JSON.parse(window.localStorage.getItem('laserfiche-reports-scan-v2::repoa:tester'));
+  assert.equal(checkpoint.documentsDone, 1); assert(checkpoint.completedAt);
+  window.eval("openSession('tester','RepoA','','');");
+  assert(window.document.getElementById('scan-progress').textContent.includes('مكتملة'));
+  assert(window.document.getElementById('scan-progress').textContent.includes('1 وثيقة'));
+  await new Promise(resolve => setTimeout(resolve, 20));
+  await window.happyDOM.abort();
+});
+
+test('canceling a pending report restores sending and leaves the interface responsive', async () => {
+  const window = setup();
+  window.document.write(readFileSync(root + 'index.html', 'utf8').replace(/<script[^>]*>[\s\S]*?<\/script>/g, ''));
+  window.fetch = async (url, options) => url === '/api/reports/chat'
+    ? await new Promise((resolve, reject) => options.signal.addEventListener('abort', () => reject(new Error('aborted')), {once:true}))
+    : {ok:true,status:200,json:async()=>({authenticated:true,username:'tester',repository:'RepoA',items:[],ocrEnabled:false})};
+  window.eval(readFileSync(root + 'app.js', 'utf8'));
+  await new Promise(resolve => setTimeout(resolve, 20));
+  window.document.getElementById('question').value = 'لخص الوثيقة 618';
+  window.document.getElementById('ask-form').dispatchEvent(new window.Event('submit', {cancelable:true}));
+  assert(!window.document.getElementById('request-state').classList.contains('hidden'));
+  window.document.getElementById('tab-docs').click();
+  assert(!window.document.getElementById('docs-view').classList.contains('hidden'));
+  window.document.getElementById('cancel-chat').click();
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert(!window.document.getElementById('send').disabled);
+  assert(window.document.getElementById('messages').textContent.includes('تم إلغاء الطلب'));
+  assert(window.document.getElementById('request-state').classList.contains('hidden'));
+  await window.happyDOM.abort();
+});
+
+
+test('short request timeout reports failure without blocking navigation', async () => {
+  const window = setup();
+  window.document.write(readFileSync(root + 'index.html', 'utf8').replace(/<script[^>]*>[\s\S]*?<\/script>/g, ''));
+  window.fetch = async () => ({ok:true,status:200,json:async()=>({authenticated:false})});
+  window.eval(readFileSync(root + 'app.js', 'utf8'));
+  await new Promise(resolve => setTimeout(resolve, 20));
+  window.fetch = async (url, options) => await new Promise((resolve, reject) =>
+    options.signal.addEventListener('abort', () => reject(new Error('timeout')), {once:true}));
+  await assert.rejects(window.eval("api('/slow', {timeoutMs: 20})"), /انتهت مهلة تحميل/);
+  window.document.getElementById('tab-chat').click();
+  assert(!window.document.getElementById('chat-view').classList.contains('hidden'));
+  await window.happyDOM.abort();
+});
+
+
+test('an empty successful AI response becomes a visible retryable error', async () => {
+  const window = setup();
+  window.document.write(readFileSync(root + 'index.html', 'utf8').replace(/<script[^>]*>[\s\S]*?<\/script>/g, ''));
+  window.fetch = async url => ({ok:true,status:200,json:async()=>url === '/api/reports/chat'
+    ? {} : {authenticated:true,username:'tester',repository:'RepoA',items:[],ocrEnabled:false}});
+  window.eval(readFileSync(root + 'app.js', 'utf8'));
+  await new Promise(resolve => setTimeout(resolve, 20));
+  window.document.getElementById('question').value = 'لخص الوثيقة 618';
+  window.document.getElementById('ask-form').dispatchEvent(new window.Event('submit', {cancelable:true}));
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert(window.document.getElementById('messages').textContent.includes('لم ترجع خدمة التحليل تقريرًا'));
+  assert(!window.document.getElementById('send').disabled);
   await window.happyDOM.abort();
 });

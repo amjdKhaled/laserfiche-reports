@@ -51,7 +51,7 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
     }
 
     public async Task<ChatResult> CreateAsync(string repositoryId, FieldCondition? condition,
-        IReadOnlyList<int> requestedIds, CancellationToken cancellationToken)
+        IReadOnlyList<int> requestedIds, CancellationToken cancellationToken, bool withoutTemplate = false)
     {
         var documents = new Dictionary<int, LFEntry>();
         var skipped = 0;
@@ -106,6 +106,7 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
                 // Recheck access even if the folder enumeration returned a cached row.
                 var entry = await entries.GetEntryAsync(candidate.Id, cancellationToken);
                 if (entry.EntryType != LFEntryType.Document) { skipped++; continue; }
+                if (withoutTemplate && (entry.TemplateId is > 0 || !string.IsNullOrWhiteSpace(entry.TemplateName))) { inspected++; continue; }
                 if (condition is null)
                 {
                     inspected++;
@@ -145,7 +146,7 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
             repositoryId, inspected, condition is null ? matches.Sum(x => x.Fields.Count) : matches.Count,
             complete, detail, requestedIds);
         var report = new StringBuilder(condition is not null ? "# تقرير مطابقة حقول الوثائق\n\n" :
-            includeFields ? "# تقرير بيانات الوثائق\n\n" : "# تقرير وثائق المستودع\n\n");
+            withoutTemplate ? "# تقرير الوثائق بدون قالب\n\n" : includeFields ? "# تقرير بيانات الوثائق\n\n" : "# تقرير وثائق المستودع\n\n");
         report.AppendLine($"تاريخ إعداد التقرير: {DateTimeOffset.UtcNow:yyyy-MM-dd HH:mm} UTC\n");
         report.AppendLine("## ملخص التقرير\n");
         if (condition is not null && !knownField)

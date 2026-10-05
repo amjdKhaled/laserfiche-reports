@@ -5,6 +5,7 @@ using LaserficheReports.Infrastructure.Configuration;
 using LaserficheReports.Infrastructure.Extensions;
 using LaserficheReports.Web;
 using Npgsql;
+using System.Text.Json;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -70,6 +71,12 @@ builder.Services.AddHttpClient("ReportsGraph", client =>
     UseProxy = false
 });
 
+builder.Services.AddHttpClient("OllamaHealth", client =>
+{
+    client.BaseAddress = new Uri((builder.Configuration["LocalAI:BaseUrl"] ?? "http://localhost:11434").TrimEnd('/') + "/");
+    client.Timeout = TimeSpan.FromSeconds(10);
+}).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { UseProxy = false, AllowAutoRedirect = false });
+
 var app = builder.Build();
 var startedAtUtc = DateTimeOffset.UtcNow;
 
@@ -107,50 +114,8 @@ app.Use(async (context, next) =>
     await next();
 });
 app.UseSession();
-// Serialize requests sharing a browser session, including requests from other tabs.
-// Commit before releasing: a repository switch cannot race an in-flight report.
-var sessionGates = Enumerable.Range(0, 64).Select(_ => new SemaphoreSlim(1, 1)).ToArray();
-app.Use(async (context, next) =>
-{
-    if (!context.Request.Path.StartsWithSegments("/api")) { await next(); return; }
-    var cookie = context.Request.Cookies[".LaserficheReports.Session"] ?? "new-session";
-    var gate = sessionGates[(StringComparer.Ordinal.GetHashCode(cookie) & int.MaxValue) % sessionGates.Length];
-    await gate.WaitAsync(context.RequestAborted);
-    try
-    {
-        await context.Session.LoadAsync(context.RequestAborted);
-        var expected = context.Request.Headers["X-Reports-Repository"].ToString();
-        if (string.IsNullOrEmpty(expected)) expected = context.Request.Query["repositoryId"].ToString();
-        var generation = context.Request.Headers["X-Reports-Session"].ToString();
-        if (string.IsNullOrEmpty(generation)) generation = context.Request.Query["sessionGeneration"].ToString();
-        var repository = await context.RequestServices.GetRequiredService<IRepositoryContext>()
-            .GetActiveRepositoryAsync(context.RequestAborted);
-        if (!context.Request.Path.StartsWithSegments("/api/session") &&
-            ((!string.IsNullOrEmpty(expected) && !string.Equals(expected, repository.RepositoryId, StringComparison.OrdinalIgnoreCase)) ||
-             (!string.IsNullOrEmpty(generation) && generation != context.Session.GetString("ReportsGeneration"))))
-        {
-            context.Response.StatusCode = 409;
-            await context.Response.WriteAsJsonAsync(new { error = "تغيّر المستودع في جلسة أخرى. أعد تسجيل الدخول إلى المستودع المطلوب." });
-            return;
-        }
-        await next();
-    }
-    catch (LaserficheException error) when (!context.Response.HasStarted)
-    {
-        context.Response.StatusCode = error.StatusCode is 401 or 403 or 404 ? error.StatusCode : 502;
-        await context.Response.WriteAsJsonAsync(new { error = "تعذر الوصول إلى Laserfiche. تحقق من المستودع وبيانات الدخول وصلاحيات الوثيقة." });
-    }
-    catch (ArgumentException error) when (!context.Response.HasStarted)
-    {
-        context.Response.StatusCode = 400;
-        await context.Response.WriteAsJsonAsync(new { error = error.Message });
-    }
-    finally
-    {
-        try { await context.Session.CommitAsync(CancellationToken.None); }
-        finally { gate.Release(); }
-    }
-});
+// Load an independent session snapshot before running long reports or ingestion.
+app.UseMiddleware<ReportsSessionMiddleware>();
 app.UseDefaultFiles();
 app.UseStaticFiles();
 
@@ -181,21 +146,27 @@ app.MapGet("/api/graph/status", async (IHttpClientFactory factory, CancellationT
     }
 });
 
-app.MapGet("/api/embeddings/status", async (ITextEmbeddingService embeddings,
+// A health check must not load/run the embedding model and compete with a report.
+app.MapGet("/api/embeddings/status", async (IHttpClientFactory clients,
     IConfiguration configuration, CancellationToken cancellationToken) =>
 {
     try
     {
-        var prefix = configuration["LocalAI:QueryEmbeddingPrefix"] ?? "search_query: ";
-        var result = await embeddings.CreateEmbeddingsAsync([prefix + "health"], cancellationToken);
-        return Results.Ok(new { status = "ready", model = configuration["LocalAI:EmbeddingModel"],
-            dimensions = result[0].Length });
+        using var response = await clients.CreateClient("OllamaHealth").GetAsync("api/tags", cancellationToken);
+        response.EnsureSuccessStatusCode();
+        using var data = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(cancellationToken), cancellationToken: cancellationToken);
+        var model = configuration["LocalAI:EmbeddingModel"] ?? "";
+        var found = data.RootElement.TryGetProperty("models", out var models) && models.ValueKind == JsonValueKind.Array &&
+            models.EnumerateArray().Any(item => item.TryGetProperty("name", out var name) &&
+                (name.GetString() == model || name.GetString() == model + ":latest"));
+        return found ? Results.Ok(new { status = "available", model, check = "installed-model" })
+            : Results.Json(new { status = "unavailable", message = "نموذج البحث الدلالي غير موجود في Ollama. نزّل النموذج المهيأ ثم أعد المحاولة." }, statusCode: 503);
     }
     catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
     catch (Exception exception)
     {
-        app.Logger.LogWarning(exception, "Local embedding readiness check failed.");
-        return Results.Json(new { status = "unavailable", error = "ollama_embedding_unavailable" }, statusCode: 503);
+        app.Logger.LogWarning(exception, "Local embedding availability check failed.");
+        return Results.Json(new { status = "unavailable", message = "تعذر الاتصال بـ Ollama للتحقق من نموذج البحث." }, statusCode: 503);
     }
 });
 
@@ -269,13 +240,13 @@ app.MapPost("/api/reports/chat", async (ChatQuestion request, ReportsChatService
     catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException)
     {
         app.Logger.LogWarning(exception, "LangGraph unavailable during chat.");
-        return Results.Json(new { error = "Local LangGraph or Ollama is unavailable.",
-            detail = exception.Message }, statusCode: 503);
+        return Results.Json(new { error = "local_ai_unavailable",
+            message = "تعذر الاتصال بخدمة تحليل المحتوى أو انتهت مهلة انتظارها. تحقق من LangGraph وOllama." }, statusCode: 503);
     }
     catch (InvalidOperationException exception)
     {
         app.Logger.LogWarning(exception, "Embedding or LangGraph failed during chat.");
-        return Results.Json(new { error = "local_ai_unavailable", message = exception.Message },
+        return Results.Json(new { error = "local_ai_unavailable", message = "تعذر تشغيل خدمة تحليل المحتوى. تحقق من LangGraph ونموذج Ollama ثم أعد المحاولة." },
             statusCode: StatusCodes.Status503ServiceUnavailable);
     }
     catch (Exception exception) when (exception is not OperationCanceledException)
