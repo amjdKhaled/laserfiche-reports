@@ -171,3 +171,43 @@ test('each table export contains only that table and retains report scope', asyn
   assert(exported.text.includes('تحت الإجراء'));assert(!exported.text.includes('مختلف'));assert.equal(exported.scope.detail,message.scope.detail);
   await window.happyDOM.abort();
 });
+
+test('multiple reports have separate rows, downloads and Web Client selections', async()=>{
+  const window=setup();
+  window.document.write(readFileSync(root+'index.html','utf8').replace(/<script[^>]*>[\s\S]*?<\/script>/g,''));
+  const reports=[42,619].map((id,i)=>({
+    title:i?'آخر إنشاء':'آخر تعديل',
+    answer:'# تقرير\n\n| رقم الوثيقة | المسار | آخر تعديل | المرجع |\n| --- | --- | --- | --- |\n| '+id+' | \\قسم\\وثيقة | 2026-10-06 | [1] |',
+    sources:[{...message.sources[0],entryId:id}],
+    scope:{repositoryId:'RepoA',detail:'عُرضت **1** وثيقة.'},relatedEntryIds:[id]
+  }));
+  const requested=[],navigated=[],downloaded=[];let opened=0;
+  window.open=()=>{opened++;return{closed:false,location:{replace:url=>navigated.push(url)},close(){this.closed=true;}};};
+  window.fetch=async(url,options)=>({ok:true,status:200,json:async()=>{
+    if(url==='/api/session/status')return{authenticated:true,username:'tester',repository:'RepoA',server:'https://localhost'};
+    if(url==='/api/reports/laserfiche-links'){
+      const ids=JSON.parse(options.body).entryIds;requested.push(ids);
+      return{urls:['https://desktop-k1svi53/laserfiche/Browse.aspx?db=RepoA#?search='+ids[0]],documentCount:1};
+    }
+    return{answer:'تقريران',reports,sources:reports.flatMap(r=>r.sources),generatedAt:message.generatedAt};
+  }});
+  window.ReportsDownload.download=report=>downloaded.push(report);
+  window.eval(readFileSync(root+'app.js','utf8'));await new Promise(r=>setTimeout(r,20));
+  window.document.getElementById('question').value='آخر تعديل وآخر إنشاء';
+  window.document.getElementById('ask-form').dispatchEvent(new window.Event('submit',{cancelable:true}));
+  await new Promise(r=>setTimeout(r,20));
+  const cards=[...window.document.querySelectorAll('.message.assistant')];assert.equal(cards.length,2);
+  assert.equal(cards[0].querySelector('.label').textContent,'آخر تعديل');
+  assert.equal(cards[0].querySelector('.report-scope strong').textContent,'1');
+  assert.equal(cards[0].querySelector('.report-cell-path').dir,'ltr');
+  for(const card of cards){
+    [...card.querySelectorAll('button')].find(b=>b.textContent==='تحميل التقرير').click();
+    [...card.querySelectorAll('button')].find(b=>b.textContent.startsWith('فتح وثائق')).click();
+    await new Promise(r=>setTimeout(r,10));
+  }
+  assert.deepEqual(requested,[[42],[619]]);assert.equal(opened,1);
+  assert.equal(navigated.length,2);assert(navigated.every(url=>url.startsWith('https://desktop-k1svi53/')));
+  assert.deepEqual(downloaded.map(r=>r.sources[0].entryId),[42,619]);
+  assert.equal(new Set([...window.document.querySelectorAll('.sources details')].map(node=>node.id)).size,2);
+  await window.happyDOM.abort();
+});

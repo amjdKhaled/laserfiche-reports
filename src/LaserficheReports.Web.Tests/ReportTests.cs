@@ -94,28 +94,6 @@ public class ReportTests
         Assert.Equal(new[] { first, third, second }, ReportSupport.SelectEvidence([first, first, second, third], 3));
     }
 
-    [Theory]
-    [InlineData("كم عدد الوثائق في المستودع؟", "search", "LASERFICHE_QUERY")]
-    [InlineData("ماهي الوثائق التي إجراء الوثيقة فيها تحت الإجراء؟", "search", "LASERFICHE_QUERY")]
-    [InlineData("كم وثيقة تحت الإجراء؟", "search", "LASERFICHE_QUERY")]
-    [InlineData("اعطيني الوثائق التي تحتوي على تحت الاجراء", "search", "LASERFICHE_QUERY")]
-    [InlineData("اعطيني الوثائق التي تحتوي على حالة الوثيقة = تحت الاجراء", "search", "LASERFICHE_QUERY")]
-    [InlineData("ما آخر 10 وثائق معدلة؟", "recent", "LASERFICHE_QUERY")]
-    [InlineData("ما الوثائق المنشأة اليوم؟", "created", "LASERFICHE_QUERY")]
-    [InlineData("ما القوالب الموجودة؟", "templates", "LASERFICHE_QUERY")]
-    [InlineData("ما Metadata الوثيقة 618؟", "metadata", "LASERFICHE_QUERY")]
-    [InlineData("ما محتوى الوثيقة 618؟", "content", "OCR_QUERY")]
-    [InlineData("لخص محتوى الوثيقة 618.", "content", "OCR_QUERY")]
-    [InlineData("لخص محتوى الوثائق التي إجراء الوثيقة فيها تحت الإجراء.", "search", "HYBRID_QUERY")]
-    [InlineData("لخص توزيع الوثائق حسب الإدارة.", "group", "LASERFICHE_QUERY")]
-    public void RoutesKeepMetadataAndContentSeparate(string question, string operation, string kind)
-    {
-        var plan = QuestionRouter.TryRoute(question);
-        Assert.NotNull(plan);
-        Assert.Equal(operation, plan.Operation);
-        Assert.Equal(kind, plan.Kind.ToString());
-    }
-
     [Fact]
     public async Task ExactCountUses73Not20AndDoesNotNeedDatabaseOrModel()
     {
@@ -133,7 +111,7 @@ public class ReportTests
         var chat = new ReportsChatService(config, new NoEmbeddings(), new Repository(), entryService,
             new NoClients(), service, new QuestionRouter(new NoClients()), query,
             Microsoft.Extensions.Logging.Abstractions.NullLogger<ReportsChatService>.Instance);
-        Assert.Contains("**73**", (await chat.AskAsync("كم عدد الوثائق في المستودع؟", default)).Answer);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => chat.AskAsync("كم عدد الوثائق في المستودع؟", default));
     }
 
     [Fact]
@@ -146,15 +124,12 @@ public class ReportTests
         Assert.False(query.ReadAll);
     }
 
-    [Theory]
-    [InlineData("اعطيني الوثائق التي تحتوي على تحت الاجراء")]
-    [InlineData("اعطيني الوثائق التي تحتوي على حالة الوثيقة = تحت الاجراء")]
-    [InlineData("ماهي الوثائق الموجود فيها إجراء الوثيقة يساوي تحت الاجراء")]
-    public async Task ScreenshotQuestionsSearchDespiteRepeatedFieldDefinitions(string question)
+    [Fact]
+    public async Task RepeatedFieldDefinitionsDoNotPreventValidatedFieldSearch()
     {
         var query = new Searches();
         var service = Create(new Entries(73), query, new Definitions("إجراء الوثيقة", "إجراء الوثيقة", "اجراء الوثيقة"));
-        var plan = QuestionRouter.TryRoute(question)!;
+        var plan = new QueryPlan("search", "إجراء الوثيقة", "تحت الاجراء");
         var result = await service.CreateAsync("repo", plan, [], default);
         Assert.Contains("{[]:[إجراء الوثيقة]=", query.Expression);
         Assert.Contains("**73**", result.Answer);
@@ -165,23 +140,17 @@ public class ReportTests
     {
         var query = new Searches();
         await Create(new Entries(73), query, new Definitions("إ جراء الوثيقة", "اجراء الوثيقة", "اجراء الوثيقة"))
-            .SelectAsync(QuestionRouter.TryRoute("اعطيني الوثائق التي تحتوي على تحت الاجراء")!, [], false, default);
+            .SelectAsync(new QueryPlan("search", "إجراء الوثيقة", "تحت الاجراء"), [], false, default);
         Assert.Equal(LiveRepositoryReportService.Documents +
             " & ({[]:[إ جراء الوثيقة]=\"تحت الاجراء\"} | {[]:[اجراء الوثيقة]=\"تحت الاجراء\"})", query.Expression);
     }
-
-    [Theory]
-    [InlineData("تحت الاجراء")]
-    [InlineData("تحت الإجراء")]
-    public void ImplicitStatusPreservesTheRequestedValue(string value) =>
-        Assert.Equal(value, QuestionRouter.TryRoute("اعطيني الوثائق التي تحتوي على " + value)!.Value);
 
     [Fact]
     public async Task LiteralStatusFieldWinsOverActionAlias()
     {
         var query = new Searches();
         await Create(new Entries(73), query, new Definitions("حالة الوثيقة", "إجراء الوثيقة"))
-            .SelectAsync(QuestionRouter.TryRoute("اعطيني الوثائق التي تحتوي على حالة الوثيقة = تحت الاجراء")!, [], false, default);
+            .SelectAsync(new QueryPlan("search", "حالة الوثيقة", "تحت الاجراء"), [], false, default);
         Assert.Contains("{[]:[حالة الوثيقة]=", query.Expression);
         Assert.DoesNotContain("[إجراء الوثيقة]", query.Expression);
     }
@@ -217,7 +186,7 @@ public class ReportTests
             ? FieldRows(field!, "تحت الإجراء", "تحت  الاجراء", "ليس تحت الإجراء", "تحت الإجراء النهائي", "تم الرفض")
             : PagedResult<LFSearchResult>.Empty };
         var result = await Create(entries, query).CreateAsync("repo",
-            QuestionRouter.TryRoute("اعطيني الوثائق التي تحتوي على تحت الاجراء")!, [], default);
+            new QueryPlan("search", "إجراء الوثيقة", "تحت الاجراء"), [], default);
         Assert.Contains("**2**", result.Answer);
         Assert.Equal(new[] { 1, 2 }, result.RelatedEntryIds);
         Assert.True(query.ReadAll);
@@ -313,6 +282,78 @@ public class ReportTests
     public void ToolArgumentsCannotInjectQuery(string value) =>
         Assert.Throws<ArgumentException>(() => LiveRepositoryReportService.Term(value));
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AiPlansTwoIndependentLatestReportsWithOneRowAndDifferentOrdering(bool presentationUnavailable)
+    {
+        var graph = new GraphClient("""
+            {"reports":[
+                {"operation":"latest_modified","title":"آخر وثيقة معدلة","question":"آخر تعديل","limit":1,"entryIds":[]},
+                {"operation":"latest_created","title":"آخر وثيقة منشأة","question":"آخر إنشاء","limit":1,"entryIds":[]}]}
+            """, presentationUnavailable);
+        var index = 0;
+        var query = new Searches { Response = (_, _, _) => new PagedResult<LFSearchResult>
+        {
+            Items = [new LFSearchResult { EntryId = ++index == 1 ? 42 : 619, Name = index == 1 ? "وثيقة معدلة" : "وثيقة جديدة",
+                CreationTime = DateTimeOffset.Parse("2026-10-01T10:00:00+03:00"), LastModifiedTime = DateTimeOffset.Parse("2026-10-06T11:00:00+03:00") }],
+            TotalCount = 73, HasMore = true
+        } };
+        var entryService = new Entries(73);
+        var chat = new ReportsChatService(new ConfigurationBuilder().Build(), new NoEmbeddings(), new Repository(),
+            entryService, graph, Create(entryService, query), new QuestionRouter(graph), query,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<ReportsChatService>.Instance);
+        var result = await chat.AskAsync("اعطيني تقرير عن آخر وثيقة تم تعديلها وتقرير آخر عن آخر وثيقة أُنشئت", default);
+        Assert.Equal(2, result.Reports.Count);
+        if (presentationUnavailable) Assert.All(result.Reports, report => Assert.Contains("تعذرت صياغة ملخص AI", report.Answer));
+        Assert.Equal(new[] { "lastModifiedTime desc", "creationTime desc" }, query.Sorts);
+        Assert.Equal(new[] { 1, 1 }, query.Limits);
+        Assert.Equal(new[] { 42 }, result.Reports[0].RelatedEntryIds);
+        Assert.Equal(new[] { 619 }, result.Reports[1].RelatedEntryIds);
+        Assert.All(result.Reports, report =>
+        {
+            Assert.Single(report.Sources);
+            Assert.StartsWith("\\قسم\\وثيقة", report.Sources[0].Path);
+            Assert.Contains("2026-10-06 11:00:00 +03:00", report.Answer);
+            Assert.DoesNotContain("**73**", report.Answer);
+        });
+        Assert.Equal(new[] { "route", "present" }, graph.Paths);
+        Assert.Contains("إجراء الوثيقة", System.Text.RegularExpressions.Regex.Unescape(graph.RouteBody));
+        Assert.DoesNotContain("[1] |", result.Answer.Split("آخر وثيقة منشأة").Last());
+    }
+
+    [Theory]
+    [InlineData("{\"reports\":[{\"operation\":\"http\",\"limit\":1}]}")]
+    [InlineData("{\"reports\":[{\"operation\":\"latest_created\",\"limit\":10}]}")]
+    [InlineData("{\"reports\":[{\"operation\":\"metadata\",\"limit\":1,\"entryIds\":[42]}]}")]
+    public async Task InvalidAiPlansCannotExecuteTools(string plan)
+    {
+        await Assert.ThrowsAsync<ArgumentException>(() => new QuestionRouter(new GraphClient(plan))
+            .RouteAsync("تقرير المستودع", new { fields = Array.Empty<string>() }, default));
+    }
+
+    private sealed class GraphClient(string route, bool failPresentation = false) : HttpMessageHandler, IHttpClientFactory
+    {
+        public List<string> Paths { get; } = [];
+        public string RouteBody { get; private set; } = "";
+        public HttpClient CreateClient(string name) => new(this, false) { BaseAddress = new Uri("http://graph.test/") };
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            var path = request.RequestUri!.AbsolutePath.Trim('/'); Paths.Add(path);
+            var body = await request.Content!.ReadAsStringAsync(ct);
+            string response;
+            if (path == "route") { RouteBody = body; response = route; }
+            else
+            {
+                if (failPresentation) return new HttpResponseMessage(System.Net.HttpStatusCode.ServiceUnavailable);
+                using var data = System.Text.Json.JsonDocument.Parse(body);
+                response = System.Text.Json.JsonSerializer.Serialize(new { reports = data.RootElement.GetProperty("reports").EnumerateArray()
+                    .Select(item => new { index = item.GetProperty("index").GetInt32(), summary = "هذه نتيجة التقرير من بيانات المستودع الحالية." }).ToArray() });
+            }
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StringContent(response, System.Text.Encoding.UTF8, "application/json") };
+        }
+    }
+
     private static LiveRepositoryReportService Create(Entries entries, Searches search, Definitions? definitions = null) => new(entries, search,
         definitions ?? new Definitions(), new Templates(), Microsoft.Extensions.Logging.Abstractions.NullLogger<LiveRepositoryReportService>.Instance);
 
@@ -333,12 +374,14 @@ public class ReportTests
         public bool ReadAll { get; private set; }
         public bool Exact { get; init; } = true;
         public List<string> Calls { get; } = [];
+        public List<string> Sorts { get; } = [];
+        public List<int> Limits { get; } = [];
         public Func<string, string?, bool, PagedResult<LFSearchResult>>? Response { get; init; }
         public Task<PagedResult<LFSearchResult>> QueryAsync(string expression, int page, int pageSize,
             string sort = "creationTime desc", string? field = null, bool readAll = false, CancellationToken cancellationToken = default)
         {
             Expression = expression; ReadAll = readAll;
-            Calls.Add(expression);
+            Calls.Add(expression); Sorts.Add(sort); Limits.Add(pageSize);
             if (Response is not null) return Task.FromResult(Response(expression, field, readAll));
             return Task.FromResult(new PagedResult<LFSearchResult> { Items = Enumerable.Range(1, readAll ? 73 : 20)
                 .Select(i => new LFSearchResult { EntryId = i, Name = $"وثيقة {i}", EntryType = LFEntryType.Document }).ToArray(),

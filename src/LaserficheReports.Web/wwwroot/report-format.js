@@ -71,6 +71,14 @@
           });
           body.append(tr); i++;
         }
+        const names = header.map(value => value.replace(/\s+/g, ' ').trim());
+        for (let column = 0; column < names.length; column++) {
+          const kind = /(?:المسار|path)/i.test(names[column]) ? 'path' : /(?:تاريخ|تعديل|date|modified)/i.test(names[column]) ? 'date' : /(?:رقم|مرجع|reference|\bid\b)/i.test(names[column]) ? 'compact' : 'text';
+          for (const row of [headRow, ...body.children]) {
+            const cell = row.children[column]; cell.classList.add('report-cell-' + kind);
+            if (kind !== 'text') cell.dir = 'ltr';
+          }
+        }
         table.append(head, body); wrap.append(table); article.append(wrap); continue;
       }
       if (/^(?:[-*]|\d+\.)\s+/.test(lines[i])) {
