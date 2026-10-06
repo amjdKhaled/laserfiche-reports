@@ -317,7 +317,7 @@ public class ReportTests
             Assert.Contains("2026-10-06 11:00:00 +03:00", report.Answer);
             Assert.DoesNotContain("**73**", report.Answer);
         });
-        Assert.Equal(new[] { "route", "present" }, graph.Paths);
+        Assert.Equal(new[] { "health", "route", "present" }, graph.Paths);
         Assert.Contains("إجراء الوثيقة", System.Text.RegularExpressions.Regex.Unescape(graph.RouteBody));
         Assert.DoesNotContain("[1] |", result.Answer.Split("آخر وثيقة منشأة").Last());
     }
@@ -340,6 +340,8 @@ public class ReportTests
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
         {
             var path = request.RequestUri!.AbsolutePath.Trim('/'); Paths.Add(path);
+            if (path == "health") return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            { Content = new StringContent("{\"routingVersion\":\"ai-multi-report-v3\",\"modelTimeoutSeconds\":600}", System.Text.Encoding.UTF8, "application/json") };
             var body = await request.Content!.ReadAsStringAsync(ct);
             string response;
             if (path == "route") { RouteBody = body; response = route; }

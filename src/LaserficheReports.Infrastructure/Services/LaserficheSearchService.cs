@@ -15,7 +15,7 @@ namespace LaserficheReports.Infrastructure.Services;
 /// </summary>
 internal sealed class LaserficheSearchService : ILaserficheSearchService
 {
-    private const int MaxPollDurationSeconds = 30;
+    private const int MaxPollDurationSeconds = 300;
     private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(500);
 
     private readonly IHttpClientFactory _httpClientFactory;
@@ -111,7 +111,7 @@ internal sealed class LaserficheSearchService : ILaserficheSearchService
         string? field = null, bool readAll = false)
     {
         using var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        budget.CancelAfter(TimeSpan.FromSeconds(45));
+        budget.CancelAfter(TimeSpan.FromSeconds(600));
         cancellationToken = budget.Token;
         ValidatePaging(page, pageSize);
 

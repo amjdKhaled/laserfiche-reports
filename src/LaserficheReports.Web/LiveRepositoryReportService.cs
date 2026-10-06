@@ -118,7 +118,7 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
         string[] fieldNames, QueryPlan plan, bool readAll, string? groupField, CancellationToken ct)
     {
         using var budget = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        budget.CancelAfter(TimeSpan.FromSeconds(30));
+        budget.CancelAfter(TimeSpan.FromSeconds(300));
         ct = budget.Token;
         var matches = new Dictionary<int, LFSearchResult>();
         foreach (var name in fieldNames)

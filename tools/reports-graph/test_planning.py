@@ -34,3 +34,26 @@ class PlanningTests(unittest.TestCase):
         payload = {'question': 'تقريران', 'reports': [{'index': 0, 'facts': 'وثيقة 1'}, {'index': 1, 'facts': 'وثيقة 2'}]}
         with self.assertRaises(ValueError):
             present_reports(FakeModel([json.dumps({'reports': [{'index': 0, 'summary': 'وثيقة 1', 'quotes': ['وثيقة 1']}]})]), payload)
+
+    def test_invalid_plan_is_reanalyzed_without_a_keyword_answer(self):
+        from server import plan_reports
+        payload = {'question': 'آخر تعديل وآخر إنشاء', 'catalog': {'fields': [{'name': 'إجراء الوثيقة'}]}}
+        plans = {'reports': [
+            {'operation': 'latest_modified', 'title': 'آخر تعديل', 'question': 'آخر وثيقة معدلة', 'limit': 1},
+            {'operation': 'latest_created', 'title': 'آخر إنشاء', 'question': 'آخر وثيقة منشأة', 'limit': 1}]}
+        wrong = json.loads(json.dumps(plans)); wrong['reports'][0]['limit'] = 10
+        model = FakeModel([json.dumps(wrong), json.dumps(plans)])
+        self.assertEqual(len(plan_reports(model, payload)['reports']), 2)
+        self.assertEqual(len(model.calls), 2)
+        self.assertIn('إجراء الوثيقة', model.calls[1][1].content)
+        with self.assertRaises(ValueError):
+            plan_reports(FakeModel(['bad JSON', 'bad JSON']), payload)
+
+    def test_dependency_failures_remain_distinct(self):
+        from server import dependency_error
+        from httpx import ReadTimeout
+        self.assertEqual(dependency_error(ReadTimeout('slow CPU')), 'local_model_timeout')
+        self.assertEqual(dependency_error(ConnectionError('refused')), 'ollama_unavailable')
+        self.assertEqual(dependency_error(ValueError('invalid plan')), 'local_model_invalid_output')
+        missing = type('MissingModel', (Exception,), {'status_code': 404})()
+        self.assertEqual(dependency_error(missing), 'model_not_found')

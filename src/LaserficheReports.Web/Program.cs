@@ -65,7 +65,7 @@ builder.Services.AddHttpClient("ReportsGraph", client =>
         uri.Host is not ("127.0.0.1" or "localhost" or "::1"))
         throw new InvalidOperationException("ReportsGraph:BaseUrl must be local HTTP.");
     client.BaseAddress = new Uri(uri.AbsoluteUri.TrimEnd('/') + "/");
-    client.Timeout = TimeSpan.FromSeconds(120);
+    client.Timeout = TimeSpan.FromSeconds(Math.Clamp(builder.Configuration.GetValue<int?>("ReportsGraph:TimeoutSeconds") ?? 1500, 120, 7200));
 }).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
 {
     AllowAutoRedirect = false,
@@ -83,7 +83,7 @@ app.Use(async (context, next) =>
     var original = context.RequestAborted;
     using var budget = CancellationTokenSource.CreateLinkedTokenSource(original);
     var path = context.Request.Path;
-    budget.CancelAfter(TimeSpan.FromSeconds(path.StartsWithSegments("/api/reports/chat") ? 180 :
+    budget.CancelAfter(TimeSpan.FromSeconds(path.StartsWithSegments("/api/reports/chat") ? Math.Clamp(builder.Configuration.GetValue<int?>("Reports:RequestTimeoutSeconds") ?? 3600, 300, 14400) :
         path.StartsWithSegments("/api/ingestion") ? 1800 : path.Value?.EndsWith("/status") == true ? 10 : 60));
     context.RequestAborted = budget.Token;
     try { await next(); }
@@ -286,6 +286,11 @@ app.MapPost("/api/reports/chat", async (ChatQuestion request, ReportsChatService
     try
     {
         return Results.Ok(await chat.AskAsync(request.Question, cancellationToken));
+    }
+    catch (GraphServiceException exception)
+    {
+        app.Logger.LogWarning(exception, "AI dependency failed Stage={Stage} Code={Code}", exception.Stage, exception.Code);
+        return Results.Json(new { error = exception.Code, stage = exception.Stage, message = exception.Message }, statusCode: 503);
     }
     catch (ArgumentException exception)
     {

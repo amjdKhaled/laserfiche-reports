@@ -84,7 +84,7 @@ internal sealed class ReportsChatService(
 
         var repository = await repositories.GetActiveRepositoryAsync(cancellationToken);
         using var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        budget.CancelAfter(TimeSpan.FromSeconds(180));
+        budget.CancelAfter(TimeSpan.FromSeconds(Math.Clamp(configuration.GetValue<int?>("Reports:RequestTimeoutSeconds") ?? 3600, 300, 14400)));
         cancellationToken = budget.Token;
         var catalog = await liveReports.CatalogAsync(cancellationToken);
         var watch = System.Diagnostics.Stopwatch.StartNew();
@@ -179,7 +179,7 @@ internal sealed class ReportsChatService(
         if (!hasEntryFilter) try
         {
             using var embeddingBudget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            embeddingBudget.CancelAfter(TimeSpan.FromSeconds(15));
+            embeddingBudget.CancelAfter(TimeSpan.FromSeconds(120));
             var vectors = await embeddings.CreateEmbeddingsAsync([prefix + question.Trim()], embeddingBudget.Token);
             if (vectors.Count == 0 || vectors[0].Length == 0 || vectors[0].Any(v => !float.IsFinite(v)))
                 throw new InvalidOperationException("The local embedding model returned an invalid vector.");
@@ -269,9 +269,7 @@ internal sealed class ReportsChatService(
             new { question = question.Trim(), evidence, scope }, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
         body.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json") { CharSet = "utf-8" };
         using var response = await client.PostAsync("answer", body, cancellationToken);
-        if (!response.IsSuccessStatusCode)
-            throw new InvalidOperationException(
-                $"Local LangGraph returned HTTP {(int)response.StatusCode}. Check the LangGraph terminal and Ollama model.");
+        await GraphServiceException.EnsureSuccessAsync(response, "answer", cancellationToken);
         logger.LogInformation("Stage=AI Tool=Answer DurationMs={DurationMs} Status={Status}", watch.ElapsedMilliseconds, (int)response.StatusCode);
         var graphResponse = await response.Content.ReadFromJsonAsync<GraphAnswer>(cancellationToken);
         if (string.IsNullOrWhiteSpace(graphResponse?.Answer))

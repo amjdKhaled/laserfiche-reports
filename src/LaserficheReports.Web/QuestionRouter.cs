@@ -15,12 +15,30 @@ internal sealed class QuestionRouter(IHttpClientFactory clients)
 {
     public async Task<ReportRequest> RouteAsync(string question, object catalog, CancellationToken cancellationToken)
     {
-        using var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        budget.CancelAfter(TimeSpan.FromSeconds(50));
-        using var response = await clients.CreateClient("ReportsGraph").PostAsJsonAsync("route",
-            new { question, catalog, today = DateOnly.FromDateTime(DateTime.Now).ToString("yyyy-MM-dd") }, budget.Token);
-        response.EnsureSuccessStatusCode();
-        var request = await response.Content.ReadFromJsonAsync<ReportRequest>(budget.Token)
+        var client = clients.CreateClient("ReportsGraph");
+        try
+        {
+            using var health = await client.GetAsync("health", cancellationToken);
+            await GraphServiceException.EnsureSuccessAsync(health, "planning", cancellationToken);
+            var status = await health.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>(cancellationToken);
+            if (!status.TryGetProperty("routingVersion", out var version) || version.GetString() != "ai-multi-report-v3" ||
+                !status.TryGetProperty("modelTimeoutSeconds", out var timeout) || !timeout.TryGetInt32(out var seconds) || seconds < 60)
+                throw new GraphServiceException("graph_protocol_mismatch", "planning", GraphServiceException.MessageFor("graph_protocol_mismatch"));
+        }
+        catch (HttpRequestException error)
+        {
+            throw new GraphServiceException("graph_unavailable", "planning", GraphServiceException.MessageFor("graph_unavailable"), error);
+        }
+        HttpResponseMessage routeResponse;
+        try { routeResponse = await client.PostAsJsonAsync("route",
+            new { question, catalog, today = DateOnly.FromDateTime(DateTime.Now).ToString("yyyy-MM-dd") }, cancellationToken); }
+        catch (HttpRequestException error)
+        {
+            throw new GraphServiceException("graph_unavailable", "planning", GraphServiceException.MessageFor("graph_unavailable"), error);
+        }
+        using var response = routeResponse;
+        await GraphServiceException.EnsureSuccessAsync(response, "planning", cancellationToken);
+        var request = await response.Content.ReadFromJsonAsync<ReportRequest>(cancellationToken)
             ?? throw new InvalidOperationException("لم يرجع الذكاء الاصطناعي خطة للطلب.");
         if (request.Reports is null || request.Reports.Length is < 1 or > 6)
             throw new ArgumentException("اطلب من تقرير واحد إلى ستة تقارير في السؤال الواحد.");
