@@ -38,6 +38,16 @@ internal sealed class LaserficheSearchService : ILaserficheSearchService
         _logger = logger;
     }
 
+    public Task<PagedResult<LFSearchResult>> QueryAsync(string expression, int page, int pageSize,
+        string sort = "creationTime desc", string? field = null, bool readAll = false,
+        CancellationToken cancellationToken = default)
+    {
+        if (sort is not ("creationTime desc" or "lastModifiedTime desc" or "id asc"))
+            throw new ArgumentException("ترتيب البحث غير مدعوم.");
+        return ExecuteSearchAsync("structured-query", SearchType.Advanced, expression,
+            page, pageSize, cancellationToken, sort, field, readAll);
+    }
+
     public Task<PagedResult<LFSearchResult>> SimpleSearchAsync(
         string query,
         int page,
@@ -72,7 +82,7 @@ internal sealed class LaserficheSearchService : ILaserficheSearchService
         ExecuteSearchAsync(
             templateName,
             SearchType.Advanced,
-            $"{{LF:Template}}=\"{EscapeSearchTerm(templateName)}\"",
+            $"{{[{EscapeSearchTerm(templateName)}]:[]}}",
             page,
             pageSize,
             cancellationToken);
@@ -86,7 +96,7 @@ internal sealed class LaserficheSearchService : ILaserficheSearchService
         ExecuteSearchAsync(
             $"{fieldName}={fieldValue}",
             SearchType.Advanced,
-            $"{{{EscapeSearchTerm(fieldName)}}}=\"{EscapeSearchTerm(fieldValue)}\"",
+            $"{{[]:[{EscapeSearchTerm(fieldName)}]=\"{EscapeSearchTerm(fieldValue)}\"}}",
             page,
             pageSize,
             cancellationToken);
@@ -97,8 +107,12 @@ internal sealed class LaserficheSearchService : ILaserficheSearchService
         string expression,
         int page,
         int pageSize,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, string sort = "creationTime desc",
+        string? field = null, bool readAll = false)
     {
+        using var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        budget.CancelAfter(TimeSpan.FromSeconds(45));
+        cancellationToken = budget.Token;
         ValidatePaging(page, pageSize);
 
         var repo = await _repositoryContext
@@ -116,7 +130,7 @@ internal sealed class LaserficheSearchService : ILaserficheSearchService
         _logger.LogInformation(
             "Search submit → POST {Url} | query: {Query}",
             searchUrl,
-            displayQuery);
+            "validated-search");
 
         using var submitResponse = await client
             .PostAsJsonAsync(searchUrl, requestBody, JsonOptions.Default, cancellationToken)
@@ -139,7 +153,7 @@ internal sealed class LaserficheSearchService : ILaserficheSearchService
             TryGetPropertyIgnoreCase(submitDoc.RootElement, "value", out var value) &&
             value.ValueKind == JsonValueKind.Array)
         {
-            return await ReadRequestedPageAsync(client, submitBody, searchUrl, page, pageSize, cancellationToken)
+            return await ReadRequestedPageAsync(client, submitBody, searchUrl, page, pageSize, cancellationToken, readAll: readAll)
                 .ConfigureAwait(false);
         }
 
@@ -182,7 +196,7 @@ internal sealed class LaserficheSearchService : ILaserficheSearchService
                 token,
                 page,
                 pageSize,
-                cancellationToken)
+                cancellationToken, sort, field, readAll)
             .ConfigureAwait(false);
     }
 
@@ -238,13 +252,13 @@ internal sealed class LaserficheSearchService : ILaserficheSearchService
         string operationToken,
         int page,
         int pageSize,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, string sort, string? field, bool readAll)
     {
         var firstUrl = AddPagingQuery(
-            _adapter.BuildSearchResultsUrl(repositoryId, operationToken), page, pageSize);
+            _adapter.BuildSearchResultsUrl(repositoryId, operationToken), page, pageSize, sort, field, readAll);
         client.DefaultRequestHeaders.Remove("Prefer");
         client.DefaultRequestHeaders.TryAddWithoutValidation("Prefer", $"odata.maxpagesize={pageSize}");
-        return await ReadRequestedPageAsync(client, null, firstUrl, 1, pageSize, cancellationToken)
+        return await ReadRequestedPageAsync(client, null, firstUrl, 1, pageSize, cancellationToken, (page - 1) * pageSize, readAll)
             .ConfigureAwait(false);
     }
 
@@ -254,7 +268,7 @@ internal sealed class LaserficheSearchService : ILaserficheSearchService
         string initialUrl,
         int page,
         int pageSize,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, int serverSkip = 0, bool readAll = false)
     {
         var skip = checked((page - 1) * pageSize);
         var required = checked(skip + pageSize);
@@ -290,6 +304,8 @@ internal sealed class LaserficheSearchService : ILaserficheSearchService
 
             var parsed = ParseResultPage(body);
             received.AddRange(parsed.Items.Select(MapSearchResult));
+            if (readAll && received.Count > 10000)
+                throw new ArgumentException("نطاق التقرير كبير. حدد قالبًا أو مجلدًا أو شرطًا أضيق.");
             totalCount ??= parsed.TotalCount;
             nextUrl = ResolveNextLink(nextUrl, parsed.NextLink);
             body = null;
@@ -298,7 +314,7 @@ internal sealed class LaserficheSearchService : ILaserficheSearchService
                 "Search result chunk: {PageCount} item(s), buffered={Buffered}, total={Total}, nextLink={HasNext}.",
                 parsed.Items.Count, received.Count, totalCount, nextUrl is null ? "no" : "yes");
 
-            if (received.Count >= required || nextUrl is null)
+            if ((!readAll && received.Count >= required) || nextUrl is null)
                 break;
         }
 
@@ -309,13 +325,20 @@ internal sealed class LaserficheSearchService : ILaserficheSearchService
                 .First())
             .ToList();
 
-        var items = distinct.Skip(skip).Take(pageSize).ToList().AsReadOnly();
-        var effectiveTotal = totalCount ?? (nextUrl is null ? distinct.Count : skip + items.Count + 1);
+        var items = (readAll ? distinct : distinct.Skip(skip).Take(pageSize)).ToList().AsReadOnly();
+        if (readAll && totalCount.HasValue && totalCount.Value != distinct.Count)
+            throw new JsonException("The complete search rows do not match the server count.");
+        var exact = totalCount.HasValue || (serverSkip == 0 && nextUrl is null);
+        if (totalCount is int count && count < serverSkip + distinct.Count)
+            throw new JsonException("Search returned a total count smaller than its result rows.");
+        var effectiveTotal = totalCount ?? serverSkip + distinct.Count;
         return new PagedResult<LFSearchResult>
         {
             Items = items,
-            TotalCount = Math.Max(effectiveTotal, skip + items.Count),
-            PageNumber = page,
+            TotalCount = Math.Max(effectiveTotal, serverSkip + skip + items.Count),
+            IsTotalCountExact = exact,
+            HasMore = !readAll && (nextUrl is not null || (exact && serverSkip + skip + items.Count < effectiveTotal)),
+            PageNumber = serverSkip > 0 ? serverSkip / pageSize + 1 : page,
             PageSize = pageSize
         };
     }
@@ -370,7 +393,8 @@ internal sealed class LaserficheSearchService : ILaserficheSearchService
         TemplateId = r.TemplateId,
         Creator = r.Creator,
         CreationTime = r.CreationTime,
-        LastModifiedTime = r.LastModifiedTime
+        LastModifiedTime = r.LastModifiedTime,
+        Fields = r.Fields.Select(f => new LFSearchField(f.Name, f.Values, f.HasMoreValues)).ToArray()
     };
 
     private static string? ResolveNextLink(string currentUrl, string? nextLink)
@@ -392,21 +416,23 @@ internal sealed class LaserficheSearchService : ILaserficheSearchService
 
     private static void ValidatePaging(int page, int pageSize)
     {
-        if (page < 1)
+        if (page < 1 || page > 1_000_000)
             throw new ArgumentOutOfRangeException(nameof(page), "Page must be at least 1.");
-        if (pageSize < 1)
+        if (pageSize < 1 || pageSize > 200)
             throw new ArgumentOutOfRangeException(nameof(pageSize), "Page size must be at least 1.");
     }
 
-    private static string AddPagingQuery(string url, int page, int pageSize)
+    private static string AddPagingQuery(string url, int page, int pageSize, string sort, string? field, bool readAll)
     {
         var skip = checked((page - 1) * pageSize);
         var separator = url.Contains('?', StringComparison.Ordinal) ? '&' : '?';
-        return $"{url}{separator}$skip={skip}&$top={pageSize}&$count=true&$orderby=creationTime%20desc";
+        return $"{url}{separator}$skip={skip}&$count=true&$orderby={Uri.EscapeDataString(sort)}" +
+            (readAll ? "" : $"&$top={pageSize}") +
+            (field is null ? "" : $"&fields={Uri.EscapeDataString(field)}");
     }
 
     private static string EscapeSearchTerm(string term) =>
-        term.Replace("\"", "\\\"").Replace("\\", "\\\\");
+        term.Replace("\\", "\\\\").Replace("\"", "\\\"");
 
     private static LFEntryType ParseEntryType(string? raw)
     {
@@ -493,8 +519,17 @@ internal sealed class LaserficheSearchService : ILaserficheSearchService
         public int? Count { get; init; }
     }
 
+    private sealed record SearchFieldResource
+    {
+        public string Name { get; init; } = "";
+        public List<string> Values { get; init; } = [];
+        public bool HasMoreValues { get; init; }
+    }
+
     private sealed record SearchResultResource
     {
+        public List<SearchFieldResource> Fields { get; init; } = [];
+
         [JsonPropertyName("id")]
         public int Id { get; init; }
 

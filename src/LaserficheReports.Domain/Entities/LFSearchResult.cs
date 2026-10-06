@@ -6,6 +6,8 @@ namespace LaserficheReports.Domain.Entities;
 public sealed record LFSearchResult
 {
     /// <summary>Entry ID of the matching entry.</summary>
+    public IReadOnlyList<LFSearchField> Fields { get; init; } = [];
+
     public int EntryId { get; init; }
 
     /// <summary>Display name of the matching entry.</summary>
@@ -31,3 +33,5 @@ public sealed record LFSearchResult
     /// <summary>UTC last-modified timestamp.</summary>
     public DateTimeOffset? LastModifiedTime { get; init; }
 }
+
+public sealed record LFSearchField(string Name, IReadOnlyList<string> Values, bool HasMoreValues);

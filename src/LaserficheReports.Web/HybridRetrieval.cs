@@ -44,6 +44,7 @@ internal static partial class HybridRetrieval
             where metadata ->> 'source' = 'laserfiche-reports'
               and lower(metadata ->> 'repository_id') = lower(@repository)
               and metadata ->> 'record_type' = 'document-chunk'
+              and coalesce(metadata ->> 'text_source', '') not like 'laserfiche-metadata%'
               and (not @hasEntryFilter or metadata ->> 'entry_id' = any(@entryIds))
         ), semantic as (
             select id,
@@ -58,7 +59,7 @@ internal static partial class HybridRetrieval
             select id, ts_rank_cd(tokens, to_tsquery('simple', @keywords)) as score
             from (
                 select id, to_tsvector('simple', translate(
-                    regexp_replace(coalesce(content, '') || ' ' || coalesce(metadata ->> 'document_name', ''),
+                    regexp_replace(coalesce(content, ''),
                                    '[ً-ٰٟـ]', '', 'g'),
                     'أإآى٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹', 'اااي01234567890123456789')) as tokens
                 from scoped

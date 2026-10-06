@@ -8,6 +8,19 @@ namespace LaserficheReports.Infrastructure.Tests;
 public sealed class LaserficheDocumentIngestionServiceTests
 {
     [Fact]
+    public void NewContentProvenanceDoesNotStoreCurrentMetadataSnapshots()
+    {
+        var entry = new LFEntry { Id = 618, Name = "private", FullPath = "private-path", TemplateName = "private-template" };
+        LFFieldValue[] fields = [new() { FieldName = "إجراء الوثيقة", Value = "private-value" }];
+        var raw = LaserficheDocumentIngestionService.BuildMetadata("repo", entry, fields);
+        var stored = LaserficheDocumentIngestionService.ContentProvenanceOnly(raw, entry, fields);
+        Assert.DoesNotContain("private", stored);
+        Assert.DoesNotContain("إجراء", stored);
+        Assert.Contains("source_fingerprint", stored);
+        Assert.Contains("entry_id", stored);
+    }
+
+    [Fact]
     public void CanReuseIndex_RequiresAnUnchangedDocumentAndMetadataChunk()
     {
         var entry = new LFEntry

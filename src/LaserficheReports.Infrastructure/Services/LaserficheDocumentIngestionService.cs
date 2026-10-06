@@ -299,7 +299,7 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
             ocrAttemptCount,
             ocrTextPageCount,
             contentFailureCount);
-        var chunks = BuildSearchChunks(entry, fields, pageTexts,
+        var chunks = PageTextChunker.Split(pageTexts,
             _localAiOptions.EffectiveChunkSize, _localAiOptions.EffectiveChunkOverlap);
         var embeddings = chunks.Count > 0
             ? await _embeddings.CreateEmbeddingsAsync(
@@ -324,7 +324,9 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
             ocrCorrectedPageCount,
             ocrCorrectionModel,
             contentDiagnostic);
-        var content = BuildIndexedContent(entry, fields, pageTexts);
+        metadata = ContentProvenanceOnly(metadata, entry, fields);
+        var content = string.Join(Environment.NewLine + Environment.NewLine, pageTexts
+            .OrderBy(p => p.PageNumber).Select(p => $"Page {p.PageNumber}:{Environment.NewLine}{p.Text.Trim()}"));
 
         await using var connection = new NpgsqlConnection(_options.PostgresConnectionString);
         await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
@@ -394,6 +396,19 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
             ocrCorrectedPageCount,
             ocrCorrectionModel,
             contentDiagnostic);
+    }
+
+    internal static string SourceFingerprint(LFEntry entry, IReadOnlyList<LFFieldValue> fields) =>
+        Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(new
+        { entry.Id, entry.LastModifiedTime, entry.PageCount, entry.FileSizeBytes, fields })));
+
+    internal static string ContentProvenanceOnly(string json, LFEntry entry, IReadOnlyList<LFFieldValue> fields)
+    {
+        var node = System.Text.Json.Nodes.JsonNode.Parse(json)!.AsObject();
+        foreach (var key in new[] { "document_name", "full_path", "folder_path", "template_id", "template_name",
+            "creator", "creation_time", "last_modified_time", "file_size_bytes", "fields" }) node.Remove(key);
+        node["source_fingerprint"] = SourceFingerprint(entry, fields);
+        return node.ToJsonString();
     }
 
     internal static string BuildMetadata(
@@ -621,11 +636,6 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
             record_type = "document-chunk",
             repository_id = repositoryId,
             entry_id = entry.Id,
-            document_name = entry.Name,
-            full_path = entry.FullPath,
-            folder_path = entry.FolderPath,
-            template_id = entry.TemplateId,
-            template_name = entry.TemplateName,
             parent_document_id = parentDocumentId,
             chunk_index = chunk.Index,
             chunk_count = chunkCount,
@@ -685,7 +695,7 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
                   and chunk.metadata ->> 'record_type' = 'document-chunk'
                   and lower(chunk.metadata ->> 'repository_id') = lower(@repository)
                   and chunk.metadata ->> 'entry_id' = @entryId
-                  and chunk.metadata ->> 'text_source' = 'laserfiche-metadata')
+                  and coalesce(chunk.metadata ->> 'text_source', '') not like 'laserfiche-metadata%')
             from public.documents parent
             where parent.metadata ->> 'source' = 'laserfiche-reports'
               and parent.metadata ->> 'record_type' = 'document-metadata'
@@ -702,8 +712,12 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
         if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false)) return null;
         using var document = JsonDocument.Parse(reader.GetString(1));
         var metadata = document.RootElement;
-        if (!CanReuseIndex(entry, fields, metadata, reader.GetBoolean(2), _localAiOptions.EmbeddingModel))
-            return null;
+        var reusable = metadata.TryGetProperty("source_fingerprint", out var fingerprint)
+            ? reader.GetBoolean(2) && entry.LastModifiedTime is not null &&
+                fingerprint.GetString() == SourceFingerprint(entry, fields) &&
+                metadata.TryGetProperty("embedding_model", out var model) && model.GetString() == _localAiOptions.EmbeddingModel
+            : CanReuseIndex(entry, fields, metadata, true, _localAiOptions.EmbeddingModel) && reader.GetBoolean(2);
+        if (!reusable) return null;
         static int Count(JsonElement value, string key) =>
             value.TryGetProperty(key, out var count) && count.ValueKind == JsonValueKind.Number &&
             count.TryGetInt32(out var parsed) ? parsed : 0;
@@ -723,81 +737,24 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
         long documentRowId, string repositoryId, LFEntry entry,
         IReadOnlyList<LFFieldValue> fields, CancellationToken cancellationToken)
     {
-        var chunks = BuildSearchChunks(entry, fields, [],
-            _localAiOptions.EffectiveChunkSize, _localAiOptions.EffectiveChunkOverlap);
-        var embeddings = await _embeddings.CreateEmbeddingsAsync(
-            chunks.Select(chunk => _localAiOptions.DocumentEmbeddingPrefix + chunk.Content).ToArray(),
-            cancellationToken).ConfigureAwait(false);
         await using var connection = new NpgsqlConnection(_options.PostgresConnectionString);
         await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
-        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
-        const string deleteSql = """
-            delete from public.documents where metadata ->> 'source' = 'laserfiche-reports'
+        await using var count = new NpgsqlCommand("""
+            select count(*)::int from public.documents
+            where metadata ->> 'source' = 'laserfiche-reports'
               and metadata ->> 'record_type' = 'document-chunk'
+              and coalesce(metadata ->> 'text_source', '') not like 'laserfiche-metadata%'
               and lower(metadata ->> 'repository_id') = lower(@repository)
               and metadata ->> 'entry_id' = @entryId
-              and metadata ->> 'text_source' = 'laserfiche-metadata';
-            """;
-        await using (var delete = new NpgsqlCommand(deleteSql, connection, transaction))
-        {
-            delete.Parameters.AddWithValue("repository", repositoryId);
-            delete.Parameters.AddWithValue("entryId", entry.Id.ToString(CultureInfo.InvariantCulture));
-            await delete.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
-        }
-        const string countSql = """
-            select count(*) from public.documents where metadata ->> 'source' = 'laserfiche-reports'
-              and metadata ->> 'record_type' = 'document-chunk'
-              and lower(metadata ->> 'repository_id') = lower(@repository)
-              and metadata ->> 'entry_id' = @entryId;
-            """;
-        long existingCount;
-        await using (var count = new NpgsqlCommand(countSql, connection, transaction))
-        {
-            count.Parameters.AddWithValue("repository", repositoryId);
-            count.Parameters.AddWithValue("entryId", entry.Id.ToString(CultureInfo.InvariantCulture));
-            existingCount = (long)(await count.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) ?? 0L);
-        }
-        var total = checked((int)existingCount + chunks.Count);
-        var status = existingCount > 0 ? "content-indexed" : "metadata-indexed";
-        var update = JsonSerializer.Serialize(new
-        {
-            document_name = entry.Name,
-            full_path = entry.FullPath,
-            folder_path = entry.FolderPath,
-            template_id = entry.TemplateId,
-            template_name = entry.TemplateName,
-            creator = entry.Creator,
-            creation_time = entry.CreationTime,
-            last_modified_time = entry.LastModifiedTime,
-            fields = fields.Select(field => new { id = field.FieldDefinitionId, name = field.FieldName,
-                value = field.Value, type = field.FieldType, is_multi_value = field.IsMultiValue }),
-            chunk_count = total,
-            embedding_model = _localAiOptions.EmbeddingModel,
-            embedding_status = "complete",
-            ingestion_status = status,
-            indexed_at = DateTimeOffset.UtcNow
-        });
-        await using (var parent = new NpgsqlCommand(
-            "update public.documents set metadata = metadata || cast(@update as jsonb) where id = @id", connection, transaction))
-        {
-            parent.Parameters.AddWithValue("update", update);
-            parent.Parameters.AddWithValue("id", documentRowId);
-            await parent.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
-        }
-        for (var index = 0; index < chunks.Count; index++)
-        {
-            // Old page chunks retain their original indexes; metadata indexes stay distinct.
-            var chunk = chunks[index] with { Index = -index - 1 };
-            await InsertChunkAsync(connection, transaction, chunk.Content,
-                BuildChunkMetadata(repositoryId, entry, documentRowId, chunk, total,
-                    _localAiOptions.EmbeddingModel, _localAiOptions.EffectiveEmbeddingDimensions),
-                embeddings[index], cancellationToken).ConfigureAwait(false);
-        }
-        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            """, connection);
+        count.Parameters.AddWithValue("repository", repositoryId);
+        count.Parameters.AddWithValue("entryId", entry.Id.ToString(CultureInfo.InvariantCulture));
+        var total = (int)(await count.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) ?? 0);
+        // Current metadata is live. Preserve existing OCR without rewriting or deleting any rows.
         return new DocumentIngestionResult(documentRowId, entry.Id, repositoryId, entry.Name,
-            fields.Count, false, status, total, _localAiOptions.EmbeddingModel,
-            0, 0, 0, 0, 0, null,
-            "Laserfiche metadata refreshed; existing page chunks preserved while OCR is disabled.");
+            fields.Count, false, total > 0 ? "content-indexed" : "metadata-indexed", total,
+            _localAiOptions.EmbeddingModel, 0, 0, 0, 0, 0, null,
+            "Existing page text preserved; metadata queries use the live repository.");
     }
 
     private static async Task DeleteExistingChunksAsync(
