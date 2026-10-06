@@ -93,14 +93,15 @@ public class ReportTests
     {
         var entries = new Entries(73);
         var configuration = new ConfigurationBuilder().Build();
-        var chat = new ReportsChatService(configuration, new NoEmbeddings(), new Repository(), entries,
-            new NoClients(), new LiveRepositoryReportService(entries, configuration));
+        var chat = CreateChat(entries, configuration);
         var result = await chat.AskAsync("ماهي الوثائق الموجود في هذا ال repasetory", default);
-        Assert.Equal(73, result.Sources.Count);
-        Assert.True(result.Scope!.Exhaustive);
+        Assert.Equal(20, result.Sources.Count);
+        Assert.False(result.Scope!.Exhaustive);
+        Assert.Equal(73, result.Pagination!.TotalCount);
         Assert.Equal(0, entries.FieldCalls.Count);
         Assert.DoesNotContain("| الحقل |", result.Answer);
-        Assert.Contains("| 73 | وثيقة 73 |", result.Answer);
+        Assert.Contains("| 20 | وثيقة 20 |", result.Answer);
+        Assert.False(entries.Enumerated);
     }
 
     [Fact]
@@ -109,12 +110,11 @@ public class ReportTests
         const string question = "ما بيانات الوثيقة رقم 619؟ اعرض اسمها وحقولها وقيمها في جدول، واذكر أي قيمة غير موجودة.";
         var entries = new Entries(1);
         var configuration = new ConfigurationBuilder().Build();
-        var chat = new ReportsChatService(configuration, new NoEmbeddings(), new Repository(), entries,
-            new NoClients(), new LiveRepositoryReportService(entries, configuration));
+        var chat = CreateChat(entries, configuration);
 
         var result = await chat.AskAsync(question, default);
 
-        Assert.Contains("تقرير بيانات الوثائق", result.Answer);
+        Assert.Contains("تقرير Laserfiche", result.Answer);
         Assert.Contains("إجراء الوثيقة", result.Answer);
         Assert.Contains("تحت الإجراء", result.Answer);
         Assert.Equal(new[] { 619 }, result.Scope!.RequestedEntryIds);
@@ -227,10 +227,10 @@ public class ReportTests
     {
         var entries = new Entries(73);
         var configuration = new ConfigurationBuilder().Build();
-        var chat = new ReportsChatService(configuration, new NoEmbeddings(), new Repository(), entries,
-            new NoClients(), new LiveRepositoryReportService(entries, configuration));
+        var chat = CreateChat(entries, configuration);
         var result = await chat.AskAsync("كم عدد المجلدات في هذا المخزن؟", default);
-        Assert.Contains("| عدد المجلدات | **1** |", result.Answer);
+        Assert.Contains("العدد الإجمالي المطابق: **1**", result.Answer);
+        Assert.False(entries.Enumerated);
         Assert.True(result.Scope!.Exhaustive);
         Assert.Equal("repo", result.Scope.RepositoryId);
         Assert.Empty(entries.FieldCalls);
@@ -265,6 +265,24 @@ public class ReportTests
     private static LiveRepositoryReportService Create(Entries entries, int cap = 10000) => new(entries,
         new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         { ["Reports:MaxLiveDocuments"] = cap.ToString() }).Build());
+
+    private static ReportsChatService CreateChat(Entries entries, IConfiguration configuration)
+    {
+        var clients = new NoClients();
+        return new ReportsChatService(new Repository(),
+            new LaserficheToolExecutor(new Search(), entries, null!, null!, null!, configuration,
+                Microsoft.Extensions.Logging.Abstractions.NullLogger<LaserficheToolExecutor>.Instance),
+            new LiveAiClient(clients, configuration, Microsoft.Extensions.Logging.Abstractions.NullLogger<LiveAiClient>.Instance), configuration);
+    }
+    private sealed class Search : ILaserficheSearchService
+    {
+        public Task<PagedResult<LFSearchResult>> AdvancedSearchAsync(string query, int page, int pageSize, CancellationToken ct = default) =>
+            Task.FromResult(new PagedResult<LFSearchResult> { TotalCount = query.Contains("Type=F") ? 1 : 73, PageNumber = page, PageSize = pageSize,
+                Items = Enumerable.Range(1,pageSize).Select(id => new LFSearchResult { EntryId=id, Name=$"وثيقة {id}" }).ToArray() });
+        public Task<PagedResult<LFSearchResult>> SimpleSearchAsync(string q,int p,int size,CancellationToken ct=default)=>AdvancedSearchAsync(q,p,size,ct);
+        public Task<PagedResult<LFSearchResult>> SearchByTemplateAsync(string q,int p,int size,CancellationToken ct=default)=>AdvancedSearchAsync(q,p,size,ct);
+        public Task<PagedResult<LFSearchResult>> SearchByFieldAsync(string q,string v,int p,int size,CancellationToken ct=default)=>AdvancedSearchAsync(q,p,size,ct);
+    }
 
     private sealed class NoEmbeddings : ITextEmbeddingService
     {

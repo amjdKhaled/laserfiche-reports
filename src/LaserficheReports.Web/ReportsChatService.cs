@@ -3,7 +3,7 @@ using System.Text.Json;
 using LaserficheReports.Application.Interfaces;
 using LaserficheReports.Domain.Entities;
 using LaserficheReports.Domain.Exceptions;
-using Npgsql;
+
 
 namespace LaserficheReports.Web;
 
@@ -14,192 +14,57 @@ internal sealed record ChatResult(string Answer, IReadOnlyList<Evidence> Sources
     public DateTimeOffset GeneratedAt { get; init; } = DateTimeOffset.UtcNow;
     public ReportQuality? Quality { get; init; }
     public int[] RelatedEntryIds { get; init; } = [];
+    public RepositoryQuery? Query { get; init; }
+    public LivePagination? Pagination { get; init; }
 }
 internal sealed record ReportQuality(string Status, bool QuoteVerification, string SemanticReview,
     string PromptVersion, int ModelCalls);
 internal sealed record IndexedDocument(int EntryId, string Name, string Path, string Status,
     int ChunkCount, string? TextSource);
-internal sealed record IndexedDocumentPage(IReadOnlyList<IndexedDocument> Items, int Page, bool HasMore);
+internal sealed record IndexedDocumentPage(IReadOnlyList<IndexedDocument> Items, int Page, bool HasMore)
+{ public int? TotalCount { get; init; } }
 
-/// <summary>Retrieves project-owned rows and verifies each document against the live repository.</summary>
-internal sealed class ReportsChatService(
-    IConfiguration configuration,
-    ITextEmbeddingService embeddings,
-    IRepositoryContext repositories,
-    ILaserficheEntryService entries,
-    IHttpClientFactory clients,
-    LiveRepositoryReportService liveReports)
+/// <summary>Routes validated requests to live Laserfiche tools only.</summary>
+internal sealed class ReportsChatService(IRepositoryContext repositories, LaserficheToolExecutor tools,
+    LiveAiClient ai, IConfiguration configuration)
 {
-    private string ConnectionString => configuration["Supabase:PostgresConnectionString"]
-        ?? throw new InvalidOperationException("Supabase:PostgresConnectionString is missing.");
-
-    public async Task<IndexedDocumentPage> ListAsync(int page, string? search, CancellationToken cancellationToken)
+    public async Task<IndexedDocumentPage> ListAsync(int page, string? search, CancellationToken ct)
     {
-        if (page < 1 || page > 1_000_000) throw new ArgumentOutOfRangeException(nameof(page));
-        if (search?.Length > 200) throw new ArgumentException("Search is too long.", nameof(search));
-        var repository = await repositories.GetActiveRepositoryAsync(cancellationToken);
-        var result = new List<IndexedDocument>();
-        await using var connection = new NpgsqlConnection(ConnectionString);
-        await connection.OpenAsync(cancellationToken);
-        const string sql = """
-            select metadata ->> 'entry_id', metadata ->> 'document_name',
-                   metadata ->> 'full_path', metadata ->> 'ingestion_status',
-                   metadata ->> 'chunk_count', metadata ->> 'text_source'
-            from public.documents
-            where metadata ->> 'source' = 'laserfiche-reports'
-              and metadata ->> 'record_type' = 'document-metadata'
-              and lower(metadata ->> 'repository_id') = lower(@repository)
-              and (@search is null or metadata ->> 'document_name' ilike @search
-                   or metadata ->> 'full_path' ilike @search
-                   or (metadata -> 'fields')::text ilike @search)
-            order by id desc limit 51 offset @offset
-            """;
-        await using var command = new NpgsqlCommand(sql, connection);
-        command.Parameters.AddWithValue("repository", repository.RepositoryId);
-        command.Parameters.Add(new NpgsqlParameter("search", NpgsqlTypes.NpgsqlDbType.Text)
-            { Value = string.IsNullOrWhiteSpace(search) ? DBNull.Value : $"%{search.Trim()}%" });
-        command.Parameters.AddWithValue("offset", (page - 1) * 50);
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        var candidates = new List<IndexedDocument>();
-        while (await reader.ReadAsync(cancellationToken))
-        {
-            if (!int.TryParse(reader.GetString(0), out var entryId)) continue;
-            candidates.Add(new IndexedDocument(entryId, reader.IsDBNull(1) ? "" : reader.GetString(1),
-                reader.IsDBNull(2) ? "" : reader.GetString(2),
-                reader.IsDBNull(3) ? "" : reader.GetString(3),
-                reader.IsDBNull(4) || !int.TryParse(reader.GetString(4), out var count) ? 0 : count,
-                reader.IsDBNull(5) ? null : reader.GetString(5)));
-        }
-        // Never expose an indexed document that the active repository credential cannot read.
-        foreach (var candidate in candidates.Take(50))
-        {
-            if (await CanReadAsync(candidate.EntryId, cancellationToken)) result.Add(candidate);
-        }
-        return new IndexedDocumentPage(result, page, candidates.Count > 50);
+        var query = new RepositoryQuery { Page = page, PageSize = 50, Name = string.IsNullOrWhiteSpace(search) ? null : search.Trim() };
+        query.Validate();
+        var data = await tools.ExecuteAsync(query, ct);
+        return new(data.Items.Select(r => new IndexedDocument(r.EntryId, r.Name, r.FullPath, "live", 0, "laserfiche-metadata-live")).ToArray(),
+            page, data.HasMore) { TotalCount = data.TotalCount };
     }
 
-    public async Task<ChatResult> AskAsync(string question, CancellationToken cancellationToken)
+    public async Task<ChatResult> AskAsync(string question, CancellationToken ct,
+        RepositoryQuery? previous = null, Func<string, Task>? progress = null)
     {
-        if (string.IsNullOrWhiteSpace(question) || question.Length > 2000)
-            throw new ArgumentException("Question must contain 1 to 2000 characters.", nameof(question));
-
-        var repository = await repositories.GetActiveRepositoryAsync(cancellationToken);
-        var requestedEntries = ReportSupport.RequestedEntries(question);
-        if (requestedEntries.Length > 50)
-            throw new ArgumentException("حدد حتى 50 وثيقة في السؤال الواحد.", nameof(question));
-        if (ReportSupport.NeedsFilterClarification(question))
-            return new ChatResult("# توضيح شروط التقرير\n\nالطلب يتضمن أكثر من شرط أو مقارنة غير مدعومة في فحص الحقول الحالي. " +
-                "اكتب شرطًا واحدًا بهذه الصيغة: «إجراء الوثيقة يساوي تحت الاجراء». لن أعرض عددًا أو قائمة على أنها حصر مؤكد لهذا الطلب.", []);
-        var condition = ReportSupport.ParseCondition(question);
-        if (requestedEntries.Length == 0 && ReportSupport.IsFolderCountQuestion(question))
-            return await liveReports.CountFoldersAsync(repository.RepositoryId, cancellationToken);
-        if (condition is not null || ReportSupport.IsInventoryQuestion(question) ||
-            (requestedEntries.Length > 0 && ReportSupport.IsDocumentMetadataQuestion(question)))
-            return await liveReports.CreateAsync(repository.RepositoryId, condition, requestedEntries, cancellationToken);
-        var hasEntryFilter = requestedEntries.Length > 0;
-        var candidateLimit = Math.Clamp(configuration.GetValue<int?>("Reports:CandidateLimit") ?? 240, 24, 1000);
-        var evidenceLimit = Math.Clamp(configuration.GetValue<int?>("Reports:EvidenceLimit") ?? 24, 8, 32);
-        var prefix = configuration["LocalAI:QueryEmbeddingPrefix"] ?? "search_query: ";
-        string? literal = null;
-        try
+        if (ReportSupport.NeedsFilterClarification(question)) throw new ArgumentException("هذا الطلب يحتاج أكثر من شرط أو مقارنة غير مدعومة. حدد اسم حقل واحد وقيمة تساوي بدقة.");
+        if (string.IsNullOrWhiteSpace(question) || question.Length > 2000) throw new ArgumentException("اكتب سؤالًا لا يتجاوز 2000 حرف.");
+        var repository = await repositories.GetActiveRepositoryAsync(ct);
+        if (progress is not null) await progress("جارٍ فهم السؤال...");
+        var zone = TimeZoneInfo.FindSystemTimeZoneById(configuration["Reports:TimeZone"] ?? "Asia/Riyadh");
+        var today = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, zone).DateTime);
+        RepositoryQuery? query = null;
+        if (previous is not null)
         {
-            var vectors = await embeddings.CreateEmbeddingsAsync([prefix + question.Trim()], cancellationToken);
-            if (vectors.Count == 0 || vectors[0].Length == 0 || vectors[0].Any(v => !float.IsFinite(v)))
-                throw new InvalidOperationException("The local embedding model returned an invalid vector.");
-            literal = "[" + string.Join(",", vectors[0].Select(v =>
-                v.ToString("R", System.Globalization.CultureInfo.InvariantCulture))) + "]";
+            previous.Validate();
+            var page = System.Text.RegularExpressions.Regex.Match(question, @"^اعرض الصفحة (\d+)[.؟?]?$", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+            if (page.Success && int.TryParse(page.Groups[1].Value, out var pageNumber)) query = previous.ForPage(pageNumber);
         }
-        catch (Exception ex) when (!cancellationToken.IsCancellationRequested &&
-            ex is HttpRequestException or InvalidOperationException or TaskCanceledException)
-        {
-            // Lexical retrieval remains usable during an embedding outage; expose this in scope.
-        }
-        var keywords = HybridRetrieval.KeywordQuery(question);
-        var candidates = new List<Evidence>();
-        await using (var connection = new NpgsqlConnection(ConnectionString))
-        {
-            await connection.OpenAsync(cancellationToken);
-            await using var command = new NpgsqlCommand(HybridRetrieval.Sql, connection);
-            command.CommandTimeout = Math.Clamp(configuration.GetValue<int?>("Reports:SearchTimeoutSeconds") ?? 60, 10, 300);
-            command.Parameters.Add(new NpgsqlParameter("embedding", NpgsqlTypes.NpgsqlDbType.Text)
-                { Value = (object?)literal ?? DBNull.Value });
-            command.Parameters.AddWithValue("hasVector", literal is not null);
-            command.Parameters.AddWithValue("keywords", keywords);
-            command.Parameters.AddWithValue("repository", repository.RepositoryId);
-            command.Parameters.AddWithValue("hasEntryFilter", hasEntryFilter);
-            command.Parameters.AddWithValue("entryIds", requestedEntries.Select(id => id.ToString(System.Globalization.CultureInfo.InvariantCulture)).ToArray());
-            command.Parameters.AddWithValue("candidateLimit", candidateLimit);
-            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-            while (await reader.ReadAsync(cancellationToken))
-            {
-                using var metadata = JsonDocument.Parse(reader.GetString(1));
-                var root = metadata.RootElement;
-                if (!root.TryGetProperty("entry_id", out var id) ||
-                    id.ValueKind != JsonValueKind.Number || !id.TryGetInt32(out var entryId))
-                    continue;
-                int? page = root.TryGetProperty("page_number", out var p) &&
-                    p.ValueKind == JsonValueKind.Number && p.TryGetInt32(out var pageValue)
-                    ? pageValue : null;
-                candidates.Add(new Evidence(entryId,
-                    root.TryGetProperty("document_name", out var name) ? name.GetString() ?? "" : "",
-                    root.TryGetProperty("full_path", out var path) ? path.GetString() ?? "" : "",
-                    page, reader.GetFloat(2), reader.GetString(0),
-                    root.TryGetProperty("text_source", out var source) ? source.GetString() ?? "" : ""));
-            }
-        }
-
-        var authorized = new HashSet<int>();
-        var denied = new HashSet<int>();
-        var allowedCandidates = new List<Evidence>();
-        foreach (var candidate in candidates)
-        {
-            if (!authorized.Contains(candidate.EntryId) && !denied.Contains(candidate.EntryId))
-            {
-                if (await CanReadAsync(candidate.EntryId, cancellationToken)) authorized.Add(candidate.EntryId);
-                else denied.Add(candidate.EntryId);
-            }
-            if (authorized.Contains(candidate.EntryId)) allowedCandidates.Add(candidate);
-        }
-        var evidence = ReportSupport.SelectEvidence(allowedCandidates, evidenceLimit);
-        var scope = new AnswerScope(hasEntryFilter ? "selected-documents" : "repository",
-            repository.RepositoryId, evidence.Select(x => x.EntryId).Distinct().Count(), evidence.Count, false,
-            hasEntryFilter ? "التحليل مقيد بالوثائق التي حددتها؛ يعتمد على المقاطع المفهرسة المتاحة منها."
-                : "البحث شمل فهرس المستودع المتاح؛ المقاطع المختارة أدلة للإجابة وليست حصرًا لجميع الوثائق.",
-            requestedEntries);
-        if (literal is null)
-            scope = scope with { Detail = scope.Detail + " البحث بالكلمات فقط؛ تعذر استخدام نموذج البحث الدلالي المحلي." };
-        if (evidence.Count == 0)
-            return new ChatResult("# تقرير البحث\n\nلم أجد أدلة مفهرسة كافية للإجابة. تأكد من فهرسة محتوى الوثائق المطلوبة.\n\n" + scope.Detail, evidence, scope);
-
-        var client = clients.CreateClient("ReportsGraph");
-        // ByteArrayContent advertises the actual UTF-8 length for Python HTTP framing.
-        using var body = new ByteArrayContent(JsonSerializer.SerializeToUtf8Bytes(
-            new { question = question.Trim(), evidence, scope }, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
-        body.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json") { CharSet = "utf-8" };
-        using var response = await client.PostAsync("answer", body, cancellationToken);
-        if (!response.IsSuccessStatusCode)
-            throw new InvalidOperationException(
-                $"Local LangGraph returned HTTP {(int)response.StatusCode}. Check the LangGraph terminal and Ollama model.");
-        var graphResponse = await response.Content.ReadFromJsonAsync<GraphAnswer>(cancellationToken);
-        if (string.IsNullOrWhiteSpace(graphResponse?.Answer))
-            throw new InvalidOperationException("The local LangGraph service returned an empty answer.");
-        return new ChatResult(graphResponse.Answer + ReportSupport.SourceTable(evidence), evidence, scope)
-            { Quality = graphResponse.Quality, RelatedEntryIds = (graphResponse.RelatedEntryIds ?? [])
-                .Where(id => evidence.Any(e => e.EntryId == id)).Distinct().ToArray() };
+        query ??= QuestionRouter.TryRoute(question, today) ?? await ai.PlanAsync(question, previous, await tools.FieldCatalogAsync(ct), ct);
+        if (previous is not null && System.Text.RegularExpressions.Regex.IsMatch(question, "النتائج|هذه النتائج|رتبها|لخصها"))
+            query = query with { Field = previous.Field, Value = previous.Value, Template = previous.Template,
+                Name = previous.Name, EntryId = previous.EntryId, FolderId = previous.FolderId,
+                FolderName = previous.FolderName, StartDate = previous.StartDate, EndDate = previous.EndDate, DateField = previous.DateField };
+        if (query.Intent == "unsupported") return new("السؤال غير متاح بهذه المرحلة أو يحتاج تحديدًا أوضح. يمكنني البحث في الأسماء والحقول والقوالب والتواريخ والعد وبيانات الوثائق. تحليل محتوى الصور والصفحات غير متاح حاليًا.", []);
+        using var queryDeadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        queryDeadline.CancelAfter(TimeSpan.FromSeconds(Math.Clamp(configuration.GetValue("Reports:QueryTimeoutSeconds", 120), 1, 1800)));
+        query = await tools.ValidateAsync(query, queryDeadline.Token);
+        if (progress is not null) await progress("جارٍ البحث في Laserfiche...");
+        var data = await tools.ExecuteAsync(query, queryDeadline.Token);
+        if (progress is not null) await progress(data.TotalCount is int total ? $"تم العثور على {total} نتيجة؛ جارٍ إعداد التقرير..." : "جارٍ إعداد النتائج المباشرة...");
+        return LaserficheToolExecutor.Format(data, query, repository.RepositoryId);
     }
-
-    private async Task<bool> CanReadAsync(int entryId, CancellationToken cancellationToken)
-    {
-        try
-        {
-            return (await entries.GetEntryAsync(entryId, cancellationToken)).EntryType == LFEntryType.Document;
-        }
-        catch (LaserficheException exception) when (exception.StatusCode is 403 or 404)
-        {
-            return false;
-        }
-        // Authentication failures and service outages must fail the entire request.
-    }
-
-    private sealed record GraphAnswer(string Answer, ReportQuality? Quality, int[]? RelatedEntryIds);
 }

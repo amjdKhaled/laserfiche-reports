@@ -10,13 +10,18 @@ let sessionEpoch = 0;
 let pendingOperations = 0;
 let chats = [];
 let active = null;
-let scan = null;
-let scanning = false;
-let pauseScan = false;
-let scanKey = '';
 let documentsPage = 1;
 let hasMoreDocuments = false;
 let historySaved = true;
+let sessionRequests = new AbortController();
+let questionRequest = null;
+let documentsRequest = null;
+let documentSequence = 0;
+let statusRequest = null;
+function cancelSessionRequests() { sessionRequests.abort(); sessionRequests = new AbortController(); statusRequest = null; }
+function requestSignal(signal, milliseconds) {
+  return AbortSignal.any([sessionRequests.signal, AbortSignal.timeout(milliseconds), ...(signal ? [signal] : [])]);
+}
 function save() {
   try { localStorage.setItem(storeKey, JSON.stringify(chats.slice(0, 30))); historySaved = true; }
   catch { historySaved = false; }
@@ -51,7 +56,7 @@ async function api(url, options) {
   const headers = new Headers(options?.headers || {});
   if (sessionRepository) headers.set('X-Reports-Repository', sessionRepository);
   if (sessionGeneration) headers.set('X-Reports-Session', sessionGeneration);
-  const response = await fetch(url, { ...options, headers });
+  const response = await fetch(url, { ...options, headers, signal: requestSignal(options?.signal, url.includes("/chat") ? 2000000 : url.endsWith("/status") ? 12000 : 130000) });
   const body = await response.json().catch(() => ({}));
   if (epoch !== sessionEpoch) throw new Error('تغيّرت جلسة المستودع؛ تم تجاهل نتيجة الطلب السابق.');
   if ([401, 409].includes(response.status) && url !== '/api/session/login') $('login-layer').classList.remove('hidden');
@@ -65,6 +70,7 @@ async function api(url, options) {
   return body;
 }
 function openSession(username, repository, server, generation) {
+  cancelSessionRequests();
   sessionGeneration = generation || '';
   sessionEpoch++;
   sessionRepository = repository || '';
@@ -74,23 +80,20 @@ function openSession(username, repository, server, generation) {
   documentsPage = 1;
   $('documents').replaceChildren();
   $('statuses').replaceChildren();
-  $('ingest-result').textContent = '';
   const identity = [sessionServer, sessionRepository, username].map(value => encodeURIComponent(value.toLowerCase())).join(':');
   historySaved = true;
   storeKey = `laserfiche-reports-chat-v2:${identity}`;
-  scanKey = `laserfiche-reports-scan-v2:${identity}`;
   try { chats = JSON.parse(localStorage.getItem(storeKey) || '[]'); }
   catch { chats = []; }
-  try { scan = JSON.parse(localStorage.getItem(scanKey) || 'null'); }
-  catch { scan = null; }
   active = null;
   $('login-layer').classList.add('hidden');
   renderHistory();
   renderMessages();
-  renderScan();
+  refreshStatuses();
 }
 $('login-form').onsubmit = async event => {
   event.preventDefault();
+  cancelSessionRequests();
   $('login-submit').disabled = true;
   $('login-error').textContent = '';
   $('login-error').classList.remove('success');
@@ -105,7 +108,7 @@ $('login-form').onsubmit = async event => {
   finally { $('login-submit').disabled = false; }
 };
 $('logout').onclick = async () => {
-  if (scanning || pendingOperations) return;
+  cancelSessionRequests();
   try { await api('/api/session/logout', { method: 'POST' }); }
   catch (error) { $('login-error').textContent = `تعذر إنهاء جلسة الخادم: ${error.message}`; }
   finally {
@@ -113,8 +116,6 @@ $('logout').onclick = async () => {
     sessionRepository = ''; sessionServer = ''; sessionGeneration = '';
     $('active-repository').textContent = '—';
     chats = []; active = null;
-    pauseScan = true;
-    scan = null;
     $('login-layer').classList.remove('hidden');
     renderHistory(); renderMessages();
   }
@@ -238,6 +239,19 @@ function renderMessages() {
         }
       } else bubble.textContent = message.text;
       item.append(bubble);
+      if (message.pagination && message.query) {
+        const pager = el('div', 'docs-pager');
+        const go = page => {
+          if ($('send').disabled) return;
+          $('question').value = `اعرض الصفحة ${page}`;
+          $('ask-form').requestSubmit();
+        };
+        const before = el('button', '', 'السابق'); before.type='button'; before.disabled = message.pagination.page <= 1;
+        before.onclick = () => go(message.pagination.page - 1);
+        const after = el('button', '', 'التالي'); after.type='button'; after.disabled = !message.pagination.hasMore;
+        after.onclick = () => go(message.pagination.page + 1);
+        pager.append(before, el('span', '', `صفحة ${message.pagination.page}`), after); bubble.append(pager);
+      }
       if (message.sources?.length) {
         const sources = el('div', 'sources');
         message.sources.forEach((source, index) => {
@@ -293,69 +307,77 @@ $('ask-form').onsubmit = async event => {
   chat.messages.push({ role: 'user', text: question });
   $('question').value = '';
   $('send').disabled = true;
-  chat.messages.push({ role: 'assistant', text: 'جاري تحليل الوثائق وتجهيز التقرير. قد يستغرق ذلك وقتًا بحسب حجم الأدلة وسرعة النموذج؛ اترك الصفحة مفتوحة...' });
+  chat.messages.push({ role: 'assistant', text: 'جارٍ فهم السؤال والبحث في Laserfiche...' });
   renderHistory(); renderMessages();
+  questionRequest = new AbortController();
+  $('cancel-question').classList.remove('hidden');
   try {
-    const result = await api('/api/reports/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question }) });
+    const previousQuery = chat.messages.slice(0, -2).reverse().find(message => message.query)?.query;
+    const result = await askStream(question, previousQuery, questionRequest.signal, message => {
+      if (epoch !== sessionEpoch) return;
+      chat.messages[chat.messages.length - 1].text = message;
+      renderMessages();
+    });
     if (epoch !== sessionEpoch) return;
-    chat.messages[chat.messages.length - 1] = { role: 'assistant', repositoryId: sessionRepository, relatedEntryIds: result.relatedEntryIds, text: result.answer, sources: result.sources, scope: result.scope, generatedAt: result.generatedAt, quality: result.quality };
+    chat.messages[chat.messages.length - 1] = { role: 'assistant', repositoryId: sessionRepository, relatedEntryIds: result.relatedEntryIds, text: result.answer, sources: result.sources, scope: result.scope, generatedAt: result.generatedAt, quality: result.quality, query: result.query, pagination: result.pagination };
   } catch (error) {
-    chat.messages[chat.messages.length - 1] = { role: 'assistant', text: `تعذر إكمال السؤال: ${error.message}` };
-  } finally { pendingOperations--; pendingChats.delete(chat.id); $('send').disabled = false; if (epoch === sessionEpoch) { save(); renderHistory(); renderMessages(); } }
+    chat.messages[chat.messages.length - 1] = { role: 'assistant', text: error.name === "AbortError" ? "أُلغي السؤال." : `تعذر إكمال السؤال: ${error.message}` };
+  } finally { pendingOperations--; pendingChats.delete(chat.id); $('send').disabled = false; $('cancel-question').classList.add('hidden'); if (epoch === sessionEpoch) { save(); renderHistory(); renderMessages(); } }
 };
 $('question').onkeydown = event => {
   if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); $('ask-form').requestSubmit(); }
 };
 async function refreshStatuses() {
+  if (statusRequest) return statusRequest;
   const epoch = sessionEpoch;
-  const appStatus = await api('/api/app/status').catch(() => ({}));
-  if (epoch !== sessionEpoch) return;
-  const services = [['Laserfiche', '/api/laserfiche/status'], ['Supabase', '/api/database/status'],
-    ['Ollama Embeddings', '/api/embeddings/status'], ['LangGraph', '/api/graph/status'], ['OCR', '/api/ocr/status']];
+  const services = [['Laserfiche', '/api/laserfiche/status'], ['الذكاء الاصطناعي', '/api/ai/status']];
   $('statuses').replaceChildren();
   const cards = services.map(([name]) => {
-    const card = el('div', 'status-card');
-    card.append(el('strong', '', name));
-    $('statuses').append(card);
-    return card;
+    const card = el('div', 'status-card'); card.append(el('strong', '', name), el('span', '', 'جارٍ الاتصال...'));
+    $('statuses').append(card); return card;
   });
-  await Promise.all(services.map(async ([name, url], index) => {
-    const deferred = name === 'OCR' && appStatus.ocrEnabled === false;
-    let healthy = false;
-    let diagnostic = '';
-    try { if (!deferred) {
+  const runningStatus = Promise.allSettled(services.map(async ([name, url], index) => {
+    try {
       const data = await api(url);
-      healthy = data.status !== 'unavailable' && data.isConnected !== false && data.authenticationSucceeded !== false;
-    } } catch(error) { diagnostic = error.message; }
-    cards[index].append(el('span', deferred ? 'deferred' : healthy ? 'ok' : 'bad',
-      deferred ? 'مؤجل' : healthy ? 'متصل' : 'غير متصل'));
-    if (name === 'Supabase' && diagnostic && epoch === sessionEpoch) {
-      cards[index].append(el('p', 'service-diagnostic', diagnostic));
-      cards[index].append(el('p', 'service-hint', 'لضبط الاتصال المحلي شغّل scripts\\configure-database.ps1 من مجلد المشروع، ثم أعد تشغيل التطبيق وحدّث الحالة.'));
+      if (epoch !== sessionEpoch) return;
+      const healthy = data.isConnected !== false && data.authenticationSucceeded !== false;
+      cards[index].lastChild.textContent = healthy ? 'متصل' : 'تعذر الاتصال';
+      cards[index].lastChild.className = healthy ? 'ok' : 'bad';
+      if (data.model) cards[index].append(el('p', 'service-hint', `نموذج المحادثة: ${data.model}`));
+    } catch (error) {
+      if (epoch !== sessionEpoch) return;
+      cards[index].lastChild.textContent = 'تعذر الاتصال'; cards[index].lastChild.className = 'bad';
+      cards[index].append(el('p', 'service-diagnostic', error.name === 'TimeoutError' ? 'انتهت مهلة فحص الاتصال' : error.message));
     }
-  }));
+  })).finally(() => { if (statusRequest === runningStatus) statusRequest = null; });
+  statusRequest = runningStatus;
+  return runningStatus;
 }
 async function loadDocuments() {
   const epoch = sessionEpoch;
+  documentsRequest?.abort();
+  documentsRequest = new AbortController();
+  const requestedPage = documentsPage;
+  const sequence = ++documentSequence;
   $('documents').replaceChildren(el('div', 'empty', 'جاري تحميل الوثائق...'));
   try {
     const search = $('document-search').value.trim();
-    const result = await api(`/api/reports/documents?page=${documentsPage}&search=${encodeURIComponent(search)}`);
+    const result = await api(`/api/reports/documents?page=${requestedPage}&search=${encodeURIComponent(search)}`, {signal: documentsRequest.signal});
+    if (epoch !== sessionEpoch || requestedPage !== documentsPage || sequence !== documentSequence) return;
     $('documents').replaceChildren();
     hasMoreDocuments = result.hasMore;
     $('previous-docs').disabled = documentsPage === 1;
     $('next-docs').disabled = !hasMoreDocuments;
-    $('documents-page').textContent = `صفحة ${documentsPage}`;
-    if (!result.items.length) $('documents').append(el('div', 'empty', 'لا توجد وثائق مفهرسة متاحة لهذه الصفحة أو البحث.'));
+    $('documents-page').textContent = `صفحة ${documentsPage}${Number.isInteger(result.totalCount) ? ` من ${Math.max(1, Math.ceil(result.totalCount / 50))} · ${result.totalCount} وثيقة` : ''}`;
+    if (!result.items.length) $('documents').append(el('div', 'empty', 'لا توجد وثائق مطابقة لهذه الصفحة أو البحث.'));
     result.items.forEach(doc => {
       const row = el('div', 'doc'), detail = el('div');
       detail.append(el('strong', '', `${doc.name} · #${doc.entryId}`));
       detail.append(el('small', '', doc.path));
-      const status = doc.status === 'metadata-indexed' ? 'بيانات مفهرسة' : doc.status === 'content-indexed' ? 'محتوى وبيانات مفهرسة' : doc.status;
-      row.append(detail, el('span', 'tag', `${doc.chunkCount} مقطع · ${status}`));
+      row.append(detail, el('span', 'tag', 'بيانات مباشرة من Laserfiche'));
       $('documents').append(row);
     });
-  } catch (error) { if (epoch === sessionEpoch) $('documents').replaceChildren(el('div', 'empty', error.message)); }
+  } catch (error) { if (epoch === sessionEpoch && requestedPage === documentsPage && sequence === documentSequence && error.name !== 'AbortError') $('documents').replaceChildren(el('div', 'empty', error.message)); }
 }
 $('refresh').onclick = refreshStatuses;
 $('reload-docs').onclick = loadDocuments;
@@ -365,138 +387,6 @@ $('document-search').onkeydown = event => {
 };
 $('previous-docs').onclick = () => { if (documentsPage > 1) { documentsPage--; loadDocuments(); } };
 $('next-docs').onclick = () => { if (hasMoreDocuments) { documentsPage++; loadDocuments(); } };
-$('ingest-form').onsubmit = async event => {
-  event.preventDefault();
-  pendingOperations++;
-  $('ingest').disabled = true;
-  $('ingest-result').textContent = 'جاري فهرسة الوثيقة، قد يستغرق ذلك عدة دقائق...';
-  try {
-    const result = await api(`/api/ingestion/laserfiche/${$('entry-id').value}`, { method: 'POST' });
-    $('ingest-result').textContent = `تمت المعالجة: ${result.ingestionStatus}، المقاطع: ${result.chunkCount}`;
-    loadDocuments();
-  } catch (error) { $('ingest-result').textContent = `فشلت الفهرسة: ${error.message}`; }
-  finally { pendingOperations--; $('ingest').disabled = false; }
-};
-
-function newScan() {
-  return { folders: [0], documents: [], seenFolders: [], seenDocuments: [],
-    foldersDone: 0, documentsDone: 0, skipped: 0, chunks: 0, failed: [], repositoryId: sessionRepository, current: '', notice: '' };
-}
-function saveScan() {
-  try { localStorage.setItem(scanKey, JSON.stringify(scan)); }
-  catch { $('scan-progress').textContent = 'تعذر حفظ نقطة الاستئناف في المتصفح. اترك الصفحة مفتوحة حتى تنتهي العملية.'; }
-}
-function renderScan() {
-  $('scan-start').disabled = scanning;
-  $('scan-reset').disabled = scanning;
-  $('logout').disabled = scanning;
-  $('scan-start').textContent = scan?.folders?.length || scan?.documents?.length || scan?.failed?.length
-    ? 'استئناف الفهرسة' : 'بدء الفهرسة الشاملة';
-  $('scan-pause').disabled = !scanning;
-  if (!scan) {
-    $('scan-progress').textContent = 'لم تبدأ الفهرسة الشاملة بعد.';
-    $('scan-errors').replaceChildren();
-    return;
-  }
-  $('scan-progress').textContent =
-    `${scanning ? 'جارية' : 'متوقفة'} · ${scan.foldersDone} مجلد · ${scan.documentsDone} وثيقة · ${scan.skipped || 0} دون تغيير · ` +
-    `${scan.chunks} مقطع · ${scan.folders.length} مجلد و${scan.documents.length} وثيقة في الانتظار` +
-    (scan.current ? ` · الآن: ${scan.current}` : '') +
-    (scan.notice ? ` · ${scan.notice}` : '');
-  $('scan-errors').replaceChildren();
-  if (scan.failed.length) {
-    $('scan-errors').append(el('strong', '', `${scan.failed.length} إخفاق؛ يمكنك الاستئناف لإعادة المحاولة:`));
-    scan.failed.slice(-10).forEach(item => $('scan-errors').append(el('div', '',
-      `${item.type === 'folder' ? 'مجلد' : 'وثيقة'} #${item.id}: ${item.message}`)));
-  }
-}
-$('scan-pause').onclick = () => { pauseScan = true; $('scan-pause').disabled = true; };
-$('scan-reset').onclick = () => {
-  if (scanning) return;
-  scan = null;
-  localStorage.removeItem(scanKey);
-  renderScan();
-};
-$('scan-start').onclick = async () => {
-  if (scanning || pendingOperations) return;
-  if (!scan || (!scan.folders.length && !scan.documents.length && !scan.failed.length)) scan = newScan();
-  else if (!scan.folders.length && !scan.documents.length && scan.failed.length) {
-    scan.failed.forEach(item => (item.type === 'folder' ? scan.folders : scan.documents).push(item.id));
-    scan.failed = [];
-  }
-  pauseScan = false;
-  scanning = true;
-  scan.notice = '';
-  renderScan();
-  const seenFolders = new Set(scan.seenFolders);
-  const seenDocuments = new Set(scan.seenDocuments);
-  try {
-    while (!pauseScan && (scan.folders.length || scan.documents.length)) {
-      if (scan.documents.length) {
-        const id = scan.documents[0];
-        scan.current = `فهرسة الوثيقة ${id}`; renderScan();
-        try {
-          const result = await api(`/api/ingestion/laserfiche/${id}`, { method: 'POST' });
-          scan.chunks += result.chunkCount || 0;
-          scan.documentsDone++;
-          if (result.wasSkipped) scan.skipped = (scan.skipped || 0) + 1;
-        } catch (error) {
-          if (error.status === 401 || error.status === 409) { pauseScan = true; scan.notice = error.message; break; }
-          if (error.status === 503) {
-            pauseScan = true;
-            scan.notice = `الخدمة المطلوبة غير متاحة: ${error.message}. عالج الاتصال ثم استأنف.`;
-            break;
-          }
-          if (error.status === 500 || error.status === 502) {
-            pauseScan = true;
-            scan.notice = `توقفت الفهرسة عند الوثيقة ${id}: ${error.message}${error.diagnosticId ? ` (رمز التشخيص ${error.diagnosticId})` : ''}. راجع سجل التطبيق ثم استأنف.`;
-            break;
-          }
-          scan.failed.push({ type: 'document', id, message: error.message });
-        }
-        scan.documents.shift();
-      } else {
-        const id = scan.folders[0];
-        scan.current = `فحص المجلد ${id || 'الجذر'}`; renderScan();
-        try {
-          const result = await api(`/api/reports/repository/folders/${id}/children`);
-          if (scan.repositoryId && scan.repositoryId.toLowerCase() !== result.repositoryId.toLowerCase()) {
-            pauseScan = true;
-            scan.notice = 'تغيّر المستودع؛ اضغط فحص جديد لبدء فهرسة المستودع الحالي.';
-            saveScan(); renderScan();
-            break;
-          }
-          scan.repositoryId = result.repositoryId;
-          for (const folder of result.folders) {
-            if (!seenFolders.has(folder.id)) { seenFolders.add(folder.id); scan.folders.push(folder.id); }
-          }
-          for (const doc of result.documents) {
-            if (!seenDocuments.has(doc.id)) { seenDocuments.add(doc.id); scan.documents.push(doc.id); }
-          }
-          scan.foldersDone++;
-        } catch (error) {
-          if (error.status === 401 || error.status === 409) { pauseScan = true; scan.notice = error.message; break; }
-          if (error.status >= 500) {
-            pauseScan = true;
-            scan.notice = `تعذر فحص المجلد ${id}: ${error.message}. راجع سجل التطبيق ثم استأنف.`;
-            break;
-          }
-          scan.failed.push({ type: 'folder', id, message: error.message });
-        }
-        scan.folders.shift();
-      }
-      scan.seenFolders = [...seenFolders];
-      scan.seenDocuments = [...seenDocuments];
-      saveScan(); renderScan();
-    }
-  } finally {
-    scanning = false;
-    scan.current = '';
-    saveScan(); renderScan();
-    loadDocuments();
-  }
-};
-setRepositorySelection(launchRepository);
 const startupEpoch = sessionEpoch;
 api('/api/session/status', { signal: AbortSignal.timeout(10000) }).then(session => {
   if (sessionEpoch !== startupEpoch) return;
@@ -512,7 +402,7 @@ api('/api/session/status', { signal: AbortSignal.timeout(10000) }).then(session 
 });
 
 $('switch-repository').onclick = () => {
-  if (scanning || pendingOperations) { $('active-repository').title='أوقف الفهرسة وانتظر اكتمال الطلب قبل التبديل'; return; }
+  cancelSessionRequests();
   $('login-layer').classList.remove('hidden');
   $('password').value=''; $('repository-id').focus();
 };
@@ -534,3 +424,37 @@ $('discover-repositories').onclick = async () => {
   } catch(error) { $('login-error').textContent=error.message; }
   finally { $('discover-repositories').disabled=false; }
 };
+
+$('cancel-question').onclick = () => questionRequest?.abort();
+async function askStream(question, previousQuery, signal, progress) {
+  const headers = new Headers({'Content-Type':'application/json', 'X-Reports-Repository':sessionRepository, 'X-Reports-Session':sessionGeneration});
+  const response = await fetch('/api/reports/chat/stream', {method:'POST', headers,
+    body:JSON.stringify({question, previousQuery}), signal:requestSignal(signal, 2000000)});
+  if (!response.ok) {
+    const problem = await response.json().catch(() => ({}));
+    throw new Error(problem.message || problem.detail || 'تعذر تنفيذ السؤال.');
+  }
+  // Compatibility for non-streaming test doubles and reverse proxies.
+  if (!response.body?.getReader) return response.json();
+  const reader = response.body.getReader(); const decoder = new TextDecoder();
+  let buffer = '', result = null;
+  try {
+    while (true) {
+      const chunk = await reader.read();
+      buffer += decoder.decode(chunk.value || new Uint8Array(), {stream:!chunk.done});
+      let boundary;
+      while ((boundary = buffer.indexOf('\n\n')) >= 0) {
+        const block = buffer.slice(0,boundary); buffer = buffer.slice(boundary + 2);
+        const kind = block.split('\n').find(line=>line.startsWith('event: '))?.slice(7);
+        const data = JSON.parse(block.split('\n').find(line=>line.startsWith('data: '))?.slice(6) || '{}');
+        if (kind === 'status') progress(data.message);
+        if (kind === 'delta') { if (result) { result.answer += data.text; progress(result.answer); } }
+        if (kind === 'result') { result = data; progress(result.answer); }
+        if (kind === 'error') throw new Error(data.message);
+      }
+      if (chunk.done) break;
+    }
+  } finally { reader.releaseLock(); }
+  if (!result) throw new Error('لم تصل نتيجة مكتملة من الخادم.');
+  return result;
+}

@@ -1,7 +1,7 @@
 name: Verify Reports
 on:
   push:
-    branches: [feature/reports-chat-langgraph]
+    branches: [feature/reports-chat-langgraph, refactor/laserfiche-first-live-data]
   pull_request:
 jobs:
   dotnet:
@@ -12,14 +12,20 @@ jobs:
         with:
           dotnet-version: '8.0.x'
       - run: dotnet test LaserficheReports.sln --configuration Release
+      - run: dotnet build src/LaserficheReports.Web
+      - run: python tools/live-query-smoke.py --dotnet dotnet
       - shell: pwsh
         run: |
           $parseErrors = $null
           $tokens = $null
-          [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path scripts/configure-database.ps1), [ref]$tokens, [ref]$parseErrors) | Out-Null
-          if ($parseErrors.Count -gt 0) { throw ($parseErrors | Out-String) }
+          foreach ($script in @('scripts/configure-database.ps1', 'scripts/start-reports.ps1')) {
+            [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $script), [ref]$tokens, [ref]$parseErrors) | Out-Null
+            if ($parseErrors.Count -gt 0) { throw ($parseErrors | Out-String) }
+          }
       - shell: pwsh
         run: ./scripts/test-configure-database.ps1
+      - shell: pwsh
+        run: ./scripts/test-start-reports.ps1
   python:
     runs-on: ubuntu-latest
     steps:

@@ -91,13 +91,23 @@ internal sealed class LaserficheSearchService : ILaserficheSearchService
             pageSize,
             cancellationToken);
 
+    public Task<PagedResult<LFSearchResult>> QueryAsync(string expression, int page, int pageSize,
+        string sort, IReadOnlyList<string> fields, CancellationToken cancellationToken = default)
+    {
+        if (sort is not ("creationTime desc" or "creationTime asc" or "lastModifiedTime desc" or "name asc" or "id asc"))
+            throw new ArgumentException("Invalid sort.");
+        if (fields.Count > 10) throw new ArgumentException("At most ten projected fields.");
+        return ExecuteSearchAsync("structured-query", SearchType.Advanced, expression, page, pageSize,
+            cancellationToken, sort, fields);
+    }
+
     private async Task<PagedResult<LFSearchResult>> ExecuteSearchAsync(
         string displayQuery,
         SearchType searchType,
         string expression,
         int page,
         int pageSize,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, string sort = "creationTime desc", IReadOnlyList<string>? fields = null)
     {
         ValidatePaging(page, pageSize);
 
@@ -114,9 +124,8 @@ internal sealed class LaserficheSearchService : ILaserficheSearchService
         var requestBody = new { searchCommand = expression };
 
         _logger.LogInformation(
-            "Search submit → POST {Url} | query: {Query}",
-            searchUrl,
-            displayQuery);
+            "Search submit → POST {Url}",
+            searchUrl);
 
         using var submitResponse = await client
             .PostAsJsonAsync(searchUrl, requestBody, JsonOptions.Default, cancellationToken)
@@ -182,7 +191,7 @@ internal sealed class LaserficheSearchService : ILaserficheSearchService
                 token,
                 page,
                 pageSize,
-                cancellationToken)
+                cancellationToken, sort, fields)
             .ConfigureAwait(false);
     }
 
@@ -238,14 +247,16 @@ internal sealed class LaserficheSearchService : ILaserficheSearchService
         string operationToken,
         int page,
         int pageSize,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, string sort, IReadOnlyList<string>? fields)
     {
         var firstUrl = AddPagingQuery(
-            _adapter.BuildSearchResultsUrl(repositoryId, operationToken), page, pageSize);
+            _adapter.BuildSearchResultsUrl(repositoryId, operationToken), page, pageSize,
+            sort, fields);
         client.DefaultRequestHeaders.Remove("Prefer");
         client.DefaultRequestHeaders.TryAddWithoutValidation("Prefer", $"odata.maxpagesize={pageSize}");
-        return await ReadRequestedPageAsync(client, null, firstUrl, 1, pageSize, cancellationToken)
+        var result = await ReadRequestedPageAsync(client, null, firstUrl, 1, pageSize, cancellationToken, page)
             .ConfigureAwait(false);
+        return result with { PageNumber = page };
     }
 
     private async Task<PagedResult<LFSearchResult>> ReadRequestedPageAsync(
@@ -254,7 +265,7 @@ internal sealed class LaserficheSearchService : ILaserficheSearchService
         string initialUrl,
         int page,
         int pageSize,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, int serverPage = 1)
     {
         var skip = checked((page - 1) * pageSize);
         var required = checked(skip + pageSize);
@@ -310,11 +321,14 @@ internal sealed class LaserficheSearchService : ILaserficheSearchService
             .ToList();
 
         var items = distinct.Skip(skip).Take(pageSize).ToList().AsReadOnly();
-        var effectiveTotal = totalCount ?? (nextUrl is null ? distinct.Count : skip + items.Count + 1);
+        var logicalSkip = checked((serverPage - 1) * pageSize + skip);
+        var effectiveTotal = totalCount ?? (nextUrl is null ? logicalSkip + items.Count : logicalSkip + items.Count + 1);
         return new PagedResult<LFSearchResult>
         {
             Items = items,
-            TotalCount = Math.Max(effectiveTotal, skip + items.Count),
+            TotalCount = Math.Max(effectiveTotal, logicalSkip + items.Count),
+            TotalCountIsExact = totalCount.HasValue || (nextUrl is null && items.Count < pageSize && distinct.Count <= skip + items.Count),
+            HasMore = totalCount.HasValue ? logicalSkip + items.Count < totalCount.Value : nextUrl is not null || distinct.Count > skip + items.Count || items.Count == pageSize,
             PageNumber = page,
             PageSize = pageSize
         };
@@ -329,7 +343,7 @@ internal sealed class LaserficheSearchService : ILaserficheSearchService
         if (body.StartsWith('['))
         {
             var items = JsonSerializer.Deserialize<List<SearchResultResource>>(body, JsonOptions.Default) ?? [];
-            return new ResultPage(items, null, items.Count);
+            return new ResultPage(items, null, null);
         }
 
         var result = JsonSerializer.Deserialize<ODataPagedList<SearchResultResource>>(body, JsonOptions.Default)
@@ -369,9 +383,42 @@ internal sealed class LaserficheSearchService : ILaserficheSearchService
         TemplateName = r.TemplateName,
         TemplateId = r.TemplateId,
         Creator = r.Creator,
-        CreationTime = r.CreationTime,
-        LastModifiedTime = r.LastModifiedTime
+        CreationTime = r.CreationTime ?? r.CreatedTime,
+        LastModifiedTime = r.LastModifiedTime ?? r.ModifiedTime,
+        FieldValues = ParseProjectedFields(r.Fields)
     };
+
+    private static IReadOnlyDictionary<string, string?> ParseProjectedFields(JsonElement? fields)
+    {
+        var result = new Dictionary<string, string?>();
+        if (fields is null || fields.Value.ValueKind == JsonValueKind.Null) return result;
+        static string? Value(JsonElement value)
+        {
+            if (value.ValueKind == JsonValueKind.Null) return null;
+            if (value.ValueKind == JsonValueKind.Array)
+            {
+                if (value.GetArrayLength() > 1) throw new JsonException("Projection returned multiple values for one field; complete grouping is unavailable.");
+                return value.GetArrayLength() == 0 ? null : Value(value[0]);
+            }
+            if (value.ValueKind == JsonValueKind.Object)
+            {
+                if (value.TryGetProperty("values", out var values)) return Value(values);
+                if (value.TryGetProperty("value", out var scalar)) return Value(scalar);
+                throw new JsonException("Unrecognized field projection shape.");
+            }
+            return value.ToString();
+        }
+        if (fields.Value.ValueKind == JsonValueKind.Array)
+            foreach (var field in fields.Value.EnumerateArray())
+            {
+                var name = field.GetProperty("name").GetString() ?? throw new JsonException("Projected field missing a name.");
+                result.Add(name, Value(field));
+            }
+        else if (fields.Value.ValueKind == JsonValueKind.Object)
+            foreach (var field in fields.Value.EnumerateObject()) result.Add(field.Name, Value(field.Value));
+        else throw new JsonException("Unsupported field projection shape.");
+        return result;
+    }
 
     private static string? ResolveNextLink(string currentUrl, string? nextLink)
     {
@@ -394,19 +441,20 @@ internal sealed class LaserficheSearchService : ILaserficheSearchService
     {
         if (page < 1)
             throw new ArgumentOutOfRangeException(nameof(page), "Page must be at least 1.");
-        if (pageSize < 1)
+        if (pageSize is < 1 or > 150)
             throw new ArgumentOutOfRangeException(nameof(pageSize), "Page size must be at least 1.");
     }
 
-    private static string AddPagingQuery(string url, int page, int pageSize)
+    private static string AddPagingQuery(string url, int page, int pageSize, string sort, IReadOnlyList<string>? fields)
     {
         var skip = checked((page - 1) * pageSize);
         var separator = url.Contains('?', StringComparison.Ordinal) ? '&' : '?';
-        return $"{url}{separator}$skip={skip}&$top={pageSize}&$count=true&$orderby=creationTime%20desc";
+        return $"{url}{separator}$skip={skip}&$top={pageSize}&$count=true&$orderby={Uri.EscapeDataString(sort)}" +
+            string.Concat((fields ?? []).Select(f => "&fields=" + Uri.EscapeDataString(f)));
     }
 
     private static string EscapeSearchTerm(string term) =>
-        term.Replace("\"", "\\\"").Replace("\\", "\\\\");
+        term.Replace("\\", "\\\\").Replace("\"", "\\\"");
 
     private static LFEntryType ParseEntryType(string? raw)
     {
@@ -519,10 +567,19 @@ internal sealed class LaserficheSearchService : ILaserficheSearchService
         [JsonPropertyName("creator")]
         public string? Creator { get; init; }
 
+        [JsonPropertyName("fields")]
+        public JsonElement? Fields { get; init; }
+
         [JsonPropertyName("creationTime")]
         public DateTimeOffset? CreationTime { get; init; }
 
         [JsonPropertyName("lastModifiedTime")]
         public DateTimeOffset? LastModifiedTime { get; init; }
+
+        [JsonPropertyName("modifiedTime")]
+        public DateTimeOffset? ModifiedTime { get; init; }
+
+        [JsonPropertyName("createdTime")]
+        public DateTimeOffset? CreatedTime { get; init; }
     }
 }

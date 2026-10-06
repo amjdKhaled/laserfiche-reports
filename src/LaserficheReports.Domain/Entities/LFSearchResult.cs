@@ -8,6 +8,8 @@ public sealed record LFSearchResult
     /// <summary>Entry ID of the matching entry.</summary>
     public int EntryId { get; init; }
 
+    public IReadOnlyDictionary<string, string?> FieldValues { get; init; } = new Dictionary<string, string?>();
+
     /// <summary>Display name of the matching entry.</summary>
     public string Name { get; init; } = string.Empty;
 

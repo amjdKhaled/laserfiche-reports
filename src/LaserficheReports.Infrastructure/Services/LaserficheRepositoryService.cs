@@ -137,10 +137,11 @@ internal sealed class LaserficheRepositoryService : ILaserficheRepositoryService
                 ApiVersion     = _adapter.ApiVersion,
             });
         }
+        catch (OperationCanceledException) { throw; }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Connection test failed.");
-            return ConnectionStatus.Failure(ex.Message);
+            _logger.LogWarning("Connection test failed. Type={Type}", ex.GetType().Name);
+            return ConnectionStatus.Failure("تعذر الاتصال بـLaserfiche. تحقق من عنوان الخادم والمستودع وبيانات الدخول.");
         }
     }
 

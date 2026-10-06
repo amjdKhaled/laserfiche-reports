@@ -13,6 +13,11 @@ namespace LaserficheReports.Application.Interfaces;
 /// </remarks>
 public interface ILaserficheSearchService
 {
+    // Validated backend query only; never accepts raw expressions from the browser or model.
+    Task<PagedResult<LFSearchResult>> QueryAsync(string expression, int page, int pageSize,
+        string sort, IReadOnlyList<string> fields, CancellationToken cancellationToken = default) =>
+        AdvancedSearchAsync(expression, page, pageSize, cancellationToken);
+
     /// <summary>
     /// Performs a simple keyword search using the Laserfiche SimpleSearches API.
     /// Matches entry names and full-text content where full-text indexing is enabled.
