@@ -98,6 +98,8 @@ public class ReportTests
     [InlineData("كم عدد الوثائق في المستودع؟", "search", "LASERFICHE_QUERY")]
     [InlineData("ماهي الوثائق التي إجراء الوثيقة فيها تحت الإجراء؟", "search", "LASERFICHE_QUERY")]
     [InlineData("كم وثيقة تحت الإجراء؟", "search", "LASERFICHE_QUERY")]
+    [InlineData("اعطيني الوثائق التي تحتوي على تحت الاجراء", "search", "LASERFICHE_QUERY")]
+    [InlineData("اعطيني الوثائق التي تحتوي على حالة الوثيقة = تحت الاجراء", "search", "LASERFICHE_QUERY")]
     [InlineData("ما آخر 10 وثائق معدلة؟", "recent", "LASERFICHE_QUERY")]
     [InlineData("ما الوثائق المنشأة اليوم؟", "created", "LASERFICHE_QUERY")]
     [InlineData("ما القوالب الموجودة؟", "templates", "LASERFICHE_QUERY")]
@@ -144,6 +146,62 @@ public class ReportTests
         Assert.False(query.ReadAll);
     }
 
+    [Theory]
+    [InlineData("اعطيني الوثائق التي تحتوي على تحت الاجراء")]
+    [InlineData("اعطيني الوثائق التي تحتوي على حالة الوثيقة = تحت الاجراء")]
+    [InlineData("ماهي الوثائق الموجود فيها إجراء الوثيقة يساوي تحت الاجراء")]
+    public async Task ScreenshotQuestionsSearchDespiteRepeatedFieldDefinitions(string question)
+    {
+        var query = new Searches();
+        var service = Create(new Entries(73), query, new Definitions("إجراء الوثيقة", "إجراء الوثيقة", "اجراء الوثيقة"));
+        var plan = QuestionRouter.TryRoute(question)!;
+        var result = await service.CreateAsync("repo", plan, [], default);
+        Assert.Contains("{[]:[إجراء الوثيقة]=", query.Expression);
+        Assert.Contains("**73**", result.Answer);
+    }
+
+    [Fact]
+    public async Task SpellingVariantsWithoutLiteralMatchSearchAllAuthoritativeNames()
+    {
+        var query = new Searches();
+        await Create(new Entries(73), query, new Definitions("إ جراء الوثيقة", "اجراء الوثيقة", "اجراء الوثيقة"))
+            .SelectAsync(QuestionRouter.TryRoute("اعطيني الوثائق التي تحتوي على تحت الاجراء")!, [], false, default);
+        Assert.Equal(LiveRepositoryReportService.Documents +
+            " & ({[]:[إ جراء الوثيقة]=\"تحت الاجراء\"} | {[]:[اجراء الوثيقة]=\"تحت الاجراء\"})", query.Expression);
+    }
+
+    [Theory]
+    [InlineData("تحت الاجراء")]
+    [InlineData("تحت الإجراء")]
+    public void ImplicitStatusPreservesTheRequestedValue(string value) =>
+        Assert.Equal(value, QuestionRouter.TryRoute("اعطيني الوثائق التي تحتوي على " + value)!.Value);
+
+    [Fact]
+    public async Task LiteralStatusFieldWinsOverActionAlias()
+    {
+        var query = new Searches();
+        await Create(new Entries(73), query, new Definitions("حالة الوثيقة", "إجراء الوثيقة"))
+            .SelectAsync(QuestionRouter.TryRoute("اعطيني الوثائق التي تحتوي على حالة الوثيقة = تحت الاجراء")!, [], false, default);
+        Assert.Contains("{[]:[حالة الوثيقة]=", query.Expression);
+        Assert.DoesNotContain("[إجراء الوثيقة]", query.Expression);
+    }
+
+    [Fact]
+    public async Task LiteralFieldWinsOverEquivalentSpellingsAndShorterSuffix()
+    {
+        var query = new Searches();
+        await Create(new Entries(73), query, new Definitions("الوثيقة", "إجراء الوثيقة", "اجراء الوثيقة"))
+            .SelectAsync(new QueryPlan("search", "اعرض اجراء الوثيقة", "تحت الاجراء"), [], false, default);
+        Assert.Equal(LiveRepositoryReportService.Documents + " & {[]:[اجراء الوثيقة]=\"تحت الاجراء\"}", query.Expression);
+    }
+
+    [Fact]
+    public async Task StatusAliasStillRequiresAnExistingLiveField()
+    {
+        await Assert.ThrowsAsync<ArgumentException>(() => Create(new Entries(73), new Searches(), new Definitions("الإدارة"))
+            .SelectAsync(new QueryPlan("search", "حالة الوثيقة", "تحت الاجراء"), [], false, default));
+    }
+
     [Fact]
     public async Task UnknownFieldCannotBecomeZeroAndUnknownTotalCannotBecomeExact()
     {
@@ -174,14 +232,14 @@ public class ReportTests
     public void ToolArgumentsCannotInjectQuery(string value) =>
         Assert.Throws<ArgumentException>(() => LiveRepositoryReportService.Term(value));
 
-    private static LiveRepositoryReportService Create(Entries entries, Searches search) => new(entries, search,
-        new Definitions(), new Templates(), Microsoft.Extensions.Logging.Abstractions.NullLogger<LiveRepositoryReportService>.Instance);
+    private static LiveRepositoryReportService Create(Entries entries, Searches search, Definitions? definitions = null) => new(entries, search,
+        definitions ?? new Definitions(), new Templates(), Microsoft.Extensions.Logging.Abstractions.NullLogger<LiveRepositoryReportService>.Instance);
 
-    private sealed class Definitions : ILaserficheFieldDefinitionService
+    private sealed class Definitions(params string[] names) : ILaserficheFieldDefinitionService
     {
         public Task<IReadOnlyDictionary<int, LFFieldDefinition>> GetFieldDefinitionsAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult<IReadOnlyDictionary<int, LFFieldDefinition>>(new Dictionary<int, LFFieldDefinition>
-            { [1] = new() { Id = 1, Name = "إجراء الوثيقة" }, [2] = new() { Id = 2, Name = "الإدارة" } });
+            Task.FromResult<IReadOnlyDictionary<int, LFFieldDefinition>>((names.Length == 0 ? ["إجراء الوثيقة", "الإدارة"] : names)
+                .Select((name, index) => new LFFieldDefinition { Id = index + 1, Name = name }).ToDictionary(f => f.Id));
     }
     private sealed class Templates : ILaserficheTemplateService
     {

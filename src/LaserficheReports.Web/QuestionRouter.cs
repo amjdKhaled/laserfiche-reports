@@ -31,7 +31,12 @@ internal sealed class QuestionRouter(IHttpClientFactory clients)
         var status = Regex.Match(q, @"(?:تحت (?:ال)?اجراء|المكتملة)");
         if (ids.Length == 0 && status.Value == "المكتملة") return new QueryPlan("clarify");
         if (ids.Length == 0 && status.Success)
-            return new QueryPlan("search", "إجراء الوثيقة", status.Value == "المكتملة" ? "مكتمل" : "تحت الإجراء", Content: content);
+        {
+            // Normalize field names for discovery, but preserve the user's field
+            // value: the repository decides which stored values match it.
+            var value = Regex.Match(question, @"تحت\s+(?:ال)?[اأإآ]جراء").Value;
+            return new QueryPlan("search", "إجراء الوثيقة", value, Content: content);
+        }
         if (content && (ids.Length > 0 || Regex.IsMatch(q, @"(?:محتوي|نص).*?(?:الوثائق|المستندات|المستودع)")))
             return new QueryPlan("content", Content: true);
         if (ids.Length > 0 && Regex.IsMatch(q, @"(?:metadata|ميتا|بيانات|حقول|اسم|اين|مكان|مسار)"))
