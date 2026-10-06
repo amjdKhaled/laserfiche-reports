@@ -21,15 +21,25 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
         return value.Replace("\\", "\\\\", StringComparison.Ordinal);
     }
 
-    private async Task<string> ResolveFieldAsync(string question, CancellationToken ct)
+    private async Task<string[]> ResolveFieldsAsync(string question, CancellationToken ct)
     {
         var definitions = await fields.GetFieldDefinitionsAsync(ct);
-        var candidates = definitions.Values.Where(f => ReportSupport.MatchesField(new FieldCondition(question, ""), f.Name))
-            .OrderByDescending(f => ReportSupport.MatchKey(f.Name).Length).ToArray();
+        var names = definitions.Values.Select(f => f.Name).Where(n => !string.IsNullOrWhiteSpace(n))
+            .Distinct(StringComparer.Ordinal).ToArray();
+        var candidates = names.Where(n => ReportSupport.MatchesField(new FieldCondition(question, ""), n))
+            .OrderByDescending(n => ReportSupport.MatchKey(n).Length).ToArray();
+        // Prefer an actual status field. Only use the established action-field alias
+        // when the repository has no field matching the requested status name.
+        if (candidates.Length == 0 && ReportSupport.MatchesField(new FieldCondition(question, ""), "حالة الوثيقة"))
+            candidates = names.Where(n => ReportSupport.MatchKey(n) == ReportSupport.MatchKey("إجراء الوثيقة")).ToArray();
         if (candidates.Length == 0) throw new ArgumentException("لم أتعرف على الحقل المطلوب. اكتب اسمه الكامل كما يظهر في Laserfiche.");
-        if (candidates.Count(f => ReportSupport.MatchKey(f.Name).Length == ReportSupport.MatchKey(candidates[0].Name).Length) > 1)
-            throw new ArgumentException("اسم الحقل غير محدد. اكتب اسمه الكامل.");
-        return Term(candidates[0].Name, true);
+        var longest = ReportSupport.MatchKey(candidates[0]);
+        candidates = candidates.Where(n => ReportSupport.MatchKey(n) == longest).ToArray();
+        var literal = question.Trim().TrimEnd('"', '\'', '«', '»');
+        var exact = candidates.FirstOrDefault(n => literal.EndsWith(n, StringComparison.Ordinal));
+        // Different IDs with the same name are one search field. If only spelling
+        // differs and no literal name was supplied, search each authoritative name.
+        return (exact is null ? candidates : [exact]).Select(n => Term(n, true)).ToArray();
     }
 
     public async Task<PagedResult<LFSearchResult>> SelectAsync(QueryPlan plan, IReadOnlyList<int> ids,
@@ -42,9 +52,12 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
         string? requestedField = null;
         if (plan.Field is not null)
         {
-            requestedField = await ResolveFieldAsync(plan.Field, ct);
+            var resolvedFields = await ResolveFieldsAsync(plan.Field, ct);
+            requestedField = resolvedFields.Length == 1 ? resolvedFields[0] : null;
             if (plan.Value is null) throw new ArgumentException("اكتب قيمة الحقل المطلوب.");
-            expression += $" & {{[]:[{requestedField}]=\"{Term(plan.Value)}\"}}";
+            var value = Term(plan.Value);
+            var filters = resolvedFields.Select(name => $"{{[]:[{name}]=\"{value}\"}}").ToArray();
+            expression += " & " + (filters.Length == 1 ? filters[0] : "(" + string.Join(" | ", filters) + ")");
         }
         if (plan.Template is not null)
         {
@@ -80,7 +93,12 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
                 $" & {{LF:{key}>=\"{start}\"}} & {{LF:{key}<=\"{end}\"}}";
         }
         if (plan.GroupBy is not null && plan.GroupBy != "template")
-            requestedField = await ResolveFieldAsync(plan.GroupBy, ct);
+        {
+            var resolvedFields = await ResolveFieldsAsync(plan.GroupBy, ct);
+            if (resolvedFields.Length != 1)
+                throw new ArgumentException("حدد حقل التجميع من الأسماء الموجودة: " + string.Join("، ", resolvedFields));
+            requestedField = resolvedFields[0];
+        }
         var watch = System.Diagnostics.Stopwatch.StartNew();
         var result = await searches.QueryAsync(expression, 1, plan.Limit,
             plan.Operation == "recent" ? "lastModifiedTime desc" : "id asc", requestedField, readAll, ct);
