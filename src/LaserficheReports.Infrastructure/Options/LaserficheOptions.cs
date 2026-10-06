@@ -94,7 +94,7 @@ public sealed class LaserficheOptions
     /// former 30-second value in laserfiche.runtime.json; keep those installations
     /// working without requiring a manual settings-file migration.
     /// </summary>
-    public int EffectiveTimeoutSeconds => Math.Max(TimeoutSeconds, DefaultTimeoutSeconds);
+    public int EffectiveTimeoutSeconds => Math.Clamp(TimeoutSeconds, 5, 45);
 
     public CredentialProviderType CredentialProvider { get; set; } =
         OperatingSystem.IsWindows()

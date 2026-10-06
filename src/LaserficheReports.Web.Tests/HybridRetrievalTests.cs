@@ -59,7 +59,8 @@ public class HybridRetrievalDatabaseTests
               (3, 'قرار ٩٧٧ سري', '{"source":"laserfiche-reports","repository_id":"other","record_type":"document-chunk","entry_id":3}', '[1,0,0]'),
               (4, 'قرار ٩٧٧ ليس للمشروع', '{"source":"n8n","repository_id":"repo","record_type":"document-chunk","entry_id":4}', '[1,0,0]'),
               (5, 'قرار ٩٧٧ بلا متجه', '{"source":"laserfiche-reports","repository_id":"repo","record_type":"document-chunk","entry_id":5}', null),
-              (6, 'قرار ٩٧٧ بيانات أصلية', '{"source":"laserfiche-reports","repository_id":"repo","record_type":"document-metadata","entry_id":6}', '[1,0,0]');
+              (6, 'قرار ٩٧٧ بيانات أصلية', '{"source":"laserfiche-reports","repository_id":"repo","record_type":"document-metadata","entry_id":6}', '[1,0,0]'),
+              (7, 'قرار ٩٧٧ بيانات أصلية قديمة', '{"source":"laserfiche-reports","repository_id":"repo","record_type":"document-chunk","text_source":"laserfiche-metadata","entry_id":7}', '[1,0,0]');
             """, connection, transaction)) await setup.ExecuteNonQueryAsync();
 
         async Task<List<string>> Query(bool hasVector, string[] ids, string question)

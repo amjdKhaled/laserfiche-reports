@@ -13,6 +13,10 @@ namespace LaserficheReports.Application.Interfaces;
 /// </remarks>
 public interface ILaserficheSearchService
 {
+    Task<PagedResult<LFSearchResult>> QueryAsync(string expression, int page, int pageSize,
+        string sort = "creationTime desc", string? field = null, bool readAll = false,
+        CancellationToken cancellationToken = default);
+
     /// <summary>
     /// Performs a simple keyword search using the Laserfiche SimpleSearches API.
     /// Matches entry names and full-text content where full-text indexing is enabled.

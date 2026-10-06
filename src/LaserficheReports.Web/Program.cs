@@ -42,6 +42,7 @@ builder.Configuration.AddJsonFile(
 // process working directory. Example: Laserfiche__ServerUrl=https://localhost.
 builder.Configuration.AddEnvironmentVariables();
 
+builder.Logging.AddSimpleConsole(options => options.IncludeScopes = true);
 builder.Services.AddDataProtection();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddDistributedMemoryCache();
@@ -55,6 +56,7 @@ builder.Services.AddSession(options =>
 builder.Services.AddLaserficheInfrastructure(builder.Configuration);
 builder.Services.AddScoped<ReportsChatService>();
 builder.Services.AddScoped<LiveRepositoryReportService>();
+builder.Services.AddScoped<QuestionRouter>();
 builder.Services.AddHttpClient("ReportsGraph", client =>
 {
     var baseUrl = builder.Configuration["ReportsGraph:BaseUrl"] ?? "http://127.0.0.1:8766";
@@ -63,7 +65,7 @@ builder.Services.AddHttpClient("ReportsGraph", client =>
         uri.Host is not ("127.0.0.1" or "localhost" or "::1"))
         throw new InvalidOperationException("ReportsGraph:BaseUrl must be local HTTP.");
     client.BaseAddress = new Uri(uri.AbsoluteUri.TrimEnd('/') + "/");
-    client.Timeout = TimeSpan.FromMinutes(15);
+    client.Timeout = TimeSpan.FromSeconds(120);
 }).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
 {
     AllowAutoRedirect = false,
@@ -72,6 +74,36 @@ builder.Services.AddHttpClient("ReportsGraph", client =>
 
 var app = builder.Build();
 var startedAtUtc = DateTimeOffset.UtcNow;
+
+// One boundary maps failures without leaking technical text to the browser.
+app.Use(async (context, next) =>
+{
+    var watch = System.Diagnostics.Stopwatch.StartNew();
+    using var scope = app.Logger.BeginScope(new Dictionary<string, object> { ["RequestId"] = context.TraceIdentifier });
+    var original = context.RequestAborted;
+    using var budget = CancellationTokenSource.CreateLinkedTokenSource(original);
+    var path = context.Request.Path;
+    budget.CancelAfter(TimeSpan.FromSeconds(path.StartsWithSegments("/api/reports/chat") ? 180 :
+        path.StartsWithSegments("/api/ingestion") ? 1800 : path.Value?.EndsWith("/status") == true ? 10 : 60));
+    context.RequestAborted = budget.Token;
+    try { await next(); }
+    catch (Exception ex) when (!context.Response.HasStarted)
+    {
+        app.Logger.LogWarning(ex, "Request failed Path={Path} DurationMs={DurationMs}", path, watch.ElapsedMilliseconds);
+        if (original.IsCancellationRequested) return;
+        var timeout = ex is OperationCanceledException or TimeoutException;
+        context.Response.StatusCode = timeout ? 504 : ex is ArgumentException ? 400 : 503;
+        await context.Response.WriteAsJsonAsync(new { error = timeout ? "request_timeout" : "service_unavailable",
+            message = timeout ? "تعذر إكمال الطلب خلال الوقت المحدد." :
+                ex is ArgumentException ? "تعذر تنفيذ الطلب. تحقق من المعلومات المدخلة." : "الخدمة المطلوبة غير متاحة حاليًا. أعد المحاولة لاحقًا." }, original);
+    }
+    finally
+    {
+        context.RequestAborted = original;
+        app.Logger.LogInformation("Stage=TOTAL Path={Path} Status={Status} DurationMs={DurationMs}", path,
+            context.Response.StatusCode, watch.ElapsedMilliseconds);
+    }
+});
 
 app.Logger.LogInformation(
     "Local configuration: File={LocalSettingsPath}; Exists={LocalSettingsExists}; " +
@@ -107,15 +139,21 @@ app.Use(async (context, next) =>
     await next();
 });
 app.UseSession();
-// Serialize requests sharing a browser session, including requests from other tabs.
-// Commit before releasing: a repository switch cannot race an in-flight report.
+// Serialize only session mutations. Reads use the loaded session snapshot and never block navigation during AI generation.
 var sessionGates = Enumerable.Range(0, 64).Select(_ => new SemaphoreSlim(1, 1)).ToArray();
 app.Use(async (context, next) =>
 {
     if (!context.Request.Path.StartsWithSegments("/api")) { await next(); return; }
     var cookie = context.Request.Cookies[".LaserficheReports.Session"] ?? "new-session";
     var gate = sessionGates[(StringComparer.Ordinal.GetHashCode(cookie) & int.MaxValue) % sessionGates.Length];
-    await gate.WaitAsync(context.RequestAborted);
+    var acquired = false;
+    if (!await gate.WaitAsync(TimeSpan.FromSeconds(5), context.RequestAborted))
+    {
+        context.Response.StatusCode = 409;
+        await context.Response.WriteAsJsonAsync(new { error = "الجلسة مشغولة حاليًا. أعد المحاولة بعد قليل." });
+        return;
+    }
+    acquired = true;
     try
     {
         await context.Session.LoadAsync(context.RequestAborted);
@@ -133,6 +171,11 @@ app.Use(async (context, next) =>
             await context.Response.WriteAsJsonAsync(new { error = "تغيّر المستودع في جلسة أخرى. أعد تسجيل الدخول إلى المستودع المطلوب." });
             return;
         }
+        if (!context.Request.Path.StartsWithSegments("/api/session"))
+        {
+            gate.Release();
+            acquired = false;
+        }
         await next();
     }
     catch (LaserficheException error) when (!context.Response.HasStarted)
@@ -147,8 +190,11 @@ app.Use(async (context, next) =>
     }
     finally
     {
-        try { await context.Session.CommitAsync(CancellationToken.None); }
-        finally { gate.Release(); }
+        if (acquired)
+        {
+            try { await context.Session.CommitAsync(CancellationToken.None); }
+            finally { gate.Release(); }
+        }
     }
 });
 app.UseDefaultFiles();
@@ -255,27 +301,27 @@ app.MapPost("/api/reports/chat", async (ChatQuestion request, ReportsChatService
     catch (PostgresException exception)
     {
         app.Logger.LogError(exception, "Document search failed in PostgreSQL.");
-        var problem = DatabaseDiagnostics.Describe(exception);
-        return Results.Json(new { error = problem.Error, message = problem.Message,
-            sqlState = problem.SqlState }, statusCode: StatusCodes.Status503ServiceUnavailable);
+        return Results.Json(new { error = "document_content_unavailable", message = "محتوى الوثيقة غير متاح حاليًا. أعد المحاولة لاحقًا." }, statusCode: StatusCodes.Status503ServiceUnavailable);
     }
     catch (NpgsqlException exception)
     {
         app.Logger.LogError(exception, "Document database unavailable during chat.");
         return Results.Json(new { error = "supabase_database_unavailable",
-            message = "قاعدة البيانات غير متاحة. تحقق من اتصال Supabase/PostgreSQL." },
+            message = "محتوى الوثيقة غير متاح حاليًا. أعد المحاولة لاحقًا." },
             statusCode: StatusCodes.Status503ServiceUnavailable);
     }
-    catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException)
+    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+    catch (Exception exception) when (exception is HttpRequestException or OperationCanceledException or TimeoutException)
     {
-        app.Logger.LogWarning(exception, "LangGraph unavailable during chat.");
-        return Results.Json(new { error = "Local LangGraph or Ollama is unavailable.",
-            detail = exception.Message }, statusCode: 503);
+        app.Logger.LogWarning(exception, "Local dependency unavailable during chat.");
+        return Results.Json(new { error = "local_dependency_unavailable",
+            message = exception is OperationCanceledException or TimeoutException ? "تعذر إكمال الطلب خلال الوقت المحدد." :
+                "تعذر الاتصال بالخدمة المطلوبة. أعد المحاولة لاحقًا." }, statusCode: 503);
     }
     catch (InvalidOperationException exception)
     {
         app.Logger.LogWarning(exception, "Embedding or LangGraph failed during chat.");
-        return Results.Json(new { error = "local_ai_unavailable", message = exception.Message },
+        return Results.Json(new { error = "local_ai_unavailable", message = "خدمة الذكاء الاصطناعي غير متاحة حاليًا. أعد المحاولة لاحقًا." },
             statusCode: StatusCodes.Status503ServiceUnavailable);
     }
     catch (Exception exception) when (exception is not OperationCanceledException)
