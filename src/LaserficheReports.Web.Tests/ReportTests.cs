@@ -202,6 +202,87 @@ public class ReportTests
             .SelectAsync(new QueryPlan("search", "حالة الوثيقة", "تحت الاجراء"), [], false, default));
     }
 
+    private static PagedResult<LFSearchResult> FieldRows(string field, params string[] values) => new()
+    {
+        Items = values.Select((value, i) => new LFSearchResult { EntryId = i + 1, Name = "وثيقة " + (i + 1),
+            Fields = [new LFSearchField(field, [value], false)] }).ToArray(),
+        TotalCount = values.Length, HasMore = false
+    };
+
+    [Fact]
+    public async Task ZeroLiteralResultsCheckLiveValuesWithoutMatchingNegativeOrLongerValues()
+    {
+        var entries = new Entries(73);
+        var query = new Searches { Response = (expression, field, _) => expression.Contains("=\"*\"}")
+            ? FieldRows(field!, "تحت الإجراء", "تحت  الاجراء", "ليس تحت الإجراء", "تحت الإجراء النهائي", "تم الرفض")
+            : PagedResult<LFSearchResult>.Empty };
+        var result = await Create(entries, query).CreateAsync("repo",
+            QuestionRouter.TryRoute("اعطيني الوثائق التي تحتوي على تحت الاجراء")!, [], default);
+        Assert.Contains("**2**", result.Answer);
+        Assert.Equal(new[] { 1, 2 }, result.RelatedEntryIds);
+        Assert.True(query.ReadAll);
+        Assert.Empty(entries.FieldCalls);
+        Assert.False(entries.Enumerated);
+    }
+
+    [Fact]
+    public async Task ValueCheckPreservesScopeCountsAllMatchesAndDeduplicatesEquivalentFields()
+    {
+        var query = new Searches { Response = (expression, field, _) => expression.Contains("=\"*\"}")
+            ? FieldRows(field!, "تحت الإجراء", "تحت الاجراء", "تم الرفض") : PagedResult<LFSearchResult>.Empty };
+        var plan = new QueryPlan("created", "إجراء الوثيقة", "تحت الاجراء", Name: "طلب", Limit: 1,
+            From: "2026-10-01", To: "2026-10-06");
+        var result = await Create(new Entries(73), query, new Definitions("إجراء الوثيقة", "اجراء الوثيقة"))
+            .SelectAsync(plan, [1, 2], false, default);
+        Assert.Equal(2, result.TotalCount);
+        Assert.Single(result.Items);
+        Assert.True(result.HasNextPage);
+        Assert.Equal(3, query.Calls.Count);
+        Assert.All(query.Calls, call =>
+        {
+            Assert.Contains("{LF:ID=1} | {LF:ID=2}", call);
+            Assert.Contains("{LF:Name=\"طلب\", Type=D}", call);
+            Assert.Contains("{LF:Created>=\"2026-10-01\"}", call);
+            Assert.Contains("{LF:Created<=\"2026-10-06\"}", call);
+        });
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task MissingOrIncompleteLiveValuesCannotBeReportedAsZero(bool incomplete)
+    {
+        var query = new Searches { Response = (expression, field, _) => expression.Contains("=\"*\"}")
+            ? new PagedResult<LFSearchResult> { Items = [new LFSearchResult { EntryId = 1 }],
+                TotalCount = 1, HasMore = incomplete } : PagedResult<LFSearchResult>.Empty };
+        await Assert.ThrowsAsync<ArgumentException>(() => Create(new Entries(73), query)
+            .SelectAsync(new QueryPlan("search", "إجراء الوثيقة", "تحت الاجراء"), [], false, default));
+    }
+
+    [Fact]
+    public async Task TruncatedMultiValueProjectionReadsTheFullLiveFieldBeforeMatching()
+    {
+        var entries = new Entries(73);
+        var query = new Searches { Response = (expression, field, _) => expression.Contains("=\"*\"}")
+            ? new PagedResult<LFSearchResult> { Items = [new LFSearchResult { EntryId = 1,
+                Fields = [new LFSearchField(field!, ["رفض"], true)] }], TotalCount = 1, HasMore = false }
+            : PagedResult<LFSearchResult>.Empty };
+        var result = await Create(entries, query).SelectAsync(new QueryPlan("search", "إجراء الوثيقة", "تحت الاجراء"), [], true, default);
+        Assert.Equal(1, result.TotalCount);
+        Assert.Equal(new[] { 1 }, entries.FieldCalls);
+    }
+
+    [Fact]
+    public async Task ValueCheckKeepsTheGroupingFieldSeparateFromTheFilterField()
+    {
+        var query = new Searches { Response = (expression, field, _) => expression.Contains("=\"*\"}")
+            ? FieldRows(field!, "تحت الإجراء") : PagedResult<LFSearchResult>.Empty };
+        var result = await Create(new Entries(73), query).CreateAsync("repo",
+            new QueryPlan("group", "إجراء الوثيقة", "تحت الاجراء", GroupBy: "الإدارة"), [], default);
+        Assert.Contains("الإدارة العامة | 1", result.Answer);
+        Assert.DoesNotContain("تحت الإجراء |", result.Answer);
+    }
+
     [Fact]
     public async Task UnknownFieldCannotBecomeZeroAndUnknownTotalCannotBecomeExact()
     {
@@ -251,10 +332,14 @@ public class ReportTests
         public string Expression { get; private set; } = "";
         public bool ReadAll { get; private set; }
         public bool Exact { get; init; } = true;
+        public List<string> Calls { get; } = [];
+        public Func<string, string?, bool, PagedResult<LFSearchResult>>? Response { get; init; }
         public Task<PagedResult<LFSearchResult>> QueryAsync(string expression, int page, int pageSize,
             string sort = "creationTime desc", string? field = null, bool readAll = false, CancellationToken cancellationToken = default)
         {
             Expression = expression; ReadAll = readAll;
+            Calls.Add(expression);
+            if (Response is not null) return Task.FromResult(Response(expression, field, readAll));
             return Task.FromResult(new PagedResult<LFSearchResult> { Items = Enumerable.Range(1, readAll ? 73 : 20)
                 .Select(i => new LFSearchResult { EntryId = i, Name = $"وثيقة {i}", EntryType = LFEntryType.Document }).ToArray(),
                 TotalCount = 73, IsTotalCountExact = Exact, PageSize = pageSize, HasMore = !readAll });
@@ -297,6 +382,7 @@ public class ReportTests
             FieldCalls.Add(entryId);
             return Task.FromResult<IReadOnlyList<LFFieldValue>>([
                 new() { FieldName = "الوثيقة", Value = "حقل أقصر" },
+                new() { FieldName = "الإدارة", Value = "الإدارة العامة" },
                 new() { FieldName = "إجراء الوثيقة", Value = entryId % 2 == 1 ? "تحت الإجراء" : "تم الرفض" }]);
         }
         public Task<int> GetRootEntryIdAsync(CancellationToken cancellationToken = default) => Task.FromResult(100);

@@ -21,7 +21,9 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
         return value.Replace("\\", "\\\\", StringComparison.Ordinal);
     }
 
-    private async Task<string[]> ResolveFieldsAsync(string question, CancellationToken ct)
+    private sealed record FieldResolution(string[] Preferred, string[] Equivalent);
+
+    private async Task<FieldResolution> ResolveFieldsAsync(string question, CancellationToken ct)
     {
         var definitions = await fields.GetFieldDefinitionsAsync(ct);
         var names = definitions.Values.Select(f => f.Name).Where(n => !string.IsNullOrWhiteSpace(n))
@@ -39,7 +41,8 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
         var exact = candidates.FirstOrDefault(n => literal.EndsWith(n, StringComparison.Ordinal));
         // Different IDs with the same name are one search field. If only spelling
         // differs and no literal name was supplied, search each authoritative name.
-        return (exact is null ? candidates : [exact]).Select(n => Term(n, true)).ToArray();
+        return new FieldResolution((exact is null ? candidates : [exact]).Select(n => Term(n, true)).ToArray(),
+            candidates.Select(n => Term(n, true)).ToArray());
     }
 
     public async Task<PagedResult<LFSearchResult>> SelectAsync(QueryPlan plan, IReadOnlyList<int> ids,
@@ -50,14 +53,19 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
         var expression = plan.Operation == "folders" ? "{LF:Name=\"*\", Type=F}" : Documents;
         if (ids.Count > 0) expression += " & (" + string.Join(" | ", ids.Select(id => $"{{LF:ID={id}}}")) + ")";
         string? requestedField = null;
+        string? filterClause = null;
+        string[] equivalentFields = [];
         if (plan.Field is not null)
         {
-            var resolvedFields = await ResolveFieldsAsync(plan.Field, ct);
+            var resolution = await ResolveFieldsAsync(plan.Field, ct);
+            var resolvedFields = resolution.Preferred;
+            equivalentFields = resolution.Equivalent;
             requestedField = resolvedFields.Length == 1 ? resolvedFields[0] : null;
             if (plan.Value is null) throw new ArgumentException("اكتب قيمة الحقل المطلوب.");
             var value = Term(plan.Value);
             var filters = resolvedFields.Select(name => $"{{[]:[{name}]=\"{value}\"}}").ToArray();
-            expression += " & " + (filters.Length == 1 ? filters[0] : "(" + string.Join(" | ", filters) + ")");
+            filterClause = filters.Length == 1 ? filters[0] : "(" + string.Join(" | ", filters) + ")";
+            expression += " & " + filterClause;
         }
         if (plan.Template is not null)
         {
@@ -94,7 +102,7 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
         }
         if (plan.GroupBy is not null && plan.GroupBy != "template")
         {
-            var resolvedFields = await ResolveFieldsAsync(plan.GroupBy, ct);
+            var resolvedFields = (await ResolveFieldsAsync(plan.GroupBy, ct)).Preferred;
             if (resolvedFields.Length != 1)
                 throw new ArgumentException("حدد حقل التجميع من الأسماء الموجودة: " + string.Join("، ", resolvedFields));
             requestedField = resolvedFields[0];
@@ -102,9 +110,65 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
         var watch = System.Diagnostics.Stopwatch.StartNew();
         var result = await searches.QueryAsync(expression, 1, plan.Limit,
             plan.Operation == "recent" ? "lastModifiedTime desc" : "id asc", requestedField, readAll, ct);
+        if (filterClause is not null && result.IsTotalCountExact && result.TotalCount == 0)
+            result = await ReadNormalizedMatchesAsync(expression, filterClause, equivalentFields, plan, readAll,
+                plan.GroupBy is not null && plan.GroupBy != "template" ? requestedField : null, ct);
         logger.LogInformation("Stage=LASERFICHE Tool={Tool} DurationMs={DurationMs} TotalCount={TotalCount} Exact={Exact}",
             plan.Operation, watch.ElapsedMilliseconds, result.TotalCount, result.IsTotalCountExact);
         return result;
+    }
+
+    private async Task<PagedResult<LFSearchResult>> ReadNormalizedMatchesAsync(string expression, string filterClause,
+        string[] fieldNames, QueryPlan plan, bool readAll, string? groupField, CancellationToken ct)
+    {
+        using var budget = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        budget.CancelAfter(TimeSpan.FromSeconds(30));
+        ct = budget.Token;
+        var matches = new Dictionary<int, LFSearchResult>();
+        foreach (var name in fieldNames)
+        {
+            // Search only populated instances of the requested field, preserving
+            // every ID, template, folder, name and date restriction of the plan.
+            var presence = expression.Replace(" & " + filterClause, $" & {{[]:[{name}]=\"*\"}}", StringComparison.Ordinal);
+            var candidates = await searches.QueryAsync(presence, 1, 200,
+                plan.Operation == "recent" ? "lastModifiedTime desc" : "id asc", name, true, ct);
+            if (candidates.HasNextPage || !candidates.IsTotalCountExact)
+                throw new ArgumentException("تعذر التحقق من جميع قيم الحقل. حدد نطاقًا أضيق وأعد المحاولة.");
+            foreach (var item in candidates.Items)
+            {
+                var projected = item.Fields.Where(f => string.Equals(f.Name, name, StringComparison.Ordinal)).ToArray();
+                if (projected.Length == 0)
+                    throw new ArgumentException("لم يرجع Laserfiche قيم الحقل المطلوبة؛ تعذر تأكيد نتائج البحث.");
+                var match = projected.Any(f => f.Values.Any(v => ReportSupport.MatchesValue(v, plan.Value!)));
+                IReadOnlyList<LFFieldValue>? full = null;
+                if (projected.Any(f => f.HasMoreValues))
+                {
+                    full = await entries.GetEntryFieldsAsync(item.EntryId, ct);
+                    match = full.Any(f => string.Equals(f.FieldName, name, StringComparison.Ordinal) &&
+                        ReportSupport.MatchesValue(f.Value, plan.Value!, f.IsMultiValue));
+                }
+                if (!match) continue;
+                var reportItem = item;
+                if (groupField is not null)
+                {
+                    full ??= await entries.GetEntryFieldsAsync(item.EntryId, ct);
+                    var groupValues = full.Where(f => string.Equals(f.FieldName, groupField, StringComparison.Ordinal))
+                        .Select(f => new LFSearchField(f.FieldName, [f.Value ?? ""], false)).ToArray();
+                    if (groupValues.Length == 0)
+                        throw new ArgumentException("تعذر الحصول على قيم حقل التجميع من Laserfiche.");
+                    reportItem = item with { Fields = groupValues };
+                }
+                matches[item.EntryId] = reportItem;
+            }
+        }
+        logger.LogInformation("Stage=FIELD_VALUE_CHECK FieldCount={FieldCount} MatchedCount={MatchedCount}",
+            fieldNames.Length, matches.Count);
+        return new PagedResult<LFSearchResult>
+        {
+            Items = (readAll ? matches.Values.AsEnumerable() : matches.Values.Take(plan.Limit)).ToArray(),
+            TotalCount = matches.Count, IsTotalCountExact = true, PageNumber = 1, PageSize = plan.Limit,
+            HasMore = !readAll && matches.Count > plan.Limit
+        };
     }
 
     public async Task<ChatResult> CreateAsync(string repositoryId, QueryPlan plan, IReadOnlyList<int> ids,
