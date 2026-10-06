@@ -89,3 +89,23 @@ is not a measurement of actual model accuracy on the user's documents.
 Every question is analyzed by Ollama with the live field/template catalog. Validated tool plans execute against the repository; there is no keyword question router. Independent requests produce independent report cards and downloads. Latest-created and latest-modified each request one row with their own server-side ordering. Tables include both timestamps, and missing search-result paths are resolved from the current entry and parent folders.
 
 The model summarizes retrieved metadata, and a second model call checks its claims against exact evidence. Unverified summaries are excluded; retrieval remains the authority for tables and counts. Restart both services after updating. Graph health must include `routingVersion: ai-multi-report-v3`. Local model accuracy and Windows Web Client session behavior require validation on the installed machine.
+
+## Local model timeouts and startup checks
+
+Every question checks the running graph protocol and Ollama model registry before planning. Health distinguishes a stopped Ollama from a missing model. The browser receives distinct causes for graph version mismatch, model timeout, invalid AI output and model busy. Schema-invalid plans get one reanalysis attempt; neither attempt executes an invalid plan.
+
+Defaults favor completing verified reports: 600 seconds per Ollama call, 1,500 seconds per graph HTTP request and 3,600 seconds for the complete chat request. Laserfiche asynchronous search polling allows 300 seconds and the whole search 600 seconds. These are deadlines, not mandatory waiting periods. Report planning/presentation still uses live metadata and evidence checks; a longer timeout does not establish model accuracy.
+
+After updating, stop the old graph and web processes with Ctrl+C and start both again:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\reports-graph\start.ps1 -Model qwen2.5:7b -TimeoutSeconds 600
+```
+
+In another terminal, run the web project. Verify the graph health in a third terminal:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8766/health
+```
+
+It should report `status: ready`, `model: qwen2.5:7b`, `modelTimeoutSeconds: 600` and `routingVersion: ai-multi-report-v3`. A 503 body specifies whether Ollama is stopped or the model is absent. `ReportsGraph:TimeoutSeconds` and `Reports:RequestTimeoutSeconds` are configurable in local settings. Keep the graph HTTP timeout above the combined model calls and the total chat timeout above its stages. Restarting is required because the model client and HTTP client settings are created at startup.
