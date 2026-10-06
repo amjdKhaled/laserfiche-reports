@@ -104,7 +104,7 @@ internal sealed class LiveAiClient(IHttpClientFactory factory, IConfiguration co
             {
                 if (!line.StartsWith("data: ")) continue;
                 line = line[6..];
-                if (line == "[DONE]") yield break;
+                if (line == "[DONE]") break;
             }
             using var json = JsonDocument.Parse(line);
             string? text = null;
@@ -121,6 +121,7 @@ internal sealed class LiveAiClient(IHttpClientFactory factory, IConfiguration co
                 yield return text;
             }
         }
+        if (emitted == 0) throw new InvalidOperationException("نموذج الذكاء الاصطناعي لم يرجع نصًا. جرّب نموذج محادثة آخر وتحقق من سجله المحلي.");
     }
 
     private async Task<string> CompleteAsync(string system, string user, CancellationToken ct)

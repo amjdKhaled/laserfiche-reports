@@ -45,6 +45,21 @@ public class LiveAiClientTests
         Assert.Equal("loaded-chat", await Create(handler, new() { ["LocalAI:Provider"] = "LMStudio" }).ResolveModelAsync(default));
     }
     [Fact]
+    public async Task EmptyModelAnswerIsReportedAsFailure()
+    {
+        var handler = new Handler(request => request.RequestUri!.AbsolutePath switch
+        {
+            "/api/tags" => "{\"models\":[{\"name\":\"chat-model\"}]}",
+            "/api/show" => "{\"capabilities\":[\"completion\"]}",
+            "/api/chat" => "{\"message\":{\"content\":\"\"},\"done\":true}\n",
+            _ => throw new Exception("Unexpected request")
+        });
+        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        {
+            await foreach (var text in Create(handler).AnalyzeAsync("كم وثيقة؟", "العدد 17", default)) { }
+        });
+    }
+    [Fact]
     public void DocumentContentRequestRemainsExplicitlyUnsupported()
     {
         Assert.Equal("unsupported", QuestionRouter.TryRoute("لخص أهم النقاط في الوثيقة 618 كتقرير", new(2026,10,6))!.Intent);
