@@ -343,7 +343,7 @@ async function refreshStatuses() {
       const healthy = data.isConnected !== false && data.authenticationSucceeded !== false;
       cards[index].lastChild.textContent = healthy ? 'متصل' : 'تعذر الاتصال';
       cards[index].lastChild.className = healthy ? 'ok' : 'bad';
-      if (data.modelConfigured === false) cards[index].append(el('p', 'service-diagnostic', 'حدد LocalAI:ChatModel لتفعيل فهم الأسئلة العامة. الأسئلة المباشرة متاحة.'));
+      if (data.model) cards[index].append(el('p', 'service-hint', `نموذج المحادثة: ${data.model}`));
     } catch (error) {
       if (epoch !== sessionEpoch) return;
       cards[index].lastChild.textContent = 'تعذر الاتصال'; cards[index].lastChild.className = 'bad';

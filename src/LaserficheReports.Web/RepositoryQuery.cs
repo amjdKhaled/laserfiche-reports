@@ -85,6 +85,8 @@ internal static class QuestionRouter
         var key = ReportSupport.MatchKey(q);
         var type = Regex.IsMatch(q, "مجلد|folders", RegexOptions.IgnoreCase) && !Regex.IsMatch(q, "وثائ|وثيق|documents", RegexOptions.IgnoreCase) ? "folders" : "documents";
         var count = Regex.IsMatch(q, @"(?:كم|عدد|\bcount\b|how many)", RegexOptions.IgnoreCase);
+        if (Regex.IsMatch(q, "(?:لخص|لخّص|محتوى|أهم النقاط|اهم النقاط|summari).*(?:وثيقة|وثائق|document)|(?:صورة|صفحات)", RegexOptions.IgnoreCase))
+            return new() { Intent = "unsupported" };
         // Filters must be processed before broad inventory/count rules.
         var condition = ReportSupport.ParseCondition(q);
         if (condition is not null && !ReportSupport.NeedsFilterClarification(q))

@@ -7,8 +7,8 @@ No Supabase, OCR, embeddings, vector search, LangGraph or manual indexing is req
 
 1. Copy `src/LaserficheReports.Web/appsettings.Local.example.json` to `appsettings.Local.json` in the same directory.
 2. Set `Laserfiche:ServerUrl` and your repository. Select the repository and authenticate through the existing login form.
-3. Set `LocalAI:ChatModel` to a chat model already installed in Ollama. For LM Studio use `LocalAI:Provider=LMStudio` and its local server base URL (without `/v1`). Basic counts, field queries and metadata do not require the model.
-4. Run `dotnet restore`, `dotnet build`, and `dotnet run --project src/LaserficheReports.Web`.
+3. When `LocalAI:ChatModel` is empty, the application discovers an installed chat model automatically. Set it explicitly to choose a specific installed model. For LM Studio use `LocalAI:Provider=LMStudio` and its local server base URL (without `/v1`). Every chat answer includes local AI interpretation of verified backend data. If AI is unavailable, already retrieved Laserfiche data remain visible with an explicit failure message. Document image/page content is still unavailable.
+4. On Windows run `powershell -ExecutionPolicy Bypass -File .\scripts\start-reports.ps1 -Restart` to rebuild and restart safely. Without `-Restart` the script reuses an existing instance of this project instead of starting a duplicate. Other applications on the same port are never stopped.
 5. Open `http://127.0.0.1:5187`. Ask about counts, field equality, templates, dates, folder contents or an entry ID.
 
 For date queries, `Reports:TimeZone` defaults to `Asia/Riyadh`; `Reports:DateFormat` must match the Laserfiche server's date-search locale.

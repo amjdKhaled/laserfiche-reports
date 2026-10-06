@@ -63,7 +63,9 @@ builder.Services.AddScoped<LiveAiClient>();
 builder.Services.AddSingleton<SessionRequestRegistry>();
 builder.Services.AddHttpClient("LiveAI", client =>
 {
-    client.BaseAddress = new Uri((builder.Configuration["LocalAI:BaseUrl"] ?? "http://localhost:11434").TrimEnd('/') + "/");
+    var baseUrl = (builder.Configuration["LocalAI:BaseUrl"] ?? "http://localhost:11434").TrimEnd('/');
+    if (LiveAiClient.UsesOpenAi(builder.Configuration["LocalAI:Provider"]) && baseUrl.EndsWith("/v1", StringComparison.OrdinalIgnoreCase)) baseUrl = baseUrl[..^3];
+    client.BaseAddress = new Uri(baseUrl + "/");
     client.Timeout = TimeSpan.FromSeconds(Math.Clamp(builder.Configuration.GetValue("LocalAI:TimeoutSeconds", 600), 10, 1800));
 }).AddHttpMessageHandler<LaserficheReports.Infrastructure.Http.TransientReadHandler>();
 
@@ -219,10 +221,21 @@ app.MapGet("/api/reports/repository/folders/{folderId:int}/children", async (
 });
 
 app.MapPost("/api/reports/chat", async (ChatQuestion request, ReportsChatService chat,
-    ISessionCredentialStore sessions, CancellationToken ct) =>
+    ISessionCredentialStore sessions, LiveAiClient ai, CancellationToken ct) =>
 {
     if (await sessions.TryGetAsync(ct) is null) return Results.Unauthorized();
-    return Results.Ok(await chat.AskAsync(request.Question, ct, request.PreviousQuery));
+    var result = await chat.AskAsync(request.Question, ct, request.PreviousQuery);
+    try
+    {
+        var analysis = new System.Text.StringBuilder();
+        await foreach (var text in ai.AnalyzeAsync(request.Question, result.Answer, ct)) analysis.Append(text);
+        if (analysis.Length > 0) result = result with { Answer = result.Answer + "\n\n## إجابة الذكاء الاصطناعي\n\n" + analysis };
+    }
+    catch (Exception error) when (error is not OperationCanceledException)
+    {
+        result = result with { Answer = result.Answer + "\n\nتعذر توليد جواب الذكاء الاصطناعي. البيانات الموثقة أعلاه متاحة؛ تحقق من حالة خدمة الذكاء الاصطناعي." };
+    }
+    return Results.Ok(result);
 });
 
 app.MapPost("/api/reports/chat/stream", async (ChatQuestion request, ReportsChatService chat,
@@ -240,11 +253,11 @@ app.MapPost("/api/reports/chat/stream", async (ChatQuestion request, ReportsChat
     var result = await chat.AskAsync(request.Question, ct, request.PreviousQuery,
         status => Send("status", new { message = status }));
     await Send("result", result);
-    if (result.Query?.Intent == "report" && result.Answer.Length < 24000)
     {
         try
         {
-            await Send("delta", new { text = "\n\n## تحليل الذكاء الاصطناعي\n\n" });
+            await Send("status", new { message = "جارٍ توليد إجابة الذكاء الاصطناعي..." });
+            await Send("delta", new { text = "\n\n## إجابة الذكاء الاصطناعي\n\n" });
             await foreach (var text in ai.AnalyzeAsync(request.Question, result.Answer, ct))
                 await Send("delta", new { text });
         }
@@ -256,13 +269,10 @@ app.MapPost("/api/reports/chat/stream", async (ChatQuestion request, ReportsChat
     }
 });
 
-app.MapGet("/api/ai/status", async (IHttpClientFactory factory, IConfiguration config, CancellationToken ct) =>
+app.MapGet("/api/ai/status", async (LiveAiClient ai, CancellationToken ct) =>
 {
-    using var client = factory.CreateClient("LiveAI");
-    var openAi = LiveAiClient.UsesOpenAi(config["LocalAI:Provider"]);
-    using var response = await client.GetAsync(openAi ? "v1/models" : "api/tags", ct);
-    response.EnsureSuccessStatusCode();
-    return Results.Ok(new { status = "ready", model = config["LocalAI:ChatModel"], modelConfigured = !string.IsNullOrWhiteSpace(config["LocalAI:ChatModel"]) });
+    var model = await ai.ResolveModelAsync(ct);
+    return Results.Ok(new { status = "ready", model, modelConfigured = true });
 });
 
 app.MapGet("/api/laserfiche/status", async (
@@ -316,7 +326,12 @@ app.MapGet("/api/laserfiche/documents/{entryId:int}/pages/{pageNumber:int}/image
 
 app.MapGet("/health", () => Results.Ok(new { status = "ready" }));
 
-app.Run();
+try { app.Run(); }
+catch (IOException error) when (error.InnerException is Microsoft.AspNetCore.Connections.AddressInUseException)
+{
+    Console.Error.WriteLine("تعذر التشغيل: المنفذ مستخدم بواسطة برنامج شغال. استخدم scripts/start-reports.ps1 أو أوقف النسخة السابقة ثم أعد التشغيل.");
+    Environment.ExitCode = 1;
+}
 
 static Task WriteProblem(HttpContext context, int status, string message)
 {

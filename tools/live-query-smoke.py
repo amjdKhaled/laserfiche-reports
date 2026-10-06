@@ -51,6 +51,8 @@ class Fixture(BaseHTTPRequestHandler):
                 chunks.append(self.rfile.read(size));self.rfile.read(2)
             data=b''.join(chunks)
         else:data = self.rfile.read(int(self.headers.get('Content-Length',0)))
+        if self.path == '/api/show':
+            return self.reply({'capabilities':['completion']})
         if self.path.endswith('/Token'):
             if b'wrong' in data: return self.reply({},401)
             return self.reply({'access_token':'fixture-token','expires_in':3600})
@@ -115,7 +117,7 @@ def main():
         appport = reservation.getsockname()[1]
     base=f'http://127.0.0.1:{appport}'
     env={**os.environ,'ASPNETCORE_URLS':base,'Laserfiche__ServerUrl':lf,'Laserfiche__ApiVersion':'v2',
-         'Laserfiche__RepositoryId':'TestRepo','LocalAI__BaseUrl':lf,'LocalAI__ChatModel':'fixture-model',
+         'Laserfiche__RepositoryId':'TestRepo','LocalAI__BaseUrl':lf,'LocalAI__ChatModel':'',
          'Reports__QueryTimeoutSeconds':'3','Reports__HealthTimeoutSeconds':'2',
          'Supabase__PostgresConnectionString':'Host=invalid;Database=unused;Username=unused;Password=unused'}
     opener=build_opener(ProxyHandler({}),HTTPCookieProcessor(http.cookiejar.CookieJar()))
@@ -170,6 +172,10 @@ def main():
         status,sse=call('/api/reports/chat/stream',{'question':questions[-1]})
         assert status==200 and 'event: status' in sse and 'event: result' in sse and 'event: delta' in sse
         assert call('/api/reports/chat',{'question':questions[0],'previousQuery':{'intent':'count','name':'*'}})[0]==400
+        status, count_sse=call('/api/reports/chat/stream',{'question':questions[0]})
+        assert status==200 and 'event: delta' in count_sse and 'إجابة الذكاء الاصطناعي' in json.loads(re.search(r'event: delta\ndata: (.+)', count_sse)[1])['text']
+        status,unsupported=call('/api/reports/chat',{'question':'لخص أهم النقاط في الوثيقة 618 كتقرير'})
+        assert status==200 and 'غير متاح' in json.loads(unsupported)['answer']
         Fixture.ai_down=True;assert call('/api/reports/chat',{'question':questions[0]})[0]==200
         assert call('/api/reports/chat',{'question':'سؤال يحتاج ذكاء اصطناعي'})[0]==503
         Fixture.ai_down=False;Fixture.bad_lf=True
