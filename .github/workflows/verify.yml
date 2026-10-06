@@ -24,6 +24,8 @@ jobs:
           }
       - shell: pwsh
         run: ./scripts/test-configure-database.ps1
+      - shell: pwsh
+        run: ./scripts/test-start-reports.ps1
   python:
     runs-on: ubuntu-latest
     steps:
