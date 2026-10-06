@@ -2,12 +2,12 @@
 
 ## Current mode: live Laserfiche metadata
 
-The active flow is question → validated backend tool → Laserfiche API → exact backend report → optional local AI analysis.
+The active flow is question → validated backend tool → Laserfiche API → verified backend evidence → local AI answer with document actions.
 No Supabase, OCR, embeddings, vector search, LangGraph or manual indexing is required by the web application. Existing database rows and old feature files are preserved and inactive.
 
 1. Copy `src/LaserficheReports.Web/appsettings.Local.example.json` to `appsettings.Local.json` in the same directory.
 2. Set `Laserfiche:ServerUrl` and your repository. Select the repository and authenticate through the existing login form.
-3. When `LocalAI:ChatModel` is empty, the application discovers an installed chat model automatically. Set it explicitly to choose a specific installed model. For LM Studio use `LocalAI:Provider=LMStudio` and its local server base URL (without `/v1`). Every chat answer includes local AI interpretation of verified backend data. If AI is unavailable, already retrieved Laserfiche data remain visible with an explicit failure message. Document image/page content is still unavailable.
+3. When `LocalAI:ChatModel` is empty, the application discovers an installed chat model automatically. Set it explicitly to choose a specific installed model. For LM Studio use `LocalAI:Provider=LMStudio` and its local server base URL (without `/v1`). Every chat answer is written by local AI using verified backend data. The document actions appear above the answer. If AI is unavailable, already retrieved Laserfiche data remain visible with an explicit failure message. Document image/page content is still unavailable.
 4. On Windows run `powershell -ExecutionPolicy Bypass -File .\scripts\start-reports.ps1 -Restart` to rebuild and restart safely. Without `-Restart` the script reuses an existing instance of this project instead of starting a duplicate. Other applications on the same port are never stopped.
 5. Open `http://127.0.0.1:5187`. Ask about counts, field equality, templates, dates, folder contents or an entry ID.
 

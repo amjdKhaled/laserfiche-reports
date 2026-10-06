@@ -149,7 +149,7 @@ function renderMessages() {
   const chat = chats.find(c => c.id === active);
   if (!chat || !chat.messages.length) {
     const welcome = el('div', 'welcome');
-    welcome.innerHTML = '<div class="welcome-icon">✦</div><h2>ما التقرير الذي تريد إعداده؟</h2><p>اسأل عن المستودع أو حدد رقم وثيقة. تظهر النتائج كتقرير وجداول مع مصادرها.</p>';
+    welcome.innerHTML = '<div class="welcome-icon">✦</div><h2>معلومات وثائقك في مكان واحد</h2><p>اسأل عن التصنيف والمواعيد والحقول. يجيب الذكاء الاصطناعي مع مصادر من Laserfiche.</p>';
     const suggestions = el('div', 'suggestions');
     for (const question of ['ماهي الوثائق الموجود فيها إجراء الوثيقة يساوي تحت الاجراء', 'اعرض جميع الوثائق في المستودع', 'لخص أهم النقاط في الوثيقة 618 كتقرير']) {
       const button = el('button', '', question);
@@ -229,13 +229,13 @@ function renderMessages() {
                 const a=el('a','source-link',result.urls.length===1 ? `عرض ${result.documentCount} وثيقة في Laserfiche ↗` : `فتح المجموعة ${i+1} من ${result.urls.length} ↗`);
                 a.href=url; a.target='_blank'; a.rel='noopener noreferrer'; links.append(a);
               });
-              bubble.querySelector('.report-open-links')?.remove(); bubble.append(links);
+              bubble.querySelector('.report-open-links')?.remove(); actions.after(links);
               if (result.urls.length===1 && preview) preview.location.replace(result.urls[0]);
               else preview?.close();
             } catch(error) { preview?.close(); open.textContent=error.message; }
             finally { open.disabled=false; }
           };
-          actions.append(open); bubble.append(actions);
+          actions.prepend(open); bubble.prepend(actions);
         }
       } else bubble.textContent = message.text;
       item.append(bubble);
@@ -310,7 +310,6 @@ $('ask-form').onsubmit = async event => {
   chat.messages.push({ role: 'assistant', text: 'جارٍ فهم السؤال والبحث في Laserfiche...' });
   renderHistory(); renderMessages();
   questionRequest = new AbortController();
-  $('cancel-question').classList.remove('hidden');
   try {
     const previousQuery = chat.messages.slice(0, -2).reverse().find(message => message.query)?.query;
     const result = await askStream(question, previousQuery, questionRequest.signal, message => {
@@ -322,7 +321,7 @@ $('ask-form').onsubmit = async event => {
     chat.messages[chat.messages.length - 1] = { role: 'assistant', repositoryId: sessionRepository, relatedEntryIds: result.relatedEntryIds, text: result.answer, sources: result.sources, scope: result.scope, generatedAt: result.generatedAt, quality: result.quality, query: result.query, pagination: result.pagination };
   } catch (error) {
     chat.messages[chat.messages.length - 1] = { role: 'assistant', text: error.name === "AbortError" ? "أُلغي السؤال." : `تعذر إكمال السؤال: ${error.message}` };
-  } finally { pendingOperations--; pendingChats.delete(chat.id); $('send').disabled = false; $('cancel-question').classList.add('hidden'); if (epoch === sessionEpoch) { save(); renderHistory(); renderMessages(); } }
+  } finally { pendingOperations--; pendingChats.delete(chat.id); $('send').disabled = false; if (epoch === sessionEpoch) { save(); renderHistory(); renderMessages(); } }
 };
 $('question').onkeydown = event => {
   if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); $('ask-form').requestSubmit(); }
@@ -425,7 +424,6 @@ $('discover-repositories').onclick = async () => {
   finally { $('discover-repositories').disabled=false; }
 };
 
-$('cancel-question').onclick = () => questionRequest?.abort();
 async function askStream(question, previousQuery, signal, progress) {
   const headers = new Headers({'Content-Type':'application/json', 'X-Reports-Repository':sessionRepository, 'X-Reports-Session':sessionGeneration});
   const response = await fetch('/api/reports/chat/stream', {method:'POST', headers,
@@ -449,7 +447,7 @@ async function askStream(question, previousQuery, signal, progress) {
         const data = JSON.parse(block.split('\n').find(line=>line.startsWith('data: '))?.slice(6) || '{}');
         if (kind === 'status') progress(data.message);
         if (kind === 'delta') { if (result) { result.answer += data.text; progress(result.answer); } }
-        if (kind === 'result') { result = data; progress(result.answer); }
+        if (kind === 'result') { result = data; if (result.answer) progress(result.answer); }
         if (kind === 'error') throw new Error(data.message);
       }
       if (chunk.done) break;

@@ -229,7 +229,7 @@ app.MapPost("/api/reports/chat", async (ChatQuestion request, ReportsChatService
     {
         var analysis = new System.Text.StringBuilder();
         await foreach (var text in ai.AnalyzeAsync(request.Question, result.Answer, ct)) analysis.Append(text);
-        if (analysis.Length > 0) result = result with { Answer = result.Answer + "\n\n## إجابة الذكاء الاصطناعي\n\n" + analysis };
+        if (analysis.Length > 0) result = result with { Answer = analysis.ToString() };
     }
     catch (Exception error) when (error is not OperationCanceledException)
     {
@@ -252,19 +252,24 @@ app.MapPost("/api/reports/chat/stream", async (ChatQuestion request, ReportsChat
     }
     var result = await chat.AskAsync(request.Question, ct, request.PreviousQuery,
         status => Send("status", new { message = status }));
-    await Send("result", result);
+    await Send("result", result with { Answer = "" });
+    var hasAiText = false;
     {
         try
         {
             await Send("status", new { message = "جارٍ توليد إجابة الذكاء الاصطناعي..." });
-            await Send("delta", new { text = "\n\n## إجابة الذكاء الاصطناعي\n\n" });
             await foreach (var text in ai.AnalyzeAsync(request.Question, result.Answer, ct))
+            {
+                if (!string.IsNullOrWhiteSpace(text)) hasAiText = true;
                 await Send("delta", new { text });
+            }
         }
         catch (Exception error) when (error is not OperationCanceledException)
         {
             app.Logger.LogWarning("AI analysis failed. Type={Type}", error.GetType().Name);
-            await Send("delta", new { text = "\nتعذر إكمال التحليل بالذكاء الاصطناعي. البيانات والجدول أعلاه من Laserfiche مباشرة." });
+            await Send("delta", new { text = hasAiText
+                ? "\n\nتعذر إكمال إجابة الذكاء الاصطناعي. الإجابة أعلاه جزئية؛ حاول مجددًا."
+                : "تعذر توليد إجابة الذكاء الاصطناعي. هذه بيانات Laserfiche الموثقة مؤقتًا:\n\n" + result.Answer });
         }
     }
 });

@@ -71,7 +71,8 @@ class Fixture(BaseHTTPRequestHandler):
             if self.ai_down:return self.reply({},503)
             body=json.loads(data)
             if body.get('stream'):
-                chunks=[{'message':{'content':'ملخص مبني على الأعداد الموثقة أعلاه.'},'done':False},{'message':{'content':''},'done':True}]
+                answer='إجابة النموذج التجريبي: '+body['messages'][-1]['content'].split('Verified tool report:\n',1)[-1]
+                chunks=[{'message':{'content':answer},'done':False},{'message':{'content':''},'done':True}]
                 payload=('\n'.join(json.dumps(x) for x in chunks)+'\n').encode()
                 self.send_response(200);self.send_header('Content-Type','application/x-ndjson');self.send_header('Content-Length',str(len(payload)));self.end_headers();self.wfile.write(payload);return
             question=body['messages'][-1]['content']
@@ -151,6 +152,7 @@ def main():
             begin=time.monotonic();status,body=call('/api/reports/chat',{'question':question});durations.append((time.monotonic()-begin)*1000)
             assert status==200,(question,status,body)
             result=json.loads(body);assert result.get('query'),(question,body)
+            assert result['answer'].startswith('إجابة النموذج التجريبي:'), (question,body)
             print('PASS question:',question)
         status,body=call('/api/reports/documents?page=2');page=json.loads(body)
         assert status==200 and len(page['items'])==50 and page['totalCount']==125 and page['hasMore']
@@ -173,10 +175,18 @@ def main():
         assert status==200 and 'event: status' in sse and 'event: result' in sse and 'event: delta' in sse
         assert call('/api/reports/chat',{'question':questions[0],'previousQuery':{'intent':'count','name':'*'}})[0]==400
         status, count_sse=call('/api/reports/chat/stream',{'question':questions[0]})
-        assert status==200 and 'event: delta' in count_sse and 'إجابة الذكاء الاصطناعي' in json.loads(re.search(r'event: delta\ndata: (.+)', count_sse)[1])['text']
+        assert status==200 and 'event: delta' in count_sse and 'إجابة النموذج التجريبي' in json.loads(re.search(r'event: delta\ndata: (.+)', count_sse)[1])['text']
+        assert json.loads(re.search(r'event: result\ndata: (.+)', count_sse)[1])['answer']==''
         status,unsupported=call('/api/reports/chat',{'question':'لخص أهم النقاط في الوثيقة 618 كتقرير'})
         assert status==200 and 'غير متاح' in json.loads(unsupported)['answer']
-        Fixture.ai_down=True;assert call('/api/reports/chat',{'question':questions[0]})[0]==200
+        status,links=call('/api/reports/laserfiche-links',{'repositoryId':'TestRepo','entryIds':[608]})
+        assert status==200 and json.loads(links)['documentCount']==1 and 'Browse.aspx?db=TestRepo' in json.loads(links)['urls'][0]
+        assert call('/api/reports/laserfiche-links',{'repositoryId':'OtherRepo','entryIds':[608]})[0]==409
+        Fixture.ai_down=True
+        status,fallback=call('/api/reports/chat',{'question':questions[0]})
+        assert status==200 and 'تعذر توليد' in json.loads(fallback)['answer']
+        status,fallback_stream=call('/api/reports/chat/stream',{'question':questions[0]})
+        assert status==200 and 'تعذر توليد' in json.loads(re.search(r'event: delta\ndata: (.+)',fallback_stream)[1])['text']
         assert call('/api/reports/chat',{'question':'سؤال يحتاج ذكاء اصطناعي'})[0]==503
         Fixture.ai_down=False;Fixture.bad_lf=True
         assert call('/')[0]==200 and call('/health')[0]==200

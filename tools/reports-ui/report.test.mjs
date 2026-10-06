@@ -334,3 +334,46 @@ test('top tabs respond while startup status is pending and late status cannot re
   assert.equal(window.document.getElementById('active-repository').textContent, 'RepoA');
   await window.happyDOM.abort();
 });
+test('AI stream is the main answer and Laserfiche actions stay above it without cancellation UI', async () => {
+  const window = setup();
+  window.document.write(readFileSync(root + 'index.html', 'utf8').replace(/<script[^>]*>[\s\S]*?<\/script>/g, ''));
+  const events = [
+    ['status', {message:'جارٍ توليد إجابة الذكاء الاصطناعي...'}],
+    ['result', {answer:'',sources:[],relatedEntryIds:[608],scope:{repositoryId:'RepoA',detail:'الوثائق الحالية'},generatedAt:message.generatedAt}],
+    ['delta', {text:'وجدت وثيقة مطابقة لسؤالك: وثيقة الموظف 608.'}]
+  ];
+  let linkRequest;
+  const opened = {opener:null,document:{body:{}},location:{replace:url=>{opened.url=url;}},close:()=>{}};
+  window.open = () => opened;
+  window.fetch = async (url, options) => {
+    if (url === '/api/session/status') return {ok:true,status:200,json:async()=>({authenticated:true,username:'tester',repository:'RepoA',server:'https://localhost'})};
+    if (url === '/api/reports/chat/stream') {
+      let read = false;
+      return {ok:true,body:{getReader:()=>({read:async()=>read ? {done:true} : (read=true,{done:false,value:new TextEncoder().encode(events.map(([kind,data])=>`event: ${kind}\ndata: ${JSON.stringify(data)}\n\n`).join(''))}),releaseLock:()=>{}})}};
+    }
+    if (url === '/api/reports/laserfiche-links') {
+      linkRequest=JSON.parse(options.body);
+      return {ok:true,status:200,json:async()=>({urls:['https://lf.local/laserfiche/Browse.aspx?db=RepoA#search=608'],documentCount:1})};
+    }
+    return {ok:true,status:200,json:async()=>({isConnected:true})};
+  };
+  window.eval(readFileSync(root + 'app.js', 'utf8'));
+  await new Promise(resolve=>setTimeout(resolve,20));
+  assert.equal(window.document.getElementById('cancel-question'),null);
+  window.document.getElementById('question').value='اعرض وثائق الموظفين';
+  window.document.getElementById('ask-form').dispatchEvent(new window.Event('submit',{cancelable:true}));
+  await new Promise(resolve=>setTimeout(resolve,20));
+  const bubble=window.document.querySelector('.message.assistant .bubble');
+  assert.equal(bubble.firstElementChild.className,'report-actions');
+  assert(bubble.querySelector('.report-body').textContent.includes('وجدت وثيقة مطابقة'));
+  assert(!bubble.textContent.includes('تقرير Laserfiche'));
+  const open=bubble.querySelector('.report-actions button');
+  assert(open.textContent.includes('فتح وثائق التقرير'));
+  assert.equal(open.disabled,false);
+  open.click();
+  await new Promise(resolve=>setTimeout(resolve,20));
+  assert.deepEqual(linkRequest,{repositoryId:'RepoA',entryIds:[608]});
+  assert.equal(opened.url,'https://lf.local/laserfiche/Browse.aspx?db=RepoA#search=608');
+  assert.equal(window.document.getElementById('send').disabled,false);
+  await window.happyDOM.abort();
+});
