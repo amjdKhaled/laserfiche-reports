@@ -24,6 +24,7 @@ internal sealed class LaserficheEntryService : ILaserficheEntryService
     private readonly IRepositoryContext _repositoryContext;
     private readonly ILaserficheApiAdapter _adapter;
     private readonly ILogger<LaserficheEntryService> _logger;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<int, string> _resolvedPaths = new();
 
     /// <summary>Initialises the service with all required dependencies.</summary>
     public LaserficheEntryService(
@@ -140,8 +141,28 @@ internal sealed class LaserficheEntryService : ILaserficheEntryService
         int entryId,
         CancellationToken cancellationToken = default)
     {
-        var entry = await GetEntryAsync(entryId, cancellationToken).ConfigureAwait(false);
-        return entry.FullPath;
+        if (_resolvedPaths.TryGetValue(entryId, out var cached)) return cached;
+        return await ResolvePathAsync(await GetEntryAsync(entryId, cancellationToken), new HashSet<int>(), cancellationToken);
+    }
+
+    private async Task<string> ResolvePathAsync(LFEntry entry, HashSet<int> visited, CancellationToken ct)
+    {
+        if (_resolvedPaths.TryGetValue(entry.Id, out var cached)) return cached;
+        if (!visited.Add(entry.Id) || visited.Count > 128)
+            throw new LaserficheException("تعذر تحديد المسار: سلسلة المجلدات غير صالحة.", 502);
+        string path;
+        if (!string.IsNullOrWhiteSpace(entry.FullPath)) path = entry.FullPath;
+        else if (!string.IsNullOrWhiteSpace(entry.FolderPath)) path = entry.FolderPath.TrimEnd('\\') + "\\" + entry.Name;
+        else if (entry.ParentId <= 0)
+            path = entry.EntryType is LFEntryType.Folder or LFEntryType.RecordSeries ? "\\" : "\\" + entry.Name;
+        else
+        {
+            if (!_resolvedPaths.TryGetValue(entry.ParentId, out var parentPath))
+                parentPath = await ResolvePathAsync(await GetEntryAsync(entry.ParentId, ct), visited, ct);
+            path = parentPath.TrimEnd('\\') + "\\" + entry.Name;
+        }
+        _resolvedPaths[entry.Id] = path;
+        return path;
     }
 
     /// <inheritdoc />

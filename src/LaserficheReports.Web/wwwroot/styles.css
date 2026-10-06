@@ -57,3 +57,10 @@
 
 .report-actions{flex-wrap:wrap;align-items:center}
 .report-format{font:inherit;font-size:12px;color:#205b69;background:#fff;border:1px solid #d7e5e9;border-radius:7px;padding:7px;max-width:100%}
+
+.report-table:has(.report-cell-date){min-width:900px;table-layout:auto}
+.report-table .report-cell-compact{min-width:55px;width:65px;text-align:center;white-space:nowrap}
+.report-table .report-cell-date{min-width:155px;font-variant-numeric:tabular-nums;white-space:nowrap;font-size:12px}
+.report-table .report-cell-path{min-width:210px;text-align:left;unicode-bidi:isolate;overflow-wrap:anywhere}
+.report-table .report-cell-text{min-width:170px;text-align:start;unicode-bidi:plaintext;overflow-wrap:anywhere}
+.report-scope .report-body p{margin:0}

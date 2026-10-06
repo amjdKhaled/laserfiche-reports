@@ -6,10 +6,11 @@ public class ReportLinksTests
     [Fact]
     public void SearchIncludesEveryDistinctDocumentAndEncodesRepository()
     {
-        var url = Assert.Single(ReportLinks.Build("https://localhost/Laserfiche", "HR & المالية", [618, 42, 618]));
-        Assert.StartsWith("https://localhost/Laserfiche/Browse.aspx?db=HR%20%26%20", url);
+        var url = Assert.Single(ReportLinks.Build("https://desktop-k1svi53/Laserfiche", "HR & المالية", [618, 42, 618]));
+        Assert.StartsWith("https://desktop-k1svi53/Laserfiche/Browse.aspx?db=HR%20%26%20", url);
         Assert.Contains("{LF:ID=618} | {LF:ID=42}", Uri.UnescapeDataString(url));
-        Assert.EndsWith(";view=search", url);
+        Assert.Contains("#?search=", url);
+        Assert.DoesNotContain(";view=search", url);
     }
     [Fact]
     public void LargeReportsKeepAllDocumentsAcrossBoundedGroups()

@@ -30,10 +30,6 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
             .Distinct(StringComparer.Ordinal).ToArray();
         var candidates = names.Where(n => ReportSupport.MatchesField(new FieldCondition(question, ""), n))
             .OrderByDescending(n => ReportSupport.MatchKey(n).Length).ToArray();
-        // Prefer an actual status field. Only use the established action-field alias
-        // when the repository has no field matching the requested status name.
-        if (candidates.Length == 0 && ReportSupport.MatchesField(new FieldCondition(question, ""), "حالة الوثيقة"))
-            candidates = names.Where(n => ReportSupport.MatchKey(n) == ReportSupport.MatchKey("إجراء الوثيقة")).ToArray();
         if (candidates.Length == 0) throw new ArgumentException("لم أتعرف على الحقل المطلوب. اكتب اسمه الكامل كما يظهر في Laserfiche.");
         var longest = ReportSupport.MatchKey(candidates[0]);
         candidates = candidates.Where(n => ReportSupport.MatchKey(n) == longest).ToArray();
@@ -109,7 +105,7 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
         }
         var watch = System.Diagnostics.Stopwatch.StartNew();
         var result = await searches.QueryAsync(expression, 1, plan.Limit,
-            plan.Operation == "recent" ? "lastModifiedTime desc" : "id asc", requestedField, readAll, ct);
+            Sort(plan), requestedField, readAll, ct);
         if (filterClause is not null && result.IsTotalCountExact && result.TotalCount == 0)
             result = await ReadNormalizedMatchesAsync(expression, filterClause, equivalentFields, plan, readAll,
                 plan.GroupBy is not null && plan.GroupBy != "template" ? requestedField : null, ct);
@@ -131,7 +127,7 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
             // every ID, template, folder, name and date restriction of the plan.
             var presence = expression.Replace(" & " + filterClause, $" & {{[]:[{name}]=\"*\"}}", StringComparison.Ordinal);
             var candidates = await searches.QueryAsync(presence, 1, 200,
-                plan.Operation == "recent" ? "lastModifiedTime desc" : "id asc", name, true, ct);
+                Sort(plan), name, true, ct);
             if (candidates.HasNextPage || !candidates.IsTotalCountExact)
                 throw new ArgumentException("تعذر التحقق من جميع قيم الحقل. حدد نطاقًا أضيق وأعد المحاولة.");
             foreach (var item in candidates.Items)
@@ -169,6 +165,21 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
             TotalCount = matches.Count, IsTotalCountExact = true, PageNumber = 1, PageSize = plan.Limit,
             HasMore = !readAll && matches.Count > plan.Limit
         };
+    }
+
+    private static string Sort(QueryPlan plan) => plan.Operation switch
+    {
+        "latest_created" => "creationTime desc",
+        "latest_modified" or "recent" => "lastModifiedTime desc",
+        _ => plan.Sort ?? "id asc"
+    };
+    private static string Date(DateTimeOffset? date) => date?.ToString("yyyy-MM-dd HH:mm:ss zzz", CultureInfo.InvariantCulture) ?? "غير متاح";
+    internal async Task<object> CatalogAsync(CancellationToken ct)
+    {
+        var definitions = await fields.GetFieldDefinitionsAsync(ct);
+        var templateDefinitions = await templates.GetTemplateDefinitionsAsync(ct);
+        return new { fields = definitions.Values.Select(f => new { f.Name, f.FieldType, f.Description }).Distinct().ToArray(),
+            templates = templateDefinitions.Select(t => t.Name).ToArray() };
     }
 
     public async Task<ChatResult> CreateAsync(string repositoryId, QueryPlan plan, IReadOnlyList<int> ids,
@@ -210,15 +221,20 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
             return new ChatResult(table, [], new AnswerScope("repository", repositoryId, result.Items.Count, 0, true,
                 "حُسب التوزيع من نتائج البحث الحالية المتاحة لحسابك.", ids));
         }
+        var enriched = new List<LFSearchResult>();
+        foreach (var item in result.Items)
+            enriched.Add(string.IsNullOrWhiteSpace(item.FullPath) ? item with { FullPath = await entries.GetEntryPathAsync(item.EntryId, ct) } : item);
+        result = result with { Items = enriched };
         var evidence = result.Items.Select(i => new Evidence(i.EntryId, i.Name, i.FullPath, null, 1,
             $"الاسم: {i.Name}\nالمسار: {i.FullPath}", "laserfiche-metadata-live")).ToArray();
-        var detail = result.IsTotalCountExact ? $"عدد النتائج المطابقة: **{result.TotalCount}**." :
+        var latest = plan.Operation is "latest_created" or "latest_modified";
+        var detail = latest ? $"عُرضت **{result.Items.Count}** وثيقة حسب أحدث تاريخ { (plan.Operation == "latest_created" ? "إنشاء" : "تعديل") }." : result.IsTotalCountExact ? $"عدد النتائج المطابقة: **{result.TotalCount}**." :
             "تعذر تأكيد إجمالي النتائج من استجابة المستودع؛ العدد الإجمالي غير متاح.";
-        if (result.HasNextPage) detail += $" عُرضت {result.Items.Count} نتيجة فقط؛ هذه ليست القائمة الكاملة.";
+        if (!latest && result.HasNextPage) detail += $" عُرضت {result.Items.Count} نتيجة فقط؛ هذه ليست القائمة الكاملة.";
         var tableRows = string.Join("\n", result.Items.Select((i, index) =>
-            $"| {i.EntryId} | {ReportSupport.Cell(i.Name)} | {ReportSupport.Cell(i.FullPath)} | [{index + 1}] |"));
-        return new ChatResult("# تقرير المستودع\n\n" + detail + "\n\n| رقم الوثيقة | اسم الوثيقة | المسار | المرجع |\n| --- | --- | --- | --- |\n" +
-            (result.Items.Count == 0 ? "| — | لم يتم العثور على نتائج مطابقة | — | — |" : tableRows), evidence,
+            $"| {i.EntryId} | {ReportSupport.Cell(i.Name)} | {ReportSupport.Cell(i.FullPath)} | {Date(i.CreationTime)} | {Date(i.LastModifiedTime)} | [{index + 1}] |"));
+        return new ChatResult("# " + ReportSupport.Cell(plan.Title ?? "تقرير المستودع") + "\n\n" + detail + "\n\n| رقم الوثيقة | اسم الوثيقة | المسار | تاريخ الإنشاء | آخر تعديل | المرجع |\n| --- | --- | --- | --- | --- | --- |\n" +
+            (result.Items.Count == 0 ? "| — | لم يتم العثور على نتائج مطابقة | — | — | — | — |" : tableRows), evidence,
             new AnswerScope(ids.Count > 0 ? "selected-documents" : "repository", repositoryId,
                 result.IsTotalCountExact ? result.TotalCount : result.Items.Count, evidence.Length,
                 result.IsTotalCountExact && !result.HasNextPage, detail, ids))

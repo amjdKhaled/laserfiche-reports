@@ -1,3 +1,4 @@
+let reportResultsWindow = null;
 const $ = id => document.getElementById(id);
 let storeKey = '';
 let sessionRepository = '';
@@ -117,14 +118,18 @@ function renderMessages() {
     welcome.append(suggestions);
     container.append(welcome);
   } else {
-    chat.messages.forEach((message, messageIndex) => {
+    chat.messages.forEach((original, messageIndex) => {
+      const parts = original.role === 'assistant' && original.reports?.length
+        ? original.reports.map(report => ({...original, ...report, text: report.answer, reports: null})) : [original];
+      parts.forEach((message, partIndex) => {
       const item = el('div', `message ${message.role}`);
-      item.append(el('div', 'label', message.role === 'user' ? 'أنت' : 'Laserfiche Reports'));
-      const sourcePrefix = `source-${chat.id}-${messageIndex}`;
+      item.append(el('div', 'label', message.role === 'user' ? 'أنت' : (message.title || 'Laserfiche Reports')));
+      const sourcePrefix = `source-${chat.id}-${messageIndex}-${partIndex}`;
       const bubble = el('div', 'bubble');
       if (message.role === 'assistant') {
         bubble.append(ReportsMarkdown.render(message.text || '', message.sources?.length || 0, sourcePrefix));
-        const reportQuestion = chat.messages.slice(0, messageIndex).reverse().find(previous => previous.role === 'user')?.text;
+        const originalQuestion = chat.messages.slice(0, messageIndex).reverse().find(previous => previous.role === 'user')?.text;
+        const reportQuestion = message.title ? message.title + ' — ' + originalQuestion : originalQuestion;
         bubble.querySelectorAll('.report-table-wrap').forEach((wrap, tableIndex) => {
           const tableActions = el('div', 'report-actions table-export-actions');
           const tableFormat = el('select', 'report-format'); tableFormat.setAttribute('aria-label', `صيغة تنزيل الجدول ${tableIndex + 1}`);
@@ -143,7 +148,7 @@ function renderMessages() {
         const qualityLabel = ReportsDownload.qualityLabel(message.quality);
         if (qualityLabel) bubble.prepend(el('div', 'report-scope report-quality', qualityLabel));
         if (message.scope) {
-          const scope = el('div', 'report-scope', message.scope.detail);
+          const scope = el('div', 'report-scope'); scope.append(ReportsMarkdown.render(message.scope.detail || '', 0));
           scope.setAttribute('role', 'note'); bubble.prepend(scope);
         }
         if (message.generatedAt || message.sources?.length) {
@@ -165,8 +170,7 @@ function renderMessages() {
           }
           const download = el('button', '', 'تحميل التقرير'); download.type = 'button';
           download.onclick = () => {
-            const question = chat.messages.slice(0, messageIndex).reverse().find(previous => previous.role === 'user')?.text;
-            try { ReportsDownload.download(message, question, format.value); }
+            try { ReportsDownload.download(message, reportQuestion, format.value); }
             catch (error) { download.textContent = error.message || 'تعذر التحميل'; }
           };
           actions.append(download, format, copy, print);
@@ -176,21 +180,22 @@ function renderMessages() {
           open.onclick = async () => {
             open.disabled = true;
             const epoch = sessionEpoch;
-            const preview = window.open('', '_blank');
-            if (preview) { preview.opener = null; preview.document.title = 'فتح وثائق التقرير'; preview.document.body.textContent = 'جاري التحقق من الوثائق...'; }
+            const reusedWindow = reportResultsWindow && !reportResultsWindow.closed;
+            const preview = reusedWindow ? reportResultsWindow : window.open('about:blank', 'laserfiche-report-results');
+            reportResultsWindow = preview;
             try {
               const result = await api('/api/reports/laserfiche-links', {method:'POST', headers:{'Content-Type':'application/json'},
                 body:JSON.stringify({repositoryId:message.scope?.repositoryId || message.repositoryId,entryIds:message.relatedEntryIds})});
-              if (epoch !== sessionEpoch) { preview?.close(); return; }
+              if (epoch !== sessionEpoch) { if (!reusedWindow) preview?.close(); return; }
               const links = el('div', 'report-open-links');
               result.urls.forEach((url,i) => {
                 const a=el('a','source-link',result.urls.length===1 ? `عرض ${result.documentCount} وثيقة في Laserfiche ↗` : `فتح المجموعة ${i+1} من ${result.urls.length} ↗`);
-                a.href=url; a.target='_blank'; a.rel='noopener noreferrer'; links.append(a);
+                a.href=url; a.target='laserfiche-report-results'; a.rel='noopener noreferrer'; links.append(a);
               });
               bubble.querySelector('.report-open-links')?.remove(); bubble.append(links);
               if (result.urls.length===1 && preview) preview.location.replace(result.urls[0]);
-              else preview?.close();
-            } catch(error) { preview?.close(); open.textContent=error.message; }
+              else if (!reusedWindow) preview?.close();
+            } catch(error) { if (!reusedWindow) preview?.close(); open.textContent=error.message; }
             finally { open.disabled=false; }
           };
           actions.append(open); bubble.append(actions);
@@ -218,6 +223,7 @@ function renderMessages() {
         item.append(sources);
       }
       container.append(item);
+      });
     });
   }
   if (!historySaved) {
@@ -256,7 +262,7 @@ $('ask-form').onsubmit = async event => {
   try {
     const result = await api('/api/reports/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question }) });
     if (epoch !== sessionEpoch) return;
-    chat.messages[chat.messages.length - 1] = { role: 'assistant', repositoryId: sessionRepository, relatedEntryIds: result.relatedEntryIds, text: result.answer, sources: result.sources, scope: result.scope, generatedAt: result.generatedAt, quality: result.quality };
+    chat.messages[chat.messages.length - 1] = { role: 'assistant', repositoryId: sessionRepository, relatedEntryIds: result.relatedEntryIds, reports: result.reports, text: result.answer, sources: result.sources, scope: result.scope, generatedAt: result.generatedAt, quality: result.quality };
   } catch (error) {
     chat.messages[chat.messages.length - 1] = { role: 'assistant', text: `تعذر إكمال السؤال: ${error.message}` };
   } finally { pendingOperations--; $('send').disabled = false; if (epoch === sessionEpoch) { save(); renderMessages(); } }

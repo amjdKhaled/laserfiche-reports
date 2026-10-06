@@ -11,10 +11,10 @@ internal static class ReportLinks
             !string.IsNullOrEmpty(uri.UserInfo) || !string.IsNullOrEmpty(uri.Query) || !string.IsNullOrEmpty(uri.Fragment))
             throw new ArgumentException("اضبط Laserfiche:WebClientBaseUrl على عنوان Web Client مثل https://localhost/laserfiche.");
         var ids = entries.Where(id => id > 0).Distinct().ToArray();
-        var prefix = baseUrl.TrimEnd('/') + "/Browse.aspx?db=" + Uri.EscapeDataString(repository) + "#search=";
+        var prefix = baseUrl.TrimEnd('/') + "/Browse.aspx?db=" + Uri.EscapeDataString(repository) + "#?search=";
         // Bounded groups keep large inventories usable without opening hundreds of tabs.
         return ids.Chunk(500).Select(group => prefix + Uri.EscapeDataString(
-            string.Join(" | ", group.Select(id => "{LF:ID=" + id.ToString(System.Globalization.CultureInfo.InvariantCulture) + "}"))) + ";view=search").ToArray();
+            string.Join(" | ", group.Select(id => "{LF:ID=" + id.ToString(System.Globalization.CultureInfo.InvariantCulture) + "}")))).ToArray();
     }
 
     internal static void MapReportLinks(this WebApplication app)
@@ -30,7 +30,7 @@ internal static class ReportLinks
                 return Results.BadRequest(new { error = "قائمة وثائق التقرير غير صالحة." });
             var ids = request.EntryIds.Distinct().ToArray();
             foreach (var id in ids)
-                if ((await entries.GetEntryAsync(id, ct)).EntryType != LFEntryType.Document)
+                if ((await entries.GetEntryAsync(id, ct)).EntryType is not (LFEntryType.Document or LFEntryType.Folder or LFEntryType.RecordSeries))
                     return Results.BadRequest(new { error = "أحد عناصر التقرير ليس وثيقة متاحة." });
             var baseUrl = config["Laserfiche:WebClientBaseUrl"] ?? new Uri(repository.ServerUrl).GetLeftPart(UriPartial.Authority) + "/laserfiche";
             return Results.Ok(new { urls = Build(baseUrl, repository.RepositoryId, ids), documentCount = ids.Length });

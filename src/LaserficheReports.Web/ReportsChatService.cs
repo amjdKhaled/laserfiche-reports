@@ -1,6 +1,7 @@
 using System.Net.Http.Json;
 using System.Text.Json;
 using LaserficheReports.Application.Interfaces;
+using LaserficheReports.Application.DTOs;
 using LaserficheReports.Domain.Entities;
 using LaserficheReports.Domain.Exceptions;
 using Npgsql;
@@ -14,7 +15,10 @@ internal sealed record ChatResult(string Answer, IReadOnlyList<Evidence> Sources
     public DateTimeOffset GeneratedAt { get; init; } = DateTimeOffset.UtcNow;
     public ReportQuality? Quality { get; init; }
     public int[] RelatedEntryIds { get; init; } = [];
+    public IReadOnlyList<ReportSection> Reports { get; init; } = [];
 }
+internal sealed record ReportSection(string Title, string Answer, IReadOnlyList<Evidence> Sources, AnswerScope? Scope,
+    int[] RelatedEntryIds, ReportQuality? Quality);
 internal sealed record ReportQuality(string Status, bool QuoteVerification, string SemanticReview,
     string PromptVersion, int ModelCalls);
 internal sealed record IndexedDocument(int EntryId, string Name, string Path, string Status,
@@ -79,19 +83,82 @@ internal sealed class ReportsChatService(
             throw new ArgumentException("Question must contain 1 to 2000 characters.", nameof(question));
 
         var repository = await repositories.GetActiveRepositoryAsync(cancellationToken);
-        var requestedEntries = ReportSupport.RequestedEntries(question);
-        if (requestedEntries.Length > 50)
-            throw new ArgumentException("حدد حتى 50 وثيقة في السؤال الواحد.", nameof(question));
         using var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         budget.CancelAfter(TimeSpan.FromSeconds(180));
         cancellationToken = budget.Token;
+        var catalog = await liveReports.CatalogAsync(cancellationToken);
         var watch = System.Diagnostics.Stopwatch.StartNew();
-        var plan = await router.RouteAsync(question, cancellationToken);
-        logger.LogInformation("Stage=ROUTER Repository={Repository} Intent={Intent} Tool={Tool} DurationMs={DurationMs}",
-            repository.RepositoryId, plan.Kind, plan.Operation, watch.ElapsedMilliseconds);
+        var request = await router.RouteAsync(question, catalog, cancellationToken);
+        logger.LogInformation("Stage=AI_PLAN ReportCount={Count} DurationMs={DurationMs}", request.Reports.Length, watch.ElapsedMilliseconds);
+        if (request.Reports.All(p => p.Operation == "clarify"))
+            return new ChatResult(request.Clarification ?? "وضح المعلومة المطلوبة أو معيار التقرير.", []);
+        var sections = new List<ReportSection>();
+        foreach (var plan in request.Reports)
+        {
+            ChatResult result;
+            try { result = plan.Operation == "clarify"
+                ? new ChatResult(request.Clarification ?? "وضح معيار هذا التقرير.", [])
+                : await ExecutePlanAsync(repository, plan, plan.Question ?? question, cancellationToken); }
+            catch (Exception error) when (request.Reports.Length > 1 && !cancellationToken.IsCancellationRequested &&
+                error is LaserficheException or NpgsqlException or HttpRequestException or InvalidOperationException or ArgumentException)
+            {
+                logger.LogWarning("Report section failed Operation={Operation} ErrorType={ErrorType}", plan.Operation, error.GetType().Name);
+                result = new ChatResult("تعذر إكمال هذا التقرير؛ لم تُعرض نتائج أو أعداد غير مؤكدة.", []);
+            }
+            sections.Add(new ReportSection(plan.Title ?? "تقرير", result.Answer, result.Sources, result.Scope,
+                result.RelatedEntryIds, result.Quality));
+        }
+        var metadata = request.Reports.Select((p, i) => (p, i)).Where(x => !x.p.Content && x.p.Operation != "clarify" && sections[x.i].Scope != null).ToArray();
+        if (metadata.Length > 0)
+        {
+            try
+            {
+                using var response = await clients.CreateClient("ReportsGraph").PostAsJsonAsync("present", new
+                {
+                    question,
+                    reports = metadata.Select(x => new { index = x.i, title = sections[x.i].Title,
+                        facts = sections[x.i].Answer[..Math.Min(sections[x.i].Answer.Length, 12000 / metadata.Length)] })
+                }, cancellationToken);
+                response.EnsureSuccessStatusCode();
+                var presentation = await response.Content.ReadFromJsonAsync<GraphPresentation>(cancellationToken)
+                    ?? throw new InvalidOperationException("لم يرجع الذكاء الاصطناعي صياغة التقرير.");
+                foreach (var item in presentation.Reports ?? [])
+                    if (metadata.Any(x => x.i == item.Index) && !string.IsNullOrWhiteSpace(item.Summary))
+                        sections[item.Index] = sections[item.Index] with { Answer = item.Summary + "\n\n" + sections[item.Index].Answer,
+                            Quality = new ReportQuality("answered", true, "completed", "live-reports-v3", 3) };
+            }
+            catch (Exception error) when (!cancellationToken.IsCancellationRequested &&
+                error is HttpRequestException or JsonException or InvalidOperationException or OperationCanceledException)
+            {
+                logger.LogWarning("AI presentation unavailable ErrorType={ErrorType}", error.GetType().Name);
+                foreach (var item in metadata)
+                    sections[item.i] = sections[item.i] with { Answer = "تعذرت صياغة ملخص AI؛ البيانات التالية مسترجعة من المستودع مباشرة.\n\n" + sections[item.i].Answer,
+                        Quality = new ReportQuality("unverified", false, "unavailable", "live-reports-v3", 1) };
+            }
+        }
+        var allSources = new List<Evidence>();
+        var combined = new List<string>();
+        foreach (var section in sections)
+        {
+            var offset = allSources.Count;
+            combined.Add("## " + ReportSupport.Cell(section.Title) + "\n\n" +
+                System.Text.RegularExpressions.Regex.Replace(section.Answer, @"\[(\d+)\]", m =>
+                    int.TryParse(m.Groups[1].Value, out var id) && id <= section.Sources.Count
+                        ? "[" + (offset + id) + "]" : m.Value));
+            allSources.AddRange(section.Sources);
+        }
+        return new ChatResult(string.Join("\n\n", combined), allSources, sections.Count == 1 ? sections[0].Scope : null)
+        { Reports = sections, RelatedEntryIds = sections.SelectMany(s => s.RelatedEntryIds).Distinct().ToArray() };
+    }
+
+    private async Task<ChatResult> ExecutePlanAsync(RepositoryDescriptor repository, QueryPlan plan, string question,
+        CancellationToken cancellationToken)
+    {
+        var requestedEntries = plan.EntryIds ?? [];
+        var watch = System.Diagnostics.Stopwatch.StartNew();
         if (plan.Operation == "clarify")
             return new ChatResult("حدد اسم الحقل وقيمته كما تظهر في Laserfiche، أو رقم الوثيقة المطلوب تحليلها.", []);
-        if (plan.Operation is not ("search" or "folders" or "metadata" or "templates" or "recent" or "created" or "modified" or "group" or "content"))
+        if (plan.Operation is not ("search" or "folders" or "metadata" or "templates" or "recent" or "latest_created" or "latest_modified" or "created" or "modified" or "group" or "content"))
             throw new ArgumentException("لم أتعرف على الطلب. حدد الحقل وقيمته أو رقم الوثيقة والمعلومة المطلوبة.");
         if (!plan.Content)
             return await liveReports.CreateAsync(repository.RepositoryId, plan, requestedEntries, cancellationToken);
@@ -233,5 +300,7 @@ internal sealed class ReportsChatService(
         limit @candidateLimit
         """;
 
+    private sealed record PresentedReport(int Index, string Summary);
+    private sealed record GraphPresentation(PresentedReport[]? Reports);
     private sealed record GraphAnswer(string Answer, ReportQuality? Quality, int[]? RelatedEntryIds);
 }

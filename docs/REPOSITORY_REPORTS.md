@@ -57,10 +57,10 @@ Older saved reports without explicit IDs have this button disabled.
 
 The server verifies the report's repository and rechecks document access before
 returning Web Client search URLs. IDs are combined with `|` using `{LF:ID=...}` and
-encoded into the same `Browse.aspx?db=...#search=...;view=search` link shape used by
+encoded into the same `Browse.aspx?db=...#?search=...` link shape used by
 the Dashboard. Reports containing over 500 distinct IDs are split into groups,
 all of which are displayed for the user to open. No password is put in a URL.
-Web Client may request its own sign-in; this feature does not bypass it.
+Use the same hostname as your existing signed-in Web Client. A login on a machine name does not share cookies with localhost; using localhost can create a second session and hit license limits. The app reuses a report results window.
 
 The default Web Client directory is `/laserfiche` on the configured server's origin.
 For another virtual directory or host, set its actual directory URL in local settings:
@@ -83,3 +83,9 @@ encoding and grouping. Office packages are inspected using DOCX/XLSX readers.
 Live repository discovery, installed Web Client navigation and model quality still
 require testing on the machine with Laserfiche and Ollama. A passing mocked test
 is not a measurement of actual model accuracy on the user's documents.
+
+## AI planning and multiple reports
+
+Every question is analyzed by Ollama with the live field/template catalog. Validated tool plans execute against the repository; there is no keyword question router. Independent requests produce independent report cards and downloads. Latest-created and latest-modified each request one row with their own server-side ordering. Tables include both timestamps, and missing search-result paths are resolved from the current entry and parent folders.
+
+The model summarizes retrieved metadata, and a second model call checks its claims against exact evidence. Unverified summaries are excluded; retrieval remains the authority for tables and counts. Restart both services after updating. Graph health must include `routingVersion: ai-multi-report-v3`. Local model accuracy and Windows Web Client session behavior require validation on the installed machine.
