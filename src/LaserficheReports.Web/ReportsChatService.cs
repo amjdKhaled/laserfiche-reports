@@ -84,7 +84,8 @@ internal sealed class ReportsChatService(
 
         var repository = await repositories.GetActiveRepositoryAsync(cancellationToken);
         using var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        budget.CancelAfter(TimeSpan.FromSeconds(Math.Clamp(configuration.GetValue<int?>("Reports:RequestTimeoutSeconds") ?? 3600, 300, 14400)));
+        var requestTimeout = configuration.GetValue<int?>("Reports:RequestTimeoutSeconds") ?? 0;
+        if (requestTimeout > 0) budget.CancelAfter(TimeSpan.FromSeconds(requestTimeout));
         cancellationToken = budget.Token;
         if (history is { Length: > 8 } || (history?.Any(t => t is null || t.Role is not ("user" or "assistant") || t.Text is null || t.Text.Length > 3000) ?? false))
             throw new ArgumentException("سياق المحادثة أكبر من الحد المسموح.");

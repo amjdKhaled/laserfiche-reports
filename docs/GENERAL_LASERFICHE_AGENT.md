@@ -129,3 +129,13 @@ This review cannot establish the actual response shape of Entry 619, Fields 619,
 - Attempted actual model evaluation: exited `ollama_unavailable`; no real inference ran. Local ports 80/443 (IIS), 11434 (Ollama), 8766 and 5187 were unreachable in this workspace. It is a Linux execution workspace, **not the user's Windows/IIS machine**. No live response, mutation freshness, browser acceptance or real before/after /route duration is available here. Real model/Laserfiche/OCR acceptance remains required; full Definition of Done is pending.
 
 No UI assets, table rendering, login layout, colors, report downloads, Sidebar or Dashboard were modified. No dependency/reference to another application was added.
+
+## Wait for completion by default (intent-v5.4)
+
+The user explicitly superseded the bounded-wait preference: let the model finish rather than stop it at a fixed time. Model/planner defaults and launcher parameters now use 0 to mean unlimited. Planning uses an HTTP client with no read timeout, even when an older caller's model client has a finite timeout. An explicitly positive planner timeout retains the optional bounded mode. The model queue no longer has a default five-second cutoff. The evaluator also defaults to unlimited inference.
+
+ASP.NET's ReportsGraph client and both chat request cancellation budgets default to unlimited, with shipped ReportsGraph:TimeoutSeconds and Reports:RequestTimeoutSeconds set to 0. Client disconnect cancellation remains respected. The health handshake accepts modelTimeoutSeconds=0. Existing explicit positive settings remain optional overrides; if a local/runtime configuration overrides these keys, set both to 0 there as well. No UI, field validation, query syntax, results, OCR pipeline or model identity changed. Existing connection/error handling and Laserfiche API task/network limits are not removed.
+
+Restart both Web and graph after updating. The launcher prints planner=intent-v5.4; modelTimeoutSeconds=0 and plannerTimeoutSeconds=0 mean unlimited, not an immediate timeout. Real services on the user's machine remain inaccessible from this workspace; no claim of successful real Qwen/Laserfiche inference is made.
+
+Verification for intent-v5.4: build succeeded; 71 Python tests and 95 Web tests passed (one external database test skipped). The real ChatOllama transport fixture completes a delayed response despite an inherited 0.01-second client timeout; the existing explicit-deadline regression still passes. This is HTTP/contract verification, not real-model inference. UI assets have no diff.

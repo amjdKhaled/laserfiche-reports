@@ -43,7 +43,7 @@ internal sealed class QuestionRouter(IHttpClientFactory clients)
             await GraphServiceException.EnsureSuccessAsync(health, "planning", cancellationToken);
             var status = await health.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>(cancellationToken);
             if (!status.TryGetProperty("routingVersion", out var version) || version.GetString() != "schema-agent-v5" ||
-                !status.TryGetProperty("modelTimeoutSeconds", out var timeout) || !timeout.TryGetInt32(out var seconds) || seconds < 60)
+                !status.TryGetProperty("modelTimeoutSeconds", out var timeout) || !timeout.TryGetInt32(out var seconds) || (seconds != 0 && seconds < 60))
                 throw new GraphServiceException("graph_protocol_mismatch", "planning", GraphServiceException.MessageFor("graph_protocol_mismatch"));
         }
         catch (HttpRequestException error)
