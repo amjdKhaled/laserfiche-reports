@@ -104,6 +104,8 @@ class AgentContractTests(unittest.TestCase):
         class Handler(BaseHTTPRequestHandler):
             def log_message(self, *args): pass
             def do_POST(self):
+                import time
+                time.sleep(0.1)  # Unlimited planning overrides an inherited short client timeout.
                 requests.append(json.loads(self.rfile.read(int(self.headers['Content-Length']))))
                 body = json.dumps({'model': 'qwen2.5:7b', 'message': {'role': 'assistant', 'content': json.dumps({'reports': [plan]})}, 'done': True, 'done_reason': 'stop'}).encode() + b'\n'
                 self.send_response(200)
@@ -112,7 +114,7 @@ class AgentContractTests(unittest.TestCase):
         server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
         thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
         try:
-            model = ChatOllama(model='qwen2.5:7b', base_url=f'http://127.0.0.1:{server.server_port}', client_kwargs={'trust_env': False})
+            model = ChatOllama(model='qwen2.5:7b', base_url=f'http://127.0.0.1:{server.server_port}', client_kwargs={'trust_env': False, 'timeout': 0.01})
             result = plan_reports(model, {'question': 'وثائق', 'catalog': {'fields': [{'name': 'حقل فعلي', 'fieldType': 'Date'}]}})
             self.assertEqual(result['reports'][0]['operation'], 'search')
             self.assertEqual(len(requests), 1)

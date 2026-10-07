@@ -66,7 +66,8 @@ builder.Services.AddHttpClient("ReportsGraph", client =>
         uri.Host is not ("127.0.0.1" or "localhost" or "::1"))
         throw new InvalidOperationException("ReportsGraph:BaseUrl must be local HTTP.");
     client.BaseAddress = new Uri(uri.AbsoluteUri.TrimEnd('/') + "/");
-    client.Timeout = TimeSpan.FromSeconds(Math.Clamp(builder.Configuration.GetValue<int?>("ReportsGraph:TimeoutSeconds") ?? 1500, 120, 7200));
+    var graphTimeout = builder.Configuration.GetValue<int?>("ReportsGraph:TimeoutSeconds") ?? 0;
+    client.Timeout = graphTimeout <= 0 ? Timeout.InfiniteTimeSpan : TimeSpan.FromSeconds(graphTimeout);
 }).AddHttpMessageHandler<GraphCorrelationHandler>().ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
 {
     AllowAutoRedirect = false,
@@ -84,8 +85,9 @@ app.Use(async (context, next) =>
     var original = context.RequestAborted;
     using var budget = CancellationTokenSource.CreateLinkedTokenSource(original);
     var path = context.Request.Path;
-    budget.CancelAfter(TimeSpan.FromSeconds(path.StartsWithSegments("/api/reports/chat") ? Math.Clamp(builder.Configuration.GetValue<int?>("Reports:RequestTimeoutSeconds") ?? 3600, 300, 14400) :
-        path.StartsWithSegments("/api/ingestion") ? 1800 : path.Value?.EndsWith("/status") == true ? 10 : 60));
+    var requestTimeout = path.StartsWithSegments("/api/reports/chat") ? builder.Configuration.GetValue<int?>("Reports:RequestTimeoutSeconds") ?? 0 :
+        path.StartsWithSegments("/api/ingestion") ? 1800 : path.Value?.EndsWith("/status") == true ? 10 : 60;
+    if (requestTimeout > 0) budget.CancelAfter(TimeSpan.FromSeconds(requestTimeout));
     context.RequestAborted = budget.Token;
     try { await next(); }
     catch (Exception ex) when (!context.Response.HasStarted)

@@ -25,6 +25,18 @@ public sealed class GraphDependencyTests
         Assert.Equal("request:17", actual);
     }
 
+    [Fact]
+    public async Task UnlimitedModelTimeoutIsAcceptedByTheHealthHandshake()
+    {
+        var factory = new Factory(request => new HttpResponseMessage(HttpStatusCode.OK)
+        { Content = new StringContent(request.RequestUri!.AbsolutePath == "/health"
+            ? "{\"routingVersion\":\"schema-agent-v5\",\"modelTimeoutSeconds\":0}"
+            : "{\"reports\":[{\"operation\":\"search\",\"resultType\":\"documents\",\"requiresFilter\":false}]}", Encoding.UTF8, "application/json") });
+        var result = await new QuestionRouter(factory).RouteAsync("اعرض الوثائق", new { }, default);
+        Assert.Single(result.Reports);
+        Assert.Equal("search", result.Reports[0].Operation);
+    }
+
     [Theory]
     [InlineData("ollama_unavailable")]
     [InlineData("model_not_found")]

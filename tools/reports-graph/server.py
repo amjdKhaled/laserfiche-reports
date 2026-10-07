@@ -477,19 +477,19 @@ def plan_reports(model, payload, *, budget_seconds=None, max_tokens=1536):
         if remaining is not None and remaining <= 0:
             raise TimeoutError("Planning deadline exhausted")
         target = model
-        if remaining is not None and isinstance(model, ChatOllama):
+        if isinstance(model, ChatOllama):
             # A non-streaming response prevents each generated chunk resetting
             # HTTP read timeout. Repair shares the original deadline.
             from httpx import Timeout
             target = ChatOllama(model=model.model, base_url=model.base_url, temperature=0,
                                 keep_alive=model.keep_alive,
-                                client_kwargs={"trust_env": False, "timeout": Timeout(remaining, connect=min(5, remaining))})
+                                client_kwargs={"trust_env": False, "timeout": Timeout(remaining, connect=5 if remaining is None else min(5, remaining))})
         content = invoke_structured(target, messages, PlannerOutputSchema, max_tokens=max_tokens, compact=True, num_ctx=context_size, diagnostics=True, embed_schema=False, stream=False)
         validation_started = time.monotonic()
         try:
             request = planner_request(content, payload["question"])
             validate_plan_schema(request, payload["catalog"])
-            print("Stage=PLANNER_VALIDATED RequestId=" + REQUEST_ID.get() + " Version=intent-v5.3 Attempt=" + str(attempt + 1) + " Plans=" + json.dumps([
+            print("Stage=PLANNER_VALIDATED RequestId=" + REQUEST_ID.get() + " Version=intent-v5.4 Attempt=" + str(attempt + 1) + " Plans=" + json.dumps([
                 {"resultType": p.resultType, "operation": p.operation, "requiresFilter": p.requiresFilter,
                  "hasFilter": bool(p.filters or p.field or p.template or p.folderId or p.name or p.entryIds or p.from_),
                  "allResults": p.allResults, "countOnly": p.countOnly} for p in request.reports]), flush=True)
@@ -717,10 +717,10 @@ class Handler(BaseHTTPRequestHandler):
     model = None
     ollama_url = None
     model_name = None
-    model_timeout_seconds = 600
-    planner_timeout_seconds = 120
+    model_timeout_seconds = 0
+    planner_timeout_seconds = 0
     planner_output_tokens = 1536
-    queue_timeout_seconds = 5
+    queue_timeout_seconds = None
     model_gate = threading.BoundedSemaphore(1)
 
     def do_GET(self):
@@ -731,7 +731,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(HTTPStatus.SERVICE_UNAVAILABLE, {"status": "unavailable", "error": error})
         return self.send_json(HTTPStatus.OK, {"status": "ready", "model": self.model_name,
             "modelTimeoutSeconds": self.model_timeout_seconds, "plannerTimeoutSeconds": self.planner_timeout_seconds, "engine": "LangGraph",
-            "routingVersion": "schema-agent-v5", "plannerVersion": "intent-v5.3", "promptVersion": PROMPT_VERSION, "capabilities": ["schema-output", "structured-filters", "backend-dates", "aggregation", "follow-up", "focused-context", "optional-semantic-review"]})
+            "routingVersion": "schema-agent-v5", "plannerVersion": "intent-v5.4", "promptVersion": PROMPT_VERSION, "capabilities": ["schema-output", "structured-filters", "backend-dates", "aggregation", "follow-up", "focused-context", "optional-semantic-review"]})
 
     def do_POST(self):
         if self.path not in ("/answer", "/route", "/present"):
@@ -763,14 +763,15 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(error.status, {"error": error.error})
         except (ValueError, UnicodeDecodeError, json.JSONDecodeError) as error:
             return self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
-        if not self.model_gate.acquire(timeout=self.queue_timeout_seconds):
+        acquired = self.model_gate.acquire() if self.queue_timeout_seconds is None else self.model_gate.acquire(timeout=self.queue_timeout_seconds)
+        if not acquired:
             return self.send_json(HTTPStatus.TOO_MANY_REQUESTS, {"error": "local_model_busy"})
         started = time.monotonic()
         request_id = re.sub(r"[^a-zA-Z0-9:._-]", "", self.headers.get("X-Request-ID", ""))[:64]
         request_scope = REQUEST_ID.set(request_id)
         try:
             if self.path == "/route":
-                result = plan_reports(self.model, payload, budget_seconds=self.planner_timeout_seconds, max_tokens=self.planner_output_tokens)
+                result = plan_reports(self.model, payload, budget_seconds=self.planner_timeout_seconds or None, max_tokens=self.planner_output_tokens)
                 return self.send_json(HTTPStatus.OK, result)
             if self.path == "/present":
                 return self.send_json(HTTPStatus.OK, present_reports(self.model, payload))
@@ -808,14 +809,14 @@ def main():
     parser.add_argument("--model", default=DEFAULT_CHAT_MODEL)
     parser.add_argument("--ollama-url", default=os.environ.get("REPORTS_OLLAMA_URL", "http://127.0.0.1:11434"))
     parser.add_argument("--review-content", action="store_true", help="Optional extra semantic review call for OCR answers")
-    parser.add_argument("--model-timeout-seconds", type=int, default=int(os.environ.get("REPORTS_MODEL_TIMEOUT_SECONDS", "600")))
-    parser.add_argument("--planner-timeout-seconds", type=int, default=int(os.environ.get("REPORTS_PLANNER_TIMEOUT_SECONDS", "120")))
+    parser.add_argument("--model-timeout-seconds", type=int, default=int(os.environ.get("REPORTS_MODEL_TIMEOUT_SECONDS", "0")))
+    parser.add_argument("--planner-timeout-seconds", type=int, default=int(os.environ.get("REPORTS_PLANNER_TIMEOUT_SECONDS", "0")))
     parser.add_argument("--planner-output-tokens", type=int, default=int(os.environ.get("REPORTS_PLANNER_OUTPUT_TOKENS", "1536")))
     args = parser.parse_args()
-    if not 60 <= args.model_timeout_seconds <= 3600:
-        parser.error("Model timeout must be between 60 and 3600 seconds.")
-    if not 15 <= args.planner_timeout_seconds <= 600 or not 256 <= args.planner_output_tokens <= 4096:
-        parser.error("Planner timeout must be 15..600 seconds and output tokens 256..4096.")
+    if args.model_timeout_seconds != 0 and not 60 <= args.model_timeout_seconds <= 3600:
+        parser.error("Model timeout must be 0 (unlimited) or 60..3600 seconds.")
+    if (args.planner_timeout_seconds != 0 and not 15 <= args.planner_timeout_seconds <= 600) or not 256 <= args.planner_output_tokens <= 4096:
+        parser.error("Planner timeout must be 0 (unlimited) or 15..600 seconds; output tokens 256..4096.")
     parsed = urlsplit(args.ollama_url)
     if parsed.scheme != "http" or parsed.hostname not in ("127.0.0.1", "localhost", "::1"):
         parser.error("Ollama URL must use local HTTP.")
@@ -823,7 +824,7 @@ def main():
     os.environ["LANGCHAIN_TRACING_V2"] = "false"
     os.environ["LANGSMITH_TRACING"] = "false"
     model = ChatOllama(model=args.model, base_url=args.ollama_url, temperature=0,
-                       num_ctx=16384, num_predict=4096, keep_alive="30m", client_kwargs={"timeout": args.model_timeout_seconds, "trust_env": False})
+                       num_ctx=16384, num_predict=4096, keep_alive="30m", client_kwargs={"timeout": args.model_timeout_seconds or None, "trust_env": False})
     Handler.ollama_url = args.ollama_url
     Handler.model_name = args.model
     Handler.model_timeout_seconds = args.model_timeout_seconds
@@ -831,7 +832,7 @@ def main():
     Handler.planner_output_tokens = args.planner_output_tokens
     Handler.model = model
     Handler.graph = build_graph(model, fast=True, review_content=args.review_content)
-    print(f"LangGraph ready on http://127.0.0.1:{args.port}; model={args.model}; planner=intent-v5.3; modelTimeoutSeconds={args.model_timeout_seconds}; plannerTimeoutSeconds={args.planner_timeout_seconds}; plannerOutputTokens={args.planner_output_tokens}", flush=True)
+    print(f"LangGraph ready on http://127.0.0.1:{args.port}; model={args.model}; planner=intent-v5.4; modelTimeoutSeconds={args.model_timeout_seconds}; plannerTimeoutSeconds={args.planner_timeout_seconds}; plannerOutputTokens={args.planner_output_tokens}", flush=True)
     ThreadingHTTPServer(("127.0.0.1", args.port), Handler).serve_forever()
 
 
