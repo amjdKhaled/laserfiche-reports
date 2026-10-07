@@ -57,6 +57,7 @@ internal static class RepositoryAggregation
             return values[0];
         }
         var sorted = plan.SortDirection == "desc" ? result.Items.OrderByDescending(Key) : result.Items.OrderBy(Key);
+        if (plan.CompleteListing) return result with { Items = sorted.ToArray(), PageNumber = 1, HasMore = false };
         var items = sorted.Skip((plan.Page - 1) * plan.Limit).Take(plan.Limit).ToArray();
         return result with { Items = items, PageNumber = plan.Page, PageSize = plan.Limit, HasMore = plan.Page * plan.Limit < result.TotalCount };
     }

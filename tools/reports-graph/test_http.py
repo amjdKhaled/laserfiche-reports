@@ -58,8 +58,8 @@ class HttpTests(unittest.TestCase):
         from test_graph import FakeModel
         from server import ReportRequest
         plans = {'reports': [
-            {'operation': 'latest_modified', 'title': 'آخر تعديل', 'question': 'آخر وثيقة معدلة', 'limit': 1},
-            {'operation': 'latest_created', 'title': 'آخر إنشاء', 'question': 'آخر وثيقة منشأة', 'limit': 1}]}
+            {'resultType': 'documents', 'requiresFilter': False, 'operation': 'latest_modified', 'title': 'آخر تعديل', 'question': 'آخر وثيقة معدلة', 'limit': 1},
+            {'resultType': 'documents', 'requiresFilter': False, 'operation': 'latest_created', 'title': 'آخر إنشاء', 'question': 'آخر وثيقة منشأة', 'limit': 1}]}
         invalid = json.loads(json.dumps(plans)); invalid['reports'][0]['limit'] = 10
         self.server.RequestHandlerClass.model = FakeModel([json.dumps(invalid), json.dumps(plans)])
         body = json.dumps({'question': 'آخر تعديل وآخر إنشاء', 'catalog': {'fields': [{'name': 'إجراء الوثيقة'}]}}).encode()
@@ -70,7 +70,7 @@ class HttpTests(unittest.TestCase):
 
     def test_route_http_preserves_conversation_context(self):
         from test_graph import FakeModel
-        plan = {'reports': [{'operation': 'search', 'title': 'تقرير', 'question': 'رتبها', 'limit': 50, 'sort': 'creationTime asc'}]}
+        plan = {'reports': [{'resultType': 'documents', 'requiresFilter': False, 'operation': 'search', 'title': 'تقرير', 'question': 'رتبها', 'limit': 50, 'sort': 'creationTime asc'}]}
         model = FakeModel([json.dumps(plan)])
         self.server.RequestHandlerClass.model = model
         history = [{'role': 'user', 'text': 'اعرض وثائق المحاسبة'}]
@@ -91,7 +91,7 @@ class HttpTests(unittest.TestCase):
                 response = self.client.getresponse()
                 payload = json.loads(response.read())
                 self.assertEqual(response.status, 503 if code else 200)
-                self.assertEqual(payload.get('error') if code else payload['routingVersion'], code or 'schema-agent-v4')
+                self.assertEqual(payload.get('error') if code else payload['routingVersion'], code or 'schema-agent-v5')
 
     def test_model_timeout_is_not_mislabeled_as_connection_failure(self):
         from httpx import ReadTimeout

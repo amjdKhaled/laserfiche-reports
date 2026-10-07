@@ -77,7 +77,9 @@
 .sources-extra{margin-top:4px}
 
 /* Keep chat deletion inside each existing history row. */
-.history-row{display:flex;align-items:center;gap:3px}
-.history .history-open{flex:1;min-width:0}
-.history .history-delete{flex:none;width:26px;height:28px;padding:0;line-height:1;font-size:20px;color:#7b879a;text-align:center;border-radius:6px}
+.history-row{display:flex;align-items:center;gap:4px;border-radius:12px;padding-inline:6px}
+.history-row.selected{background:#edf3ff}
+.history .history-open{flex:1;min-width:0;background:transparent}
+.history .history-delete{display:flex;align-items:center;justify-content:center;flex:none;width:28px;height:28px;padding:0;line-height:1;font-size:20px;color:#7b879a;text-align:center;border-radius:6px}
+.history .history-delete:focus-visible{outline:2px solid #0754cc;outline-offset:2px}
 .history .history-delete:hover{color:#b43b3b;background:#fff0f0}

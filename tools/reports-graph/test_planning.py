@@ -6,9 +6,9 @@ from test_graph import FakeModel
 class PlanningTests(unittest.TestCase):
     def test_multiple_reports_keep_their_own_scope_and_latest_semantics(self):
         request = ReportRequest.model_validate({'reports': [
-            {'operation': 'latest_modified', 'title': 'آخر تعديل', 'question': 'الوثيقة الأخيرة المعدلة', 'limit': 1},
-            {'operation': 'latest_created', 'title': 'آخر إنشاء', 'question': 'الوثيقة الأخيرة المنشأة', 'limit': 1},
-            {'operation': 'metadata', 'title': 'وثيقة محددة', 'question': 'حقول الوثيقة 42', 'entryIds': [42], 'limit': 1}]})
+            {'resultType': 'documents', 'requiresFilter': False, 'operation': 'latest_modified', 'title': 'آخر تعديل', 'question': 'الوثيقة الأخيرة المعدلة', 'limit': 1},
+            {'resultType': 'documents', 'requiresFilter': False, 'operation': 'latest_created', 'title': 'آخر إنشاء', 'question': 'الوثيقة الأخيرة المنشأة', 'limit': 1},
+            {'resultType': 'details', 'requiresFilter': False, 'operation': 'metadata', 'title': 'وثيقة محددة', 'question': 'حقول الوثيقة 42', 'entryIds': [42], 'limit': 1}]})
         self.assertEqual([p.entryIds for p in request.reports], [[], [], [42]])
         self.assertEqual([p.operation for p in request.reports[:2]], ['latest_modified', 'latest_created'])
         self.assertEqual([p.limit for p in request.reports[:2]], [1, 1])
@@ -39,8 +39,8 @@ class PlanningTests(unittest.TestCase):
         from server import plan_reports
         payload = {'question': 'آخر تعديل وآخر إنشاء', 'catalog': {'fields': [{'name': 'إجراء الوثيقة'}]}}
         plans = {'reports': [
-            {'operation': 'latest_modified', 'title': 'آخر تعديل', 'question': 'آخر وثيقة معدلة', 'limit': 1},
-            {'operation': 'latest_created', 'title': 'آخر إنشاء', 'question': 'آخر وثيقة منشأة', 'limit': 1}]}
+            {'resultType': 'documents', 'requiresFilter': False, 'operation': 'latest_modified', 'title': 'آخر تعديل', 'question': 'آخر وثيقة معدلة', 'limit': 1},
+            {'resultType': 'documents', 'requiresFilter': False, 'operation': 'latest_created', 'title': 'آخر إنشاء', 'question': 'آخر وثيقة منشأة', 'limit': 1}]}
         wrong = json.loads(json.dumps(plans)); wrong['reports'][0]['limit'] = 10
         model = FakeModel([json.dumps(wrong), json.dumps(plans)])
         self.assertEqual(len(plan_reports(model, payload)['reports']), 2)
@@ -64,11 +64,11 @@ class PlanningTests(unittest.TestCase):
             {'name': 'إجراء الوثيقة', 'fieldType': 'String', 'description': 'x' * 10000},
             {'name': 'الإدارة', 'fieldType': 'String', 'description': 'y' * 10000}],
             'templates': ['مراسلات', 'عقود']}}
-        model = FakeModel([json.dumps({'reports': [{'operation': 'search', 'title': 'وثائق',
+        model = FakeModel([json.dumps({'reports': [{'resultType': 'documents', 'requiresFilter': False, 'operation': 'search', 'title': 'وثائق',
             'question': 'اعرض الوثائق', 'limit': 50}]})])
         plan_reports(model, payload)
         sent = json.loads(model.calls[0][1].content)
-        self.assertEqual([f['name'] for f in sent['catalog']['fields']], ['إجراء الوثيقة', 'الإدارة'])
+        self.assertEqual([f[0] for f in sent['catalog']['fields']], ['إجراء الوثيقة', 'الإدارة'])
         self.assertEqual(sent['catalog']['templates'], ['مراسلات', 'عقود'])
         self.assertNotIn('description', model.calls[0][1].content)
         self.assertLess(len(model.calls[0][1].content), 500)

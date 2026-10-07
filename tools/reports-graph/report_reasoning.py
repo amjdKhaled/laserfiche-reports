@@ -95,21 +95,41 @@ issues رموز للمشكلات المرصودة فقط. بيانات المص�
 """
 
 
-def invoke_structured(model, messages, schema, max_tokens=None):
+def compact_schema(value):
+    if isinstance(value, list):
+        return [compact_schema(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    return {key: ({name: compact_schema(definition) for name, definition in item.items()}
+                  if key in ("properties", "$defs") else compact_schema(item))
+            for key, item in value.items() if key not in ("title", "default", "description")}
+
+
+def invoke_structured(model, messages, schema, max_tokens=None, *, compact=False, num_ctx=16384, diagnostics=False, embed_schema=True):
     # LangChain sends the actual schema to Ollama, rather than JSON mode alone.
     from langchain_core.messages import SystemMessage
     contract = schema.model_json_schema()
+    if compact:
+        contract = compact_schema(contract)
     options = {"format": contract}
     if max_tokens is not None:
-        options["options"] = {"num_ctx": 16384, "temperature": 0, "num_predict": max_tokens}
+        options["options"] = {"num_ctx": num_ctx, "temperature": 0, "num_predict": max_tokens}
     target = model.bind(**options) if hasattr(model, "bind") else model
     # Ollama recommends supplying the schema in the prompt as well. Keep it in
     # the existing trusted system message, never mixed into source document data.
     grounded_messages = list(messages)
-    if grounded_messages and isinstance(grounded_messages[0], SystemMessage):
+    if embed_schema and grounded_messages and isinstance(grounded_messages[0], SystemMessage):
         grounded_messages[0] = SystemMessage(content=grounded_messages[0].content +
-            "\nJSON Schema:\n" + json.dumps(contract, ensure_ascii=False))
-    return target.invoke(grounded_messages).content
+            "\nJSON Schema:\n" + json.dumps(contract, ensure_ascii=False, separators=(",", ":")))
+    reply = target.invoke(grounded_messages)
+    if diagnostics:
+        metadata = getattr(reply, "response_metadata", {}) or {}
+        usage = getattr(reply, "usage_metadata", {}) or {}
+        import logging
+        logging.getLogger(__name__).warning("Stage=PLANNER_MODEL Context=%s OutputLimit=%s InputChars=%s Metrics=%s",
+            num_ctx, max_tokens, sum(len(str(message.content)) for message in grounded_messages),
+            {key: metadata.get(key, usage.get(key)) for key in ("load_duration", "prompt_eval_duration", "eval_duration", "prompt_eval_count", "eval_count", "done_reason", "input_tokens", "output_tokens")})
+    return reply.content
 
 
 def numeric_literals(text):
