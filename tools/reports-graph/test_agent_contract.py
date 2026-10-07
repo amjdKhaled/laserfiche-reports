@@ -40,7 +40,8 @@ class AgentContractTests(unittest.TestCase):
         for key in ('resultType', 'question', 'value', 'groupBy', 'from', 'to'):
             self.assertNotIn(key, schema['properties'])
         self.assertNotIn('limit', schema['required'])
-        self.assertIn('requiresFilter', schema['required'])
+        self.assertIn('selection', schema['required'])
+        self.assertNotIn('requiresFilter', schema['properties'])
         question = 'عرض وثائق بشروط من المستودع'
         model = FakeModel([json.dumps({'reports': [{'operation': 'search', 'title': 'وثائق', 'requiresFilter': True,
             'filters': {'field': 'أجل الإنجاز', 'operator': 'less_than', 'relative': {'unit': 'day'}}}]})])
@@ -50,6 +51,48 @@ class AgentContractTests(unittest.TestCase):
         self.assertTrue(result['requiresFilter'])
         self.assertEqual(result['filters']['field'], 'أجل الإنجاز')
         self.assertEqual(len(model.calls), 1)
+
+    def test_generation_schema_rejects_missing_selection_before_model_output(self):
+        from jsonschema import Draft202012Validator
+        from server import PlannerOutputSchema
+        schema = PlannerOutputSchema.model_json_schema()
+        Draft202012Validator.check_schema(schema)
+        validator = Draft202012Validator(schema)
+        base = {'operation': 'search', 'title': 'كشف الوثائق'}
+        invalid = [dict(base, requiresFilter=True), dict(base, selection={'requiresFilter': True}),
+                   dict(base, selection={'requiresFilter': True, 'filters': {}}),
+                   dict(base, selection={'requiresFilter': True, 'entryIds': []}),
+                   dict(base, selection={'requiresFilter': True, 'name': ''}),
+                   dict(base, selection={'requiresFilter': True, 'field': 'الموعد'}),
+                   dict(base, selection={'requiresFilter': False, 'name': 'أ'}),
+                   dict(base, selection={'requiresFilter': True, 'filters': {'field': 'الموعد', 'operator': 'less_than'}})]
+        for plan in invalid:
+            with self.subTest(plan=plan):
+                self.assertFalse(validator.is_valid({'reports': [plan]}))
+        for selection in [{'requiresFilter': False}, {'requiresFilter': True, 'entryIds': [618]},
+                          {'requiresFilter': True, 'folderId': 10}, {'requiresFilter': True, 'template': 'عقود'},
+                          {'requiresFilter': True, 'filters': {'field': 'الموعد', 'operator': 'less_than', 'relative': {'unit': 'day'}}}]:
+            self.assertTrue(validator.is_valid({'reports': [{**base, 'selection': selection}]}))
+
+    def test_nested_selection_preserves_all_scopes_and_resolves_against_live_schema(self):
+        from server import planner_request
+        selection = {'requiresFilter': True, 'template': 'عقود', 'folderId': 10,
+                     'filters': {'logic': 'and', 'conditions': [
+                         {'field': 'الموعد', 'operator': 'less_than', 'relative': {'unit': 'day'}},
+                         {'field': 'الحالة', 'operator': 'not_equals', 'value': 'مكتمل'}]}}
+        plan = {'operation': 'search', 'title': 'تقرير وثائق', 'selection': selection}
+        catalog = {'fields': [{'name': 'الموعد'}, {'name': 'الحالة'}], 'templates': ['عقود']}
+        model = FakeModel([json.dumps({'reports': [plan]})])
+        result = plan_reports(model, {'question': 'طلب طبيعي', 'catalog': catalog})['reports'][0]
+        self.assertEqual(result['template'], 'عقود')
+        self.assertEqual(result['folderId'], 10)
+        self.assertEqual(result['filters']['conditions'][0]['field'], 'الموعد')
+        self.assertEqual(result['resultType'], 'documents')
+        self.assertEqual(len(model.calls), 1)
+        with self.assertRaises(ValueError):
+            planner_request(json.dumps({'reports': [{**plan, 'requiresFilter': False}]}), 'طلب')
+        with self.assertRaises(ValueError):
+            validate_plan_schema(planner_request(json.dumps({'reports': [plan]}), 'طلب'), {'fields': [], 'templates': ['عقود']})
 
     def test_repair_cannot_receive_a_fresh_deadline(self):
         from unittest.mock import patch
@@ -100,7 +143,7 @@ class AgentContractTests(unittest.TestCase):
         from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
         from langchain_ollama import ChatOllama
         requests = []
-        plan = {'resultType': 'documents', 'requiresFilter': False, 'operation': 'search', 'title': 'وثائق', 'question': 'وثائق', 'limit': 50}
+        plan = {'selection': {'requiresFilter': True, 'filters': {'field': 'حقل فعلي', 'operator': 'less_than', 'relative': {'unit': 'day'}}}, 'operation': 'search', 'title': 'وثائق'}
         class Handler(BaseHTTPRequestHandler):
             def log_message(self, *args): pass
             def do_POST(self):
@@ -119,6 +162,7 @@ class AgentContractTests(unittest.TestCase):
             self.assertEqual(result['reports'][0]['operation'], 'search')
             self.assertEqual(len(requests), 1)
             self.assertNotIn('resultType', requests[0]['format']['$defs']['RoutePlan']['properties'])
+            self.assertIn('selection', requests[0]['format']['$defs']['RoutePlan']['required'])
             self.assertEqual(requests[0]['options']['num_predict'], 1536)
             self.assertFalse(requests[0]['stream'])
             self.assertEqual(json.loads(requests[0]['messages'][1]['content'])['catalog']['fields'], [['حقل فعلي', 'Date', False]])
