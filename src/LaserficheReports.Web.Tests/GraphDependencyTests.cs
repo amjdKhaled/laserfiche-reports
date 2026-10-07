@@ -15,7 +15,7 @@ public sealed class GraphDependencyTests
     public async Task PlanningPreservesDependencyCauseWithoutAFixedAnswerFallback(string code)
     {
         var factory = new Factory(request => request.RequestUri!.AbsolutePath == "/health"
-            ? new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("{\"routingVersion\":\"schema-agent-v4\",\"modelTimeoutSeconds\":600}", Encoding.UTF8, "application/json") }
+            ? new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("{\"routingVersion\":\"schema-agent-v5\",\"modelTimeoutSeconds\":600}", Encoding.UTF8, "application/json") }
             : new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
         { Content = new StringContent("{\"error\":\"" + code + "\"}", Encoding.UTF8, "application/json") });
         var error = await Assert.ThrowsAsync<GraphServiceException>(() => new QuestionRouter(factory)
@@ -27,8 +27,9 @@ public sealed class GraphDependencyTests
 
     [Theory]
     [InlineData("{\"status\":\"ready\"}")]
-    [InlineData("{\"routingVersion\":\"schema-agent-v4\"}")]
-    [InlineData("{\"routingVersion\":\"schema-agent-v4\",\"modelTimeoutSeconds\":40}")]
+    [InlineData("{\"routingVersion\":\"schema-agent-v4\",\"modelTimeoutSeconds\":600}")]
+    [InlineData("{\"routingVersion\":\"schema-agent-v5\"}")]
+    [InlineData("{\"routingVersion\":\"schema-agent-v5\",\"modelTimeoutSeconds\":40}")]
     public async Task OldRunningGraphIsDetectedBeforePostingAnIncompatiblePlan(string health)
     {
         var factory = new Factory(_ => new HttpResponseMessage(HttpStatusCode.OK)

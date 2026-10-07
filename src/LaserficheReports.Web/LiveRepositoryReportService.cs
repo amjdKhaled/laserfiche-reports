@@ -63,6 +63,7 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
     public async Task<PagedResult<LFSearchResult>> SelectAsync(QueryPlan plan, IReadOnlyList<int> ids,
         bool readAll, CancellationToken ct)
     {
+        plan.ValidateIntent();
         if (plan.Limit is < 1 or > 200 || ids.Count > 50 || ids.Any(id => id <= 0) || plan.FolderId is <= 0)
             throw new ArgumentException("نطاق الطلب غير صالح. حدد حتى 50 وثيقة وحجم نتائج بين 1 و200.");
         var expression = plan.Operation == "folders" || plan.EntryType == "folder" ? "{LF:Name=\"*\", Type=F}" :
@@ -280,7 +281,9 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
             return new ChatResult(string.Join("\n\n", sources.Select(e => $"## الوثيقة {e.EntryId}\n\n" + e.Text)), sources)
                 { RelatedEntryIds = ids.ToArray() };
         }
-        var result = await SelectAsync(plan, ids, plan.Operation == "group" || plan.SortField != null, ct);
+        var result = await SelectAsync(plan, ids, plan.CompleteListing || plan.Operation == "group" || plan.SortField != null, ct);
+        if (plan.CompleteListing && (result.HasNextPage || !result.IsTotalCountExact || result.Items.Count != result.TotalCount))
+            throw new ArgumentException("تعذر تحميل جميع الوثائق المطابقة؛ لم أعرض قائمة ناقصة على أنها كاملة.");
         if (plan.RequireUnique && (!result.IsTotalCountExact || result.TotalCount != 1))
             return new ChatResult("حدد رقم الوثيقة؛ الاسم يطابق أكثر من إدخال أو لم يمكن تحديد وثيقة واحدة.\n\n" + string.Join("\n", result.Items.Select(i => $"- {i.EntryId}: {ReportSupport.Cell(i.Name)}")), []);
         if (plan.CountOnly && plan.Operation != "group")
