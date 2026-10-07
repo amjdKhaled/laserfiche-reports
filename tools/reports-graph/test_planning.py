@@ -68,7 +68,7 @@ class PlanningTests(unittest.TestCase):
             'question': 'اعرض الوثائق', 'limit': 50}]})])
         plan_reports(model, payload)
         sent = json.loads(model.calls[0][1].content)
-        self.assertEqual([f['name'] for f in sent['catalog']['fields']], ['إجراء الوثيقة', 'الإدارة'])
+        self.assertEqual([f[0] for f in sent['catalog']['fields']], ['إجراء الوثيقة', 'الإدارة'])
         self.assertEqual(sent['catalog']['templates'], ['مراسلات', 'عقود'])
         self.assertNotIn('description', model.calls[0][1].content)
         self.assertLess(len(model.calls[0][1].content), 500)

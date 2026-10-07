@@ -100,7 +100,7 @@ function renderHistory() {
     const button = el('button', chat.id === active ? 'selected' : '', chat.title);
     button.onclick = () => { active = chat.id; renderHistory(); renderMessages(); showTab('chat'); };
     button.classList.add('history-open');
-    const row = el('div', 'history-row');
+    const row = el('div', chat.id === active ? 'history-row selected' : 'history-row');
     const remove = el('button', 'history-delete', '×');
     remove.type = 'button'; remove.title = 'حذف المحادثة';
     remove.setAttribute('aria-label', `حذف المحادثة: ${chat.title}`);

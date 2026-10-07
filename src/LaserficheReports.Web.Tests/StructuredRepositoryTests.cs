@@ -15,6 +15,13 @@ public class StructuredRepositoryTests
         new QueryPlan("search", ResultType: "documents", RequiresFilter: true, Filters: new("القسم", "equals", "أ")).ValidateIntent();
         new QueryPlan("group", ResultType: "statistics").ValidateIntent();
     }
+
+    [Fact]
+    public void ClarificationCanRetainDocumentIntentButCannotCarryAnExecutableQuery()
+    {
+        new QueryPlan("clarify", ResultType: "documents", RequiresFilter: true).ValidateIntent();
+        Assert.Throws<ArgumentException>(() => new QueryPlan("clarify", ResultType: "documents", Filters: new("القسم", "equals", "أ")).ValidateIntent());
+    }
     private static readonly LFFieldDefinition[] Schema = [
         new() { Name = "موعد الإنجاز", FieldType = "Date" },
         new() { Name = "القسم", FieldType = "String" },

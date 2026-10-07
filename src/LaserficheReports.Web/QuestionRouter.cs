@@ -12,6 +12,12 @@ internal sealed record QueryPlan(string Operation, string? Field = null, string?
 {
     public void ValidateIntent()
     {
+        if (Operation == "clarify")
+        {
+            if (Filters != null || Field != null || Template != null || FolderId != null || Name != null || EntryIds?.Length > 0 || GroupFields?.Length > 0 || Metrics?.Length > 0 || Having != null || Rollup != null)
+                throw new ArgumentException("طلب التوضيح لا يجوز أن ينفذ استعلامًا.");
+            return;
+        }
         if (ResultType == "documents" && (Operation is not ("search" or "folders" or "recent" or "latest_created" or "latest_modified" or "created" or "modified") || CountOnly || Content) ||
             ResultType == "statistics" && Operation != "group" ||
             ResultType != null && Operation == "group" && ResultType != "statistics" ||

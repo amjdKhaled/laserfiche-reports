@@ -334,6 +334,12 @@ class RoutePlan(StrictModel):
 
     @model_validator(mode="after")
     def validate_semantics(self):
+        # Clarification performs no repository operation; the requested result
+        # type may still be documents/count/content while its criterion is unclear.
+        if self.operation == "clarify":
+            if self.filters or self.field or self.template or self.folderId or self.name or self.entryIds or self.groupFields or self.metrics or self.having or self.rollup:
+                raise ValueError("Clarification must not execute a query or calculation.")
+            return self
         if self.resultType == "documents" and (self.operation not in ("search", "folders", "recent", "latest_created", "latest_modified", "created", "modified") or self.countOnly or self.content):
             raise ValueError("Document listing requires a search/list operation, not aggregation, count or content.")
         if self.resultType == "statistics" and self.operation != "group":
@@ -428,25 +434,35 @@ def plan_reports(model, payload):
         "templates": catalog.get("templates", []),
         "entryProperties": catalog.get("entryProperties", ["entryId", "name", "created", "modified", "template", "creator", "pageCount"]),
         "tools": catalog.get("tools", [])}
-    messages = [SystemMessage(content=ROUTE_SYSTEM),
-                HumanMessage(content=json.dumps(payload, ensure_ascii=False, separators=(",", ":")))]
+    model_payload = {**payload, "catalog": {
+        "fields": [[f["name"], f.get("fieldType", "String"), bool(f.get("isMultiValue"))] for f in payload["catalog"]["fields"]],
+        "templates": payload["catalog"]["templates"], "entryProperties": payload["catalog"]["entryProperties"]}}
+    messages = [SystemMessage(content=ROUTE_SYSTEM + "\nCatalog fields are tuples [exact name,type,multi-value]. All names are available. The API supplies the complete JSON schema; omit unused properties."),
+                HumanMessage(content=json.dumps(model_payload, ensure_ascii=False, separators=(",", ":")))]
     for attempt in range(2):
-        input_bytes = len(json.dumps(payload, ensure_ascii=False).encode("utf-8")) + len(ROUTE_SYSTEM.encode("utf-8")) + len(json.dumps(ReportRequest.model_json_schema()))
-        context_size = 8192 if input_bytes < 14000 else 16384
-        content = invoke_structured(model, messages, ReportRequest, max_tokens=2048, compact=True, num_ctx=context_size, diagnostics=True)
+        input_bytes = sum(len(str(m.content).encode("utf-8")) for m in messages)
+        context_size = 8192 if input_bytes < 16000 else 16384
+        content = invoke_structured(model, messages, ReportRequest, max_tokens=2048, compact=True, num_ctx=context_size, diagnostics=True, embed_schema=False)
         try:
             request = ReportRequest.model_validate_json(content)
             validate_plan_schema(request, payload["catalog"])
-            print("Stage=PLANNER_VALIDATED Version=intent-v5 Attempt=" + str(attempt + 1) + " Plans=" + json.dumps([
+            print("Stage=PLANNER_VALIDATED Version=intent-v5.1 Attempt=" + str(attempt + 1) + " Plans=" + json.dumps([
                 {"resultType": p.resultType, "operation": p.operation, "requiresFilter": p.requiresFilter,
                  "hasFilter": bool(p.filters or p.field or p.template or p.folderId or p.name or p.entryIds or p.from_),
                  "allResults": p.allResults} for p in request.reports]), flush=True)
             return request.model_dump(by_alias=True)
         except ValueError as error:
+            errors = ([{"path": ".".join(map(str, item["loc"])), "type": item["type"], "message": item["msg"][:240]}
+                       for item in error.errors(include_input=False, include_context=False)[:8]]
+                      if hasattr(error, "errors") else [{"type": type(error).__name__, "message": str(error)[:240]}])
+            print("Stage=PLANNER_REJECTED Attempt=" + str(attempt + 1) + " Errors=" + json.dumps(errors, ensure_ascii=False), flush=True)
             if attempt == 1:
                 raise
             # Retry reasoning from the original question/catalog. Invalid plans are never executed.
-            messages.append(SystemMessage(content="سبب رفض الخطة: " + str(error)[:250] + "\nالمحاولة السابقة لم تطابق مخطط الخطة أو قيوده. أعد تحليل السؤال الأصلي وأنتج جميع التقارير. latest_created/latest_modified: limit=1 وcontent=false؛ content: content=true. لا تخترع معلومات لتجاوز التحقق."))
+            # Preserve the draft for a focused repair, rather than regenerate all
+            # reasoning from an error truncated before its meaningful details.
+            from langchain_core.messages import AIMessage
+            messages.extend([AIMessage(content=content), SystemMessage(content="Repair only the invalid properties identified here: " + json.dumps(errors, ensure_ascii=False) + ". Keep the original user's intent and all selection conditions. Return the full corrected JSON. Clarification can retain the desired resultType but must not execute queries.")])
 
 
 def dependency_error(error):
@@ -668,7 +684,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(HTTPStatus.SERVICE_UNAVAILABLE, {"status": "unavailable", "error": error})
         return self.send_json(HTTPStatus.OK, {"status": "ready", "model": self.model_name,
             "modelTimeoutSeconds": self.model_timeout_seconds, "engine": "LangGraph",
-            "routingVersion": "schema-agent-v5", "plannerVersion": "intent-v5", "promptVersion": PROMPT_VERSION, "capabilities": ["schema-output", "structured-filters", "backend-dates", "aggregation", "follow-up", "focused-context", "optional-semantic-review"]})
+            "routingVersion": "schema-agent-v5", "plannerVersion": "intent-v5.1", "promptVersion": PROMPT_VERSION, "capabilities": ["schema-output", "structured-filters", "backend-dates", "aggregation", "follow-up", "focused-context", "optional-semantic-review"]})
 
     def do_POST(self):
         if self.path not in ("/answer", "/route", "/present"):
@@ -760,7 +776,7 @@ def main():
     Handler.model_timeout_seconds = args.model_timeout_seconds
     Handler.model = model
     Handler.graph = build_graph(model, fast=True, review_content=args.review_content)
-    print(f"LangGraph ready on http://127.0.0.1:{args.port}; model={args.model}; planner=intent-v5; modelTimeoutSeconds={args.model_timeout_seconds}", flush=True)
+    print(f"LangGraph ready on http://127.0.0.1:{args.port}; model={args.model}; planner=intent-v5.1; modelTimeoutSeconds={args.model_timeout_seconds}", flush=True)
     ThreadingHTTPServer(("127.0.0.1", args.port), Handler).serve_forever()
 
 

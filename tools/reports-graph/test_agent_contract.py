@@ -6,6 +6,56 @@ from server import plan_reports, ReportRequest, validate_plan_schema, build_grap
 from test_graph import FakeModel
 
 class AgentContractTests(unittest.TestCase):
+    def test_real_ollama_client_transmits_schema_and_compact_catalog(self):
+        import threading
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        from langchain_ollama import ChatOllama
+        requests = []
+        plan = {'resultType': 'documents', 'requiresFilter': False, 'operation': 'search', 'title': 'وثائق', 'question': 'وثائق', 'limit': 50}
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args): pass
+            def do_POST(self):
+                requests.append(json.loads(self.rfile.read(int(self.headers['Content-Length']))))
+                body = json.dumps({'model': 'qwen2.5:7b', 'message': {'role': 'assistant', 'content': json.dumps({'reports': [plan]})}, 'done': True, 'done_reason': 'stop'}).encode() + b'\n'
+                self.send_response(200)
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers(); self.wfile.write(body)
+        server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
+        try:
+            model = ChatOllama(model='qwen2.5:7b', base_url=f'http://127.0.0.1:{server.server_port}', client_kwargs={'trust_env': False})
+            result = plan_reports(model, {'question': 'وثائق', 'catalog': {'fields': [{'name': 'حقل فعلي', 'fieldType': 'Date'}]}})
+            self.assertEqual(result['reports'][0]['operation'], 'search')
+            self.assertEqual(len(requests), 1)
+            self.assertIn('resultType', requests[0]['format']['$defs']['RoutePlan']['required'])
+            self.assertEqual(requests[0]['options']['num_predict'], 2048)
+            self.assertEqual(json.loads(requests[0]['messages'][1]['content'])['catalog']['fields'], [['حقل فعلي', 'Date', False]])
+            self.assertNotIn('JSON Schema:', requests[0]['messages'][0]['content'])
+        finally:
+            server.shutdown(); server.server_close(); thread.join()
+
+    def test_clarification_preserves_desired_intent_without_query_or_second_call(self):
+        plan = {'resultType': 'documents', 'requiresFilter': True, 'operation': 'clarify', 'title': 'توضيح', 'question': 'ما الحقل المقصود؟', 'limit': 50}
+        model = FakeModel([json.dumps({'reports': [plan], 'clarification': 'ما حقل الموعد المقصود؟'})])
+        result = plan_reports(model, {'question': 'كشف مشروط', 'catalog': {'fields': []}})
+        self.assertEqual(result['clarification'], 'ما حقل الموعد المقصود؟')
+        self.assertEqual(len(model.calls), 1)
+        with self.assertRaises(ValueError):
+            ReportRequest.model_validate({'reports': [{**plan, 'filters': {'field': 'اسم', 'operator': 'equals', 'value': 'أ'}}]})
+
+    def test_repair_keeps_draft_and_precise_error_instead_of_truncated_exception(self):
+        import io
+        from contextlib import redirect_stdout
+        good = {'resultType': 'documents', 'requiresFilter': False, 'operation': 'search', 'title': 'وثائق', 'question': 'وثائق', 'limit': 50}
+        bad = {**good, 'limit': 300}
+        model = FakeModel([json.dumps({'reports': [bad]}), json.dumps({'reports': [good]})])
+        stream = io.StringIO()
+        with redirect_stdout(stream):
+            plan_reports(model, {'question': 'وثائق', 'catalog': {'fields': []}})
+        self.assertIn('reports.0.limit', stream.getvalue())
+        self.assertIn('300', model.calls[1][-2].content)
+        self.assertIn('reports.0.limit', model.calls[1][-1].content)
+
     def test_document_intent_cannot_execute_group_or_unfiltered_fallback(self):
         payload = {'question': 'كشف مشروط للوثائق', 'catalog': {'fields': [{'name': 'أجل الإنجاز', 'fieldType': 'Date'}]}}
         good = {'resultType': 'documents', 'requiresFilter': True, 'operation': 'search', 'title': 'وثائق',
@@ -38,6 +88,7 @@ class AgentContractTests(unittest.TestCase):
         plan_reports(model, {'question': 'كشف', 'catalog': {'fields': []}})
         self.assertEqual(model.options['options']['num_predict'], 2048)
         self.assertEqual(model.options['options']['num_ctx'], 8192)
+        self.assertNotIn('JSON Schema:', model.calls[0][0].content)
         self.assertEqual(len(model.calls), 1)
 
     def test_listing_defaults_to_all_rows_but_explicit_limit_can_be_preserved(self):

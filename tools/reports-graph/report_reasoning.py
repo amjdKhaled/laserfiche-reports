@@ -105,7 +105,7 @@ def compact_schema(value):
             for key, item in value.items() if key not in ("title", "default", "description")}
 
 
-def invoke_structured(model, messages, schema, max_tokens=None, *, compact=False, num_ctx=16384, diagnostics=False):
+def invoke_structured(model, messages, schema, max_tokens=None, *, compact=False, num_ctx=16384, diagnostics=False, embed_schema=True):
     # LangChain sends the actual schema to Ollama, rather than JSON mode alone.
     from langchain_core.messages import SystemMessage
     contract = schema.model_json_schema()
@@ -118,7 +118,7 @@ def invoke_structured(model, messages, schema, max_tokens=None, *, compact=False
     # Ollama recommends supplying the schema in the prompt as well. Keep it in
     # the existing trusted system message, never mixed into source document data.
     grounded_messages = list(messages)
-    if grounded_messages and isinstance(grounded_messages[0], SystemMessage):
+    if embed_schema and grounded_messages and isinstance(grounded_messages[0], SystemMessage):
         grounded_messages[0] = SystemMessage(content=grounded_messages[0].content +
             "\nJSON Schema:\n" + json.dumps(contract, ensure_ascii=False, separators=(",", ":")))
     reply = target.invoke(grounded_messages)
