@@ -132,6 +132,7 @@ internal sealed class LaserficheSearchService : ILaserficheSearchService
             searchUrl,
             "validated-search");
 
+        var submitWatch = System.Diagnostics.Stopwatch.StartNew();
         using var submitResponse = await client
             .PostAsJsonAsync(searchUrl, requestBody, JsonOptions.Default, cancellationToken)
             .ConfigureAwait(false);
@@ -139,6 +140,8 @@ internal sealed class LaserficheSearchService : ILaserficheSearchService
         var submitBody = await submitResponse.Content
             .ReadAsStringAsync(cancellationToken)
             .ConfigureAwait(false);
+        _logger.LogInformation("Stage=LF_SEARCH_START DurationMs={DurationMs} Status={Status}",
+            submitWatch.ElapsedMilliseconds, (int)submitResponse.StatusCode);
 
         if (!submitResponse.IsSuccessStatusCode)
         {
@@ -181,13 +184,15 @@ internal sealed class LaserficheSearchService : ILaserficheSearchService
         var token = taskResult.OperationToken ?? taskResult.TaskId ?? taskResult.Token!;
         if (taskResult.Status?.Equals("Completed", StringComparison.OrdinalIgnoreCase) != true)
         {
-            await WaitForSearchCompletionAsync(
+            var waitWatch = System.Diagnostics.Stopwatch.StartNew();
+            try { await WaitForSearchCompletionAsync(
                     client,
                     repo.RepositoryId,
                     token,
                     displayQuery,
                     cancellationToken)
-                .ConfigureAwait(false);
+                .ConfigureAwait(false); }
+            finally { _logger.LogInformation("Stage=LF_TASK_WAIT DurationMs={DurationMs}", waitWatch.ElapsedMilliseconds); }
         }
 
         return await FetchSearchResultsAsync(
@@ -263,6 +268,22 @@ internal sealed class LaserficheSearchService : ILaserficheSearchService
     }
 
     private async Task<PagedResult<LFSearchResult>> ReadRequestedPageAsync(
+        HttpClient client, string? initialBody, string initialUrl, int page, int pageSize,
+        CancellationToken cancellationToken, int serverSkip = 0, bool readAll = false)
+    {
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        try
+        {
+            var result = await ReadRequestedPageCoreAsync(client, initialBody, initialUrl, page, pageSize,
+                cancellationToken, serverSkip, readAll).ConfigureAwait(false);
+            _logger.LogInformation("Stage=LF_RESULTS Rows={Rows} TotalCount={TotalCount} Exact={Exact} HasMore={HasMore}",
+                result.Items.Count, result.TotalCount, result.IsTotalCountExact, result.HasNextPage);
+            return result;
+        }
+        finally { _logger.LogInformation("Stage=LF_RESULTS DurationMs={DurationMs}", watch.ElapsedMilliseconds); }
+    }
+
+    private async Task<PagedResult<LFSearchResult>> ReadRequestedPageCoreAsync(
         HttpClient client,
         string? initialBody,
         string initialUrl,

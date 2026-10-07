@@ -11,7 +11,7 @@ import calendar
 from datetime import date, timedelta
 from pathlib import Path
 from langchain_ollama import ChatOllama
-from server import plan_reports, check_ollama
+from server import plan_reports, check_ollama, DEFAULT_CHAT_MODEL
 from agent_cases import CASES
 
 
@@ -69,13 +69,14 @@ def normalize_plan(plan, today_text):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", default="planner-evaluation.json")
-    parser.add_argument("--timeout", type=int, default=600)
+    parser.add_argument("--timeout", type=int, default=120)
+    parser.add_argument("--model", default=DEFAULT_CHAT_MODEL)
     parser.add_argument("--limit", type=int, default=len(CASES))
     args = parser.parse_args()
-    error = check_ollama("http://127.0.0.1:11434", "qwen2.5:7b")
+    error = check_ollama("http://127.0.0.1:11434", args.model)
     if error:
         parser.exit(2, error + ": actual model evaluation did not run.\n")
-    model = ChatOllama(model="qwen2.5:7b", temperature=0, num_ctx=16384, num_predict=4096,
+    model = ChatOllama(model=args.model, temperature=0, num_ctx=16384, num_predict=4096,
                        keep_alive="30m", client_kwargs={"timeout": args.timeout, "trust_env": False})
     results = []
     for case in CASES[:args.limit]:
@@ -83,13 +84,13 @@ def main():
         item = {"question": case["question"], "expected": case["expect"]}
         try:
             payload = {key: value for key, value in case.items() if key != "expect"}
-            request = plan_reports(model, payload)
+            request = plan_reports(model, payload, budget_seconds=args.timeout)
             item.update(plan=request, passed=any(includes(normalize_plan(plan, case["today"]), normalize_plan(case["expect"], case["today"])) for plan in request["reports"]))
         except Exception as error:
             item.update(passed=False, error=type(error).__name__ + ": " + str(error)[:300])
         item["seconds"] = round(time.monotonic() - started, 3)
         results.append(item)
-        Path(args.output).write_text(json.dumps({"model": "qwen2.5:7b", "passed": sum(r["passed"] for r in results), "total": len(results), "cases": results}, ensure_ascii=False, indent=2), encoding="utf-8")
+        Path(args.output).write_text(json.dumps({"model": args.model, "passed": sum(r["passed"] for r in results), "total": len(results), "cases": results}, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"{len(results)}/{min(args.limit, len(CASES))}: {'PASS' if item['passed'] else 'FAIL'} ({item['seconds']}s) {case['question']}", flush=True)
     raise SystemExit(0 if all(r["passed"] for r in results) else 1)
 

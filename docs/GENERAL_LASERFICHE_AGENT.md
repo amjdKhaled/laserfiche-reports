@@ -85,3 +85,47 @@ Fixed a reproducible contract bug: clarification can retain the user's intended 
 The full JSON schema remains in Ollama's format parameter and output is still validated independently. For planning only, do not duplicate the full schema in the prompt. Repository fields are sent as compact [name,type,multi-value] tuples without dropping any name; Backend validation retains the authoritative named catalog. The original UI remains; only the chat history row background and delete button alignment/focus styling change. Startup prints planner=intent-v5.1 with the compatible schema-agent-v5 protocol.
 
 Validation: 65 Python tests, including a real ChatOllama HTTP transport against a mocked Ollama endpoint; 93 Web tests (1 external PostgreSQL integration skipped); 17 UI/export tests. Real qwen2.5:7b inference and live Laserfiche acceptance remain unavailable here. Prior HTTP-fixture smoke was not rerun for this increment.
+
+## Single planner output contract (intent-v5.2)
+
+The next real log identifies the rejection: resultType=count conflicted with countOnly=false/omitted twice. A non-count search was rejected because a redundant display annotation disagreed with its execution arguments. This contract defect created an unnecessary second model call and a 503 response.
+
+The model-facing schema now requests operation and its arguments without resultType. The server derives the existing Backend resultType from operation, content and explicit countOnly=true. A legacy count annotation with false/omitted countOnly is reconciled to the actual operation's output; tools, predicates, dates, IDs and explicit count/content flags are never modified. Existing explicit listing/group contradictions, unknown field checks and missing declared selection filters remain rejected. This is generic tool-contract normalization, not natural-question matching or a predefined answer. UI, model and timeout are unchanged. Startup prints planner=intent-v5.2.
+
+68 Python tests pass, including regressions for both missing/false countOnly, explicit counts/aggregation/content, and invalid fields/conditions. An actual ASP.NET process with a mocked HTTP repository and planner reproducing this count-annotation conflict returned 76/76 rows across four search pages, count=76, original document/page-count columns and 76 related IDs, one planning invocation, zero entry GETs and zero presentation calls. This fixture proves rejection repair and execution, not Qwen semantic understanding or actual inference speed. Real qwen2.5:7b/Laserfiche acceptance remains pending.
+
+## Compact planner and shared deadline (intent-v5.3)
+
+This increment preserves the full execution/Backend contract and the existing UI. The model-facing contract omits redundant `question` and legacy value/group/date aliases; dates, predicates and grouping use the generic structured representation. Latest/recent listings use `search` with sorting and an explicit limit, rather than additional operation aliases. Backend copies the original question and defaults the internal batch size to 50 only when omitted; it never fills missing semantic criteria, counts or field names. Legacy plans still validate against the full contract. The earlier resultType/countOnly conflict fix remains included.
+
+The system prompt shrinks from 3,929 to 2,612 characters (34%); the compact JSON schema from 4,627 to 4,207 (9%). All discovered field names/types remain in the compact catalog. These are payload measurements, **not measured real-model speedups**. Generation budget is configurable, default 1,536 tokens, with ordinary context 8,192 and temperature zero. The budget supports multi-report/compound plans rather than silently truncating them to 256 tokens. `REPORTS_CHAT_MODEL`/`server.py` owns the default qwen2.5:7b model name; the launcher/evaluator accept optional overrides without their own competing default.
+
+Planning has a separate default 120-second budget, shared by the initial call and its one optional repair. Each real Ollama call uses the remaining budget and `stream=false`, so successive generated chunks cannot continually reset HTTP read timeout. The model queue waits up to five seconds before reporting busy. This bounds waiting; it does **not** guarantee a slow machine can finish inference within the budget. OCR answering keeps its separate existing model timeout. `start.ps1` accepts `-PlannerTimeoutSeconds` and `-PlannerOutputTokens`; startup prints `planner=intent-v5.3` and both settings.
+
+The existing request ID now travels from ASP.NET into graph planner/validation/timing logs. Search logs separate submission, task wait and result retrieval (`LF_SEARCH_START`, `LF_TASK_WAIT`, `LF_RESULTS`); schema and aggregation have their own timers. No tokens, passwords, full OCR bodies or raw search payloads are added to these logs.
+
+### API and execution review
+
+The existing independent infrastructure directly uses Repository API v2:
+
+- `POST /Repositories/{repositoryId}/Searches/SearchAsync`, body `{ "searchCommand": "...validated syntax..." }`.
+- `GET /Repositories/{repositoryId}/Tasks?taskIds={token}` for incomplete tasks, with 500ms delay, cancellation and the existing bounded wait.
+- `GET /Repositories/{repositoryId}/Searches/{token}/Results`, `$skip`, `$count=true`, `$orderby`, optional `$top`, repeated `fields` parameters and server continuation links.
+- Entry details and current Fields are read live for document-specific metadata; folder endpoints and ByPath already exist in infrastructure.
+- TotalCount remains distinct from page length. Complete listings follow every continuation and reject mismatched totals. Counts and backend aggregation bypass the presentation model; exact table rows are not rewritten by Qwen.
+- Search properties are reused directly; missing displayed page counts/projections are retrieved only when needed with concurrency four. Link checks use search batches, avoiding sequential per-entry link requests.
+- SimpleSearch remains an existing capability, but the planner's structured predicates use SearchAsync. This increment does not select SimpleSearch speculatively without verifying equivalent behavior against the deployed server.
+- Supabase is still used only for OCR. Hybrid plans select live IDs before scoped OCR. Follow-ups retain bounded conversation context and execute new live queries.
+
+This review cannot establish the actual response shape of Entry 619, Fields 619, SearchAsync, SimpleSearch or folder children on the user's server. No new API response models were invented. Tags/links/version/workflow search and folder-name/path resolution are not claimed as universally covered by the current planner tools. Definition caching across requests and template-field relationships were not added in this increment; definitions remain request-local/live, so no identity/permission cache can become a source of current document facts.
+
+### Verification and outstanding acceptance
+
+- Clean, restore and build succeeded using the local .NET SDK/MSBuild (single-process workaround for this container). Existing Windows image API analyzer warnings remain.
+- Python tests: 71 passed, including actual ChatOllama HTTP serialization against a fixture endpoint, non-streaming timeout and repair sharing one deadline.
+- Web tests: 94 passed; one external PostgreSQL integration test skipped. Infrastructure: 251 passed. Existing UI/export tests: 17 passed.
+- An actual ASP.NET process plus graph HTTP handler, with fixture model/repository, logged in and displayed all 76 matching documents across four search pages: authoritative TotalCount=76, original table/page-count column, no path column, one planner call, zero entry GETs and zero presentation calls. The fixture supplies a predetermined semantic plan; its timings are not real Qwen performance.
+- Added 30 further held-out Arabic questions (86 total), covering counts, names, pages, relative dates, compound filters, negation, aggregation, entry/folder/schema, OCR/hybrid and follow-up. They are never imported into the production planner or included in its prompt. Contract tests passing do not mean the language evaluation passed.
+- Attempted actual model evaluation: exited `ollama_unavailable`; no real inference ran. Local ports 80/443 (IIS), 11434 (Ollama), 8766 and 5187 were unreachable in this workspace. It is a Linux execution workspace, **not the user's Windows/IIS machine**. No live response, mutation freshness, browser acceptance or real before/after /route duration is available here. Real model/Laserfiche/OCR acceptance remains required; full Definition of Done is pending.
+
+No UI assets, table rendering, login layout, colors, report downloads, Sidebar or Dashboard were modified. No dependency/reference to another application was added.

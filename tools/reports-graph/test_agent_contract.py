@@ -6,6 +6,95 @@ from server import plan_reports, ReportRequest, validate_plan_schema, build_grap
 from test_graph import FakeModel
 
 class AgentContractTests(unittest.TestCase):
+    def test_real_http_transport_enforces_nonstreaming_planner_deadline(self):
+        import threading
+        import time
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        from langchain_ollama import ChatOllama
+        from httpx import TimeoutException
+        requests = []
+        class SlowHandler(BaseHTTPRequestHandler):
+            def log_message(self, *args): pass
+            def do_POST(self):
+                requests.append(json.loads(self.rfile.read(int(self.headers['Content-Length']))))
+                time.sleep(0.8)
+                try:
+                    self.send_response(200); self.end_headers(); self.wfile.write(b'{}')
+                except (BrokenPipeError, ConnectionResetError): pass
+        server = ThreadingHTTPServer(('127.0.0.1', 0), SlowHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
+        try:
+            model = ChatOllama(model='qwen2.5:7b', base_url=f'http://127.0.0.1:{server.server_port}', client_kwargs={'trust_env': False})
+            started = time.monotonic()
+            with self.assertRaises(TimeoutException):
+                plan_reports(model, {'question': 'وثائق', 'catalog': {}}, budget_seconds=0.2)
+            self.assertLess(time.monotonic() - started, 0.7)
+            self.assertEqual(len(requests), 1)
+            self.assertFalse(requests[0]['stream'])
+        finally:
+            server.shutdown(); server.server_close(); thread.join()
+
+    def test_compact_contract_fills_only_nonsemantic_defaults(self):
+        from server import PlannerOutputSchema
+        schema = PlannerOutputSchema.model_json_schema()['$defs']['RoutePlan']
+        for key in ('resultType', 'question', 'value', 'groupBy', 'from', 'to'):
+            self.assertNotIn(key, schema['properties'])
+        self.assertNotIn('limit', schema['required'])
+        self.assertIn('requiresFilter', schema['required'])
+        question = 'عرض وثائق بشروط من المستودع'
+        model = FakeModel([json.dumps({'reports': [{'operation': 'search', 'title': 'وثائق', 'requiresFilter': True,
+            'filters': {'field': 'أجل الإنجاز', 'operator': 'less_than', 'relative': {'unit': 'day'}}}]})])
+        result = plan_reports(model, {'question': question, 'catalog': {'fields': [{'name': 'أجل الإنجاز', 'fieldType': 'Date'}]}})['reports'][0]
+        self.assertEqual(result['question'], question)
+        self.assertEqual(result['limit'], 50)
+        self.assertTrue(result['requiresFilter'])
+        self.assertEqual(result['filters']['field'], 'أجل الإنجاز')
+        self.assertEqual(len(model.calls), 1)
+
+    def test_repair_cannot_receive_a_fresh_deadline(self):
+        from unittest.mock import patch
+        invalid = {'reports': [{'operation': 'search', 'title': 'وثائق', 'requiresFilter': False, 'limit': 300}]}
+        model = FakeModel([json.dumps(invalid)] * 2)
+        with patch('server.time.monotonic', side_effect=[0, 0, 0, 0, 121]):
+            with self.assertRaises(TimeoutError):
+                plan_reports(model, {'question': 'وثائق', 'catalog': {}}, budget_seconds=120)
+        self.assertEqual(len(model.calls), 1)
+
+    def test_logged_count_annotation_does_not_discard_valid_document_search_or_retry(self):
+        filter_ = {'field': 'موعد التسليم', 'operator': 'less_than', 'relative': {'unit': 'day'}}
+        for options in ({}, {'countOnly': False}):
+            plan = {'resultType': 'count', 'requiresFilter': True, 'operation': 'search', 'title': 'تقرير وثائق',
+                    'question': 'طلب تقرير مشروط', 'limit': 50, 'filters': filter_, **options}
+            model = FakeModel([json.dumps({'reports': [plan]})])
+            result = plan_reports(model, {'question': plan['question'], 'catalog': {'fields': [{'name': 'موعد التسليم', 'fieldType': 'Date'}]}})
+            actual = result['reports'][0]
+            self.assertEqual(actual['resultType'], 'documents')
+            self.assertFalse(actual['countOnly'])
+            self.assertEqual(actual['filters']['field'], filter_['field'])
+            self.assertEqual(actual['filters']['operator'], filter_['operator'])
+            self.assertTrue(actual['allResults'])
+            self.assertEqual(len(model.calls), 1)
+
+    def test_primary_tool_contract_derives_output_without_changing_explicit_modes(self):
+        from server import planner_request, PlannerOutputSchema
+        base = {'requiresFilter': False, 'title': 'تقرير', 'question': 'طلب', 'limit': 50}
+        for options, expected in [({'operation': 'search'}, 'documents'), ({'operation': 'search', 'countOnly': True}, 'count'),
+                                  ({'operation': 'group'}, 'statistics'), ({'operation': 'search', 'content': True}, 'content'),
+                                  ({'operation': 'metadata', 'entryIds': [618]}, 'details'), ({'operation': 'templates'}, 'schema')]:
+            actual = planner_request(json.dumps({'reports': [{**base, **options}]})).reports[0]
+            self.assertEqual(actual.resultType, expected)
+            self.assertEqual(actual.operation, options['operation'])
+        schema = PlannerOutputSchema.model_json_schema()['$defs']['RoutePlan']
+        self.assertNotIn('resultType', schema['properties'])
+        self.assertIn('operation', schema['required'])
+
+    def test_output_derivation_never_hides_unknown_fields_or_missing_required_filters(self):
+        base = {'resultType': 'count', 'requiresFilter': True, 'operation': 'search', 'title': 'وثائق', 'question': 'مشروط', 'limit': 50}
+        for changes in ({}, {'filters': {'field': 'حقل مخترع', 'operator': 'equals', 'value': 'أ'}}):
+            model = FakeModel([json.dumps({'reports': [{**base, **changes}]})] * 2)
+            with self.assertRaises(ValueError):
+                plan_reports(model, {'question': 'طلب مشروط', 'catalog': {'fields': []}})
+
     def test_real_ollama_client_transmits_schema_and_compact_catalog(self):
         import threading
         from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -27,8 +116,9 @@ class AgentContractTests(unittest.TestCase):
             result = plan_reports(model, {'question': 'وثائق', 'catalog': {'fields': [{'name': 'حقل فعلي', 'fieldType': 'Date'}]}})
             self.assertEqual(result['reports'][0]['operation'], 'search')
             self.assertEqual(len(requests), 1)
-            self.assertIn('resultType', requests[0]['format']['$defs']['RoutePlan']['required'])
-            self.assertEqual(requests[0]['options']['num_predict'], 2048)
+            self.assertNotIn('resultType', requests[0]['format']['$defs']['RoutePlan']['properties'])
+            self.assertEqual(requests[0]['options']['num_predict'], 1536)
+            self.assertFalse(requests[0]['stream'])
             self.assertEqual(json.loads(requests[0]['messages'][1]['content'])['catalog']['fields'], [['حقل فعلي', 'Date', False]])
             self.assertNotIn('JSON Schema:', requests[0]['messages'][0]['content'])
         finally:
@@ -86,7 +176,7 @@ class AgentContractTests(unittest.TestCase):
         plan = {'resultType': 'documents', 'requiresFilter': False, 'operation': 'search', 'title': 'وثائق', 'question': 'كشف', 'limit': 50}
         model = BoundModel([json.dumps({'reports': [plan]})])
         plan_reports(model, {'question': 'كشف', 'catalog': {'fields': []}})
-        self.assertEqual(model.options['options']['num_predict'], 2048)
+        self.assertEqual(model.options['options']['num_predict'], 1536)
         self.assertEqual(model.options['options']['num_ctx'], 8192)
         self.assertNotIn('JSON Schema:', model.calls[0][0].content)
         self.assertEqual(len(model.calls), 1)

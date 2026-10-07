@@ -88,7 +88,9 @@ internal sealed class ReportsChatService(
         cancellationToken = budget.Token;
         if (history is { Length: > 8 } || (history?.Any(t => t is null || t.Role is not ("user" or "assistant") || t.Text is null || t.Text.Length > 3000) ?? false))
             throw new ArgumentException("سياق المحادثة أكبر من الحد المسموح.");
+        var schemaWatch = System.Diagnostics.Stopwatch.StartNew();
         var catalog = await liveReports.CatalogAsync(cancellationToken);
+        logger.LogInformation("Stage=SCHEMA DurationMs={DurationMs}", schemaWatch.ElapsedMilliseconds);
         var watch = System.Diagnostics.Stopwatch.StartNew();
         var request = await router.RouteAsync(question, catalog, cancellationToken, history);
         logger.LogInformation("Stage=AI_PLAN ReportCount={Count} DurationMs={DurationMs}", request.Reports.Length, watch.ElapsedMilliseconds);
