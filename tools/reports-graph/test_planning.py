@@ -57,3 +57,19 @@ class PlanningTests(unittest.TestCase):
         self.assertEqual(dependency_error(ValueError('invalid plan')), 'local_model_invalid_output')
         missing = type('MissingModel', (Exception,), {'status_code': 404})()
         self.assertEqual(dependency_error(missing), 'model_not_found')
+
+    def test_planning_keeps_all_catalog_names_but_omits_unused_descriptions(self):
+        from server import plan_reports
+        payload = {'question': 'اعرض الوثائق', 'catalog': {'fields': [
+            {'name': 'إجراء الوثيقة', 'fieldType': 'String', 'description': 'x' * 10000},
+            {'name': 'الإدارة', 'fieldType': 'String', 'description': 'y' * 10000}],
+            'templates': ['مراسلات', 'عقود']}}
+        model = FakeModel([json.dumps({'reports': [{'operation': 'search', 'title': 'وثائق',
+            'question': 'اعرض الوثائق', 'limit': 50}]})])
+        plan_reports(model, payload)
+        sent = json.loads(model.calls[0][1].content)
+        self.assertEqual([f['name'] for f in sent['catalog']['fields']], ['إجراء الوثيقة', 'الإدارة'])
+        self.assertEqual(sent['catalog']['templates'], ['مراسلات', 'عقود'])
+        self.assertNotIn('description', model.calls[0][1].content)
+        self.assertLess(len(model.calls[0][1].content), 500)
+        self.assertEqual(len(payload['catalog']['fields'][0]['description']), 10000)

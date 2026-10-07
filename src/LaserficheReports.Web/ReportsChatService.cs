@@ -108,7 +108,9 @@ internal sealed class ReportsChatService(
             sections.Add(new ReportSection(plan.Title ?? "تقرير", result.Answer, result.Sources, result.Scope,
                 result.RelatedEntryIds, result.Quality));
         }
-        var metadata = request.Reports.Select((p, i) => (p, i)).Where(x => !x.p.Content && x.p.Operation != "clarify" && sections[x.i].Scope != null).ToArray();
+        // The backend has already rendered complete live tables and computed their counts.
+        // Do not ask the model to paraphrase/review those same facts a second time.
+        var metadata = request.Reports.Select((p, i) => (p, i)).Where(x => !x.p.Content && x.p.Operation != "clarify" && sections[x.i].Scope != null && !sections[x.i].Answer.Contains("| --- |", StringComparison.Ordinal)).ToArray();
         if (metadata.Length > 0)
         {
             try
@@ -117,7 +119,7 @@ internal sealed class ReportsChatService(
                 {
                     question,
                     reports = metadata.Select(x => new { index = x.i, title = sections[x.i].Title,
-                        facts = sections[x.i].Answer[..Math.Min(sections[x.i].Answer.Length, 12000 / metadata.Length)] })
+                        facts = sections[x.i].Answer[..Math.Min(sections[x.i].Answer.Length, 3000 / metadata.Length)] })
                 }, cancellationToken);
                 response.EnsureSuccessStatusCode();
                 var presentation = await response.Content.ReadFromJsonAsync<GraphPresentation>(cancellationToken)

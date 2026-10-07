@@ -10,6 +10,8 @@ public sealed record LFSearchResult
 
     public int EntryId { get; init; }
 
+    public int? PageCount { get; init; }
+
     /// <summary>Display name of the matching entry.</summary>
     public string Name { get; init; } = string.Empty;
 

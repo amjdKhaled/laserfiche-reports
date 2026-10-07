@@ -16,7 +16,7 @@
         button.setAttribute('aria-label', `عرض المصدر ${reference}`);
         button.onclick = () => {
           const source = document.getElementById(`${sourcePrefix}-${reference}`);
-          if (source) { source.open = true; source.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }
+          if (source) { const more = source.closest('.sources-more'); if (more) more.open = true; source.open = true; source.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }
         };
         parent.append(button);
       } else parent.append(document.createTextNode(match[0]));
@@ -40,7 +40,24 @@
     const values = cells(line);
     return values.length === columns && values.every(cell => /^:?-{3,}:?$/.test(cell));
   }
+  // Apply to old history as well as newly generated reports and every export.
+  // Remove the complete column, keeping header/value indices aligned.
+  function withoutPaths(text) {
+    const lines = String(text || '').replace(/\r\n?/g, '\n').replace(/\n\n## الوثائق والمصادر\n\n[\s\S]*$/, '').split('\n');
+    const output = [];
+    for (let i = 0; i < lines.length; i++) {
+      const header = cells(lines[i]);
+      const keep = header.map((name,index) => /^(?:المسار|مسار الوثيقة|مسار المستند|path|full path)$/i.test(name.trim()) ? -1 : index).filter(index => index >= 0);
+      if (header.length > 1 && keep.length > 0 && keep.length < header.length && i + 1 < lines.length && divider(lines[i+1],header.length)) {
+        const row = values => '| ' + keep.map(index => String(values[index]).replace(/\\/g,'\\\\').replace(/\|/g,'\\|')).join(' | ') + ' |';
+        output.push(row(header), row(cells(lines[++i])));
+        while (i + 1 < lines.length && lines[i+1].trim() && cells(lines[i+1]).length === header.length) output.push(row(cells(lines[++i])));
+      } else output.push(lines[i]);
+    }
+    return output.join('\n');
+  }
   function render(text, sourceCount = 0, sourcePrefix = 'report-source') {
+    text = withoutPaths(text);
     const article = document.createElement('article'); article.className = 'report-body';
     article.dir = /[\u0600-\u06ff]/.test(text) ? 'rtl' : 'ltr';
     const lines = String(text).replace(/\r\n?/g, '\n').split('\n');
@@ -73,10 +90,11 @@
         }
         const names = header.map(value => value.replace(/\s+/g, ' ').trim());
         for (let column = 0; column < names.length; column++) {
-          const kind = /(?:المسار|path)/i.test(names[column]) ? 'path' : /(?:تاريخ|تعديل|date|modified)/i.test(names[column]) ? 'date' : /(?:رقم|مرجع|reference|\bid\b)/i.test(names[column]) ? 'compact' : 'text';
+          const kind = /(?:المسار|path)/i.test(names[column]) ? 'path' : /(?:تاريخ|تعديل|date|modified)/i.test(names[column]) ? 'date' : /(?:رقم|مرجع|عدد الصفحات|reference|\bid\b)/i.test(names[column]) ? 'compact' : 'text';
           for (const row of [headRow, ...body.children]) {
             const cell = row.children[column]; cell.classList.add('report-cell-' + kind);
-            if (kind !== 'text') cell.dir = 'ltr';
+            if (row !== headRow && kind !== 'text') cell.dir = 'ltr';
+            else cell.dir = article.dir;
           }
         }
         table.append(head, body); wrap.append(table); article.append(wrap); continue;
@@ -95,5 +113,5 @@
     }
     return article;
   }
-  root.ReportsMarkdown = { render, cells };
+  root.ReportsMarkdown = { render, cells, withoutPaths };
 })(window);

@@ -95,11 +95,14 @@ issues رموز للمشكلات المرصودة فقط. بيانات المص�
 """
 
 
-def invoke_structured(model, messages, schema):
+def invoke_structured(model, messages, schema, max_tokens=None):
     # LangChain sends the actual schema to Ollama, rather than JSON mode alone.
     from langchain_core.messages import SystemMessage
     contract = schema.model_json_schema()
-    target = model.bind(format=contract) if hasattr(model, "bind") else model
+    options = {"format": contract}
+    if max_tokens is not None:
+        options["options"] = {"num_ctx": 16384, "temperature": 0, "num_predict": max_tokens}
+    target = model.bind(**options) if hasattr(model, "bind") else model
     # Ollama recommends supplying the schema in the prompt as well. Keep it in
     # the existing trusted system message, never mixed into source document data.
     grounded_messages = list(messages)

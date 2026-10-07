@@ -305,7 +305,7 @@ public class ReportTests
             Microsoft.Extensions.Logging.Abstractions.NullLogger<ReportsChatService>.Instance);
         var result = await chat.AskAsync("اعطيني تقرير عن آخر وثيقة تم تعديلها وتقرير آخر عن آخر وثيقة أُنشئت", default);
         Assert.Equal(2, result.Reports.Count);
-        if (presentationUnavailable) Assert.All(result.Reports, report => Assert.Contains("تعذرت صياغة ملخص AI", report.Answer));
+        Assert.All(result.Reports, report => Assert.DoesNotContain("تعذرت صياغة ملخص AI", report.Answer));
         Assert.Equal(new[] { "lastModifiedTime desc", "creationTime desc" }, query.Sorts);
         Assert.Equal(new[] { 1, 1 }, query.Limits);
         Assert.Equal(new[] { 42 }, result.Reports[0].RelatedEntryIds);
@@ -317,9 +317,32 @@ public class ReportTests
             Assert.Contains("2026-10-06 11:00:00 +03:00", report.Answer);
             Assert.DoesNotContain("**73**", report.Answer);
         });
-        Assert.Equal(new[] { "health", "route", "present" }, graph.Paths);
+        Assert.Equal(new[] { "health", "route" }, graph.Paths);
         Assert.Contains("إجراء الوثيقة", System.Text.RegularExpressions.Regex.Unescape(graph.RouteBody));
         Assert.DoesNotContain("[1] |", result.Answer.Split("آخر وثيقة منشأة").Last());
+    }
+
+    [Theory]
+    [InlineData(7, null, false, "7", 0)]
+    [InlineData(null, 12, false, "12", 1)]
+    [InlineData(null, null, false, "—", 1)]
+    [InlineData(null, null, true, "—", 1)]
+    [InlineData(0, null, false, "0", 0)]
+    public async Task ReportPageCountComesFromLiveDataAndMissingCountDoesNotBreakTable(
+        int? searchCount, int? entryCount, bool unavailable, string expected, int reads)
+    {
+        var entryService = new Entries(1) { PageCount = entryCount, FailureId = unavailable ? 42 : null };
+        var query = new Searches { Response = (_, _, _) => new PagedResult<LFSearchResult>
+        {
+            Items = [new LFSearchResult { EntryId = 42, Name = "وثيقة", FullPath = "\\قسم\\وثيقة",
+                EntryType = LFEntryType.Document, PageCount = searchCount }], TotalCount = 1
+        } };
+        var result = await Create(entryService, query).CreateAsync("RepoA", new QueryPlan("search"), [], default);
+        Assert.Contains("| عدد الصفحات | المرجع |", result.Answer);
+        Assert.DoesNotContain("| المسار |", result.Answer);
+        Assert.Contains("| " + expected + " | [1] |", result.Answer);
+        Assert.Equal(reads, entryService.EntryCalls.Count);
+        Assert.Single(result.Sources);
     }
 
     [Theory]
@@ -415,12 +438,15 @@ public class ReportTests
         public bool Enumerated { get; private set; }
         public int? DeniedId { get; init; }
         public int? FailureId { get; init; }
+        public int? PageCount { get; init; }
+        public List<int> EntryCalls { get; } = [];
         private static LFEntry Document(int id) => new() { Id = id, Name = $"وثيقة {id}", FullPath = $"\\قسم\\وثيقة {id}", EntryType = LFEntryType.Document };
         public Task<LFEntry> GetEntryAsync(int entryId, CancellationToken cancellationToken = default)
         {
+            EntryCalls.Add(entryId);
             if (entryId == DeniedId) throw new LaserficheException("denied", 403);
             if (entryId == FailureId) throw new LaserficheException("outage", 503);
-            return Task.FromResult(Document(entryId));
+            return Task.FromResult(Document(entryId) with { PageCount = PageCount });
         }
         public Task<IReadOnlyList<LFFieldValue>> GetEntryFieldsAsync(int entryId, CancellationToken cancellationToken = default)
         {
