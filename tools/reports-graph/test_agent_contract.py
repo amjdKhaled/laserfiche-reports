@@ -6,6 +6,41 @@ from server import plan_reports, ReportRequest, validate_plan_schema, build_grap
 from test_graph import FakeModel
 
 class AgentContractTests(unittest.TestCase):
+    def test_logged_count_annotation_does_not_discard_valid_document_search_or_retry(self):
+        filter_ = {'field': 'موعد التسليم', 'operator': 'less_than', 'relative': {'unit': 'day'}}
+        for options in ({}, {'countOnly': False}):
+            plan = {'resultType': 'count', 'requiresFilter': True, 'operation': 'search', 'title': 'تقرير وثائق',
+                    'question': 'طلب تقرير مشروط', 'limit': 50, 'filters': filter_, **options}
+            model = FakeModel([json.dumps({'reports': [plan]})])
+            result = plan_reports(model, {'question': plan['question'], 'catalog': {'fields': [{'name': 'موعد التسليم', 'fieldType': 'Date'}]}})
+            actual = result['reports'][0]
+            self.assertEqual(actual['resultType'], 'documents')
+            self.assertFalse(actual['countOnly'])
+            self.assertEqual(actual['filters']['field'], filter_['field'])
+            self.assertEqual(actual['filters']['operator'], filter_['operator'])
+            self.assertTrue(actual['allResults'])
+            self.assertEqual(len(model.calls), 1)
+
+    def test_primary_tool_contract_derives_output_without_changing_explicit_modes(self):
+        from server import planner_request, PlannerOutputSchema
+        base = {'requiresFilter': False, 'title': 'تقرير', 'question': 'طلب', 'limit': 50}
+        for options, expected in [({'operation': 'search'}, 'documents'), ({'operation': 'search', 'countOnly': True}, 'count'),
+                                  ({'operation': 'group'}, 'statistics'), ({'operation': 'search', 'content': True}, 'content'),
+                                  ({'operation': 'metadata', 'entryIds': [618]}, 'details'), ({'operation': 'templates'}, 'schema')]:
+            actual = planner_request(json.dumps({'reports': [{**base, **options}]})).reports[0]
+            self.assertEqual(actual.resultType, expected)
+            self.assertEqual(actual.operation, options['operation'])
+        schema = PlannerOutputSchema.model_json_schema()['$defs']['RoutePlan']
+        self.assertNotIn('resultType', schema['properties'])
+        self.assertIn('operation', schema['required'])
+
+    def test_output_derivation_never_hides_unknown_fields_or_missing_required_filters(self):
+        base = {'resultType': 'count', 'requiresFilter': True, 'operation': 'search', 'title': 'وثائق', 'question': 'مشروط', 'limit': 50}
+        for changes in ({}, {'filters': {'field': 'حقل مخترع', 'operator': 'equals', 'value': 'أ'}}):
+            model = FakeModel([json.dumps({'reports': [{**base, **changes}]})] * 2)
+            with self.assertRaises(ValueError):
+                plan_reports(model, {'question': 'طلب مشروط', 'catalog': {'fields': []}})
+
     def test_real_ollama_client_transmits_schema_and_compact_catalog(self):
         import threading
         from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -27,7 +62,7 @@ class AgentContractTests(unittest.TestCase):
             result = plan_reports(model, {'question': 'وثائق', 'catalog': {'fields': [{'name': 'حقل فعلي', 'fieldType': 'Date'}]}})
             self.assertEqual(result['reports'][0]['operation'], 'search')
             self.assertEqual(len(requests), 1)
-            self.assertIn('resultType', requests[0]['format']['$defs']['RoutePlan']['required'])
+            self.assertNotIn('resultType', requests[0]['format']['$defs']['RoutePlan']['properties'])
             self.assertEqual(requests[0]['options']['num_predict'], 2048)
             self.assertEqual(json.loads(requests[0]['messages'][1]['content'])['catalog']['fields'], [['حقل فعلي', 'Date', False]])
             self.assertNotIn('JSON Schema:', requests[0]['messages'][0]['content'])

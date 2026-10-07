@@ -379,8 +379,8 @@ Use OCR storage only when document body/content is required.
 For calculations, filtering, dates, grouping and counts, prefer exact backend operations over LLM estimation.
 
 Return only valid JSON. Interpret natural Arabic and follow-ups semantically. No exact-question matching.
-For each report, decide resultType FIRST from what the user wants: documents (individual rows), count (one total), statistics (grouped calculations), content (OCR), details, schema, clarification.
-A document report/list is documents: operation=search, countOnly=false, content=false. The word report does NOT request statistics. Only explicit statistics/comparison/distribution uses resultType=statistics and operation=group.
+Choose one executable operation for each request. resultType is computed by Backend; do not output it.
+A document report/list uses operation=search,countOnly=false,content=false and returns individual document rows. The word report does NOT request a count or grouped statistics. Only explicit statistics/comparison/distribution uses operation=group. Set countOnly=true ONLY when the user requests a total without individual documents.
 requiresFilter=true when the user restricts which entries qualify. Express EVERY restriction as a filter/name/template/folder/ID condition. Never answer a conditional request by querying everything or just grouping by a date. If a needed field is unavailable/ambiguous, clarify briefly; do not pick an unrelated generic date.
 Use only actual catalog fields/templates or entryProperties. Resolve synonyms semantically. A due/expiry condition needs an actual due/expiry field; do not substitute creation, modification or an unrelated date. Never invent status values.
 search=SearchEntries; group=AggregateEntries; metadata=GetEntry/Metadata (by entryIds or unique name); folders=SearchEntries for folders; folder_information=GetFolderInformation; templates=GetTemplates; schema=GetRepositorySchema. content=GetOcrContent; search with content=true filters live entries first then reads OCR only for their IDs.
@@ -423,6 +423,35 @@ def validate_plan_schema(request, catalog):
             check_filter(plan.filters)
 
 
+class PlannerOutputSchema:
+    """The model chooses executable tools; resultType is derived, never chosen twice."""
+    @staticmethod
+    def model_json_schema():
+        contract = ReportRequest.model_json_schema()
+        plan = contract["$defs"]["RoutePlan"]
+        plan["properties"].pop("resultType")
+        plan["required"].remove("resultType")
+        return contract
+
+
+def planner_request(content):
+    raw = json.loads(content)
+    if isinstance(raw, dict) and isinstance(raw.get("reports"), list):
+        for plan in raw["reports"]:
+            if not isinstance(plan, dict):
+                continue
+            operation = plan.get("operation")
+            result_type = ("clarification" if operation == "clarify" else "statistics" if operation == "group"
+                           else "content" if plan.get("content") is True else "count" if plan.get("countOnly") is True
+                           else "details" if operation in ("metadata", "folder_information")
+                           else "schema" if operation in ("templates", "schema") else "documents")
+            # Accept existing clients with a redundant count annotation, without
+            # changing the tool, filters, dates, IDs, content or explicit count mode.
+            if "resultType" not in plan or (plan["resultType"] == "count" and not plan.get("countOnly", False)):
+                plan["resultType"] = result_type
+    return ReportRequest.model_validate(raw)
+
+
 def plan_reports(model, payload):
     # Plan against every authoritative field/template name, without long descriptions.
     # Never shortlist names by keywords: that could hide a field needed by the AI.
@@ -442,14 +471,14 @@ def plan_reports(model, payload):
     for attempt in range(2):
         input_bytes = sum(len(str(m.content).encode("utf-8")) for m in messages)
         context_size = 8192 if input_bytes < 16000 else 16384
-        content = invoke_structured(model, messages, ReportRequest, max_tokens=2048, compact=True, num_ctx=context_size, diagnostics=True, embed_schema=False)
+        content = invoke_structured(model, messages, PlannerOutputSchema, max_tokens=2048, compact=True, num_ctx=context_size, diagnostics=True, embed_schema=False)
         try:
-            request = ReportRequest.model_validate_json(content)
+            request = planner_request(content)
             validate_plan_schema(request, payload["catalog"])
-            print("Stage=PLANNER_VALIDATED Version=intent-v5.1 Attempt=" + str(attempt + 1) + " Plans=" + json.dumps([
+            print("Stage=PLANNER_VALIDATED Version=intent-v5.2 Attempt=" + str(attempt + 1) + " Plans=" + json.dumps([
                 {"resultType": p.resultType, "operation": p.operation, "requiresFilter": p.requiresFilter,
                  "hasFilter": bool(p.filters or p.field or p.template or p.folderId or p.name or p.entryIds or p.from_),
-                 "allResults": p.allResults} for p in request.reports]), flush=True)
+                 "allResults": p.allResults, "countOnly": p.countOnly} for p in request.reports]), flush=True)
             return request.model_dump(by_alias=True)
         except ValueError as error:
             errors = ([{"path": ".".join(map(str, item["loc"])), "type": item["type"], "message": item["msg"][:240]}
@@ -462,7 +491,7 @@ def plan_reports(model, payload):
             # Preserve the draft for a focused repair, rather than regenerate all
             # reasoning from an error truncated before its meaningful details.
             from langchain_core.messages import AIMessage
-            messages.extend([AIMessage(content=content), SystemMessage(content="Repair only the invalid properties identified here: " + json.dumps(errors, ensure_ascii=False) + ". Keep the original user's intent and all selection conditions. Return the full corrected JSON. Clarification can retain the desired resultType but must not execute queries.")])
+            messages.extend([AIMessage(content=content), SystemMessage(content="Repair only the invalid properties identified here: " + json.dumps(errors, ensure_ascii=False) + ". Keep the original user's intent and all selection conditions. Return the full corrected JSON. Do not output resultType. Clarification must not execute queries.")])
 
 
 def dependency_error(error):
@@ -684,7 +713,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(HTTPStatus.SERVICE_UNAVAILABLE, {"status": "unavailable", "error": error})
         return self.send_json(HTTPStatus.OK, {"status": "ready", "model": self.model_name,
             "modelTimeoutSeconds": self.model_timeout_seconds, "engine": "LangGraph",
-            "routingVersion": "schema-agent-v5", "plannerVersion": "intent-v5.1", "promptVersion": PROMPT_VERSION, "capabilities": ["schema-output", "structured-filters", "backend-dates", "aggregation", "follow-up", "focused-context", "optional-semantic-review"]})
+            "routingVersion": "schema-agent-v5", "plannerVersion": "intent-v5.2", "promptVersion": PROMPT_VERSION, "capabilities": ["schema-output", "structured-filters", "backend-dates", "aggregation", "follow-up", "focused-context", "optional-semantic-review"]})
 
     def do_POST(self):
         if self.path not in ("/answer", "/route", "/present"):
@@ -776,7 +805,7 @@ def main():
     Handler.model_timeout_seconds = args.model_timeout_seconds
     Handler.model = model
     Handler.graph = build_graph(model, fast=True, review_content=args.review_content)
-    print(f"LangGraph ready on http://127.0.0.1:{args.port}; model={args.model}; planner=intent-v5.1; modelTimeoutSeconds={args.model_timeout_seconds}", flush=True)
+    print(f"LangGraph ready on http://127.0.0.1:{args.port}; model={args.model}; planner=intent-v5.2; modelTimeoutSeconds={args.model_timeout_seconds}", flush=True)
     ThreadingHTTPServer(("127.0.0.1", args.port), Handler).serve_forever()
 
 
