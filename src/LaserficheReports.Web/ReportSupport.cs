@@ -1,6 +1,5 @@
 using System.Globalization;
 using System.Text;
-using System.Text.RegularExpressions;
 using LaserficheReports.Domain.Entities;
 
 namespace LaserficheReports.Web;
@@ -9,39 +8,8 @@ internal sealed record AnswerScope(string Mode, string RepositoryId, int Documen
     int EvidenceCount, bool Exhaustive, string Detail, IReadOnlyList<int> RequestedEntryIds);
 internal sealed record FieldCondition(string FieldQuestion, string ExpectedValue);
 
-internal static partial class ReportSupport
+internal static class ReportSupport
 {
-    // Only document-labelled IDs narrow the search. Dates and other numbers do not.
-    internal static int[] RequestedEntries(string question)
-    {
-        var normalized = NormalizeDigits(question);
-        var ids = new List<int>();
-        foreach (Match match in EntryGroupRegex().Matches(normalized))
-            foreach (Match number in Regex.Matches(match.Groups[1].Value, @"[0-9]+"))
-                if (int.TryParse(number.Value, out var id) && id > 0 && !ids.Contains(id)) ids.Add(id);
-        return ids.ToArray();
-    }
-
-    internal static FieldCondition? ParseCondition(string question)
-    {
-        var matches = EqualityRegex().Matches(question);
-        if (matches.Count != 1 || NeedsFilterClarification(question)) return null;
-        var comparison = matches[0];
-        var left = question[..comparison.Index].Trim();
-        var value = question[(comparison.Index + comparison.Length)..].Trim()
-            .TrimEnd('؟', '?', '،').Trim().Trim('"', '\'', '«', '»');
-        return left.Length > 0 && value.Length is > 0 and <= 200
-            ? new FieldCondition(left, value) : null;
-    }
-
-    internal static bool IsInventoryQuestion(string question) => InventoryRegex().IsMatch(
-        Regex.Replace(question.Trim().TrimEnd('؟', '?', '.', '!'), @"\s+", " "));
-
-    internal static bool NeedsFilterClarification(string question) =>
-        EqualityRegex().Matches(question).Count > 1 ||
-        UnsupportedComparisonRegex().IsMatch(question) ||
-        (EqualityRegex().IsMatch(question) && CompoundFilterRegex().IsMatch(question));
-
     // Ignore harmless Arabic hamza/diacritic/whitespace differences for matching
     // metadata, while preserving the original field name/value in the report.
     internal static string MatchKey(string value)
@@ -105,20 +73,4 @@ internal static partial class ReportSupport
         return output;
     }
 
-    private static string NormalizeDigits(string value) => string.Concat(value.Select(c =>
-    {
-        var digit = CharUnicodeInfo.GetDigitValue(c);
-        return digit >= 0 ? (char)('0' + digit) : c;
-    }));
-
-    [GeneratedRegex(@"(?:الوثيقتين|وثيقتين|الوثائق|وثائق|المستندين|مستندين|المستندات|مستندات|وثيق[ةه]|مستند|\bdocuments?\b|\bentries\b|\bentry\b|\bIDs?\b|#)\s*(?:(?:رقم|ارقام|أرقام|number|numbers|IDs?)\s*)?[#:]?\s*([0-9]+(?:\s*(?:[,،]|و|and)\s*[0-9]+)*)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
-    private static partial Regex EntryGroupRegex();
-    [GeneratedRegex(@"\s*(?:يساوي|تساوي|قيمته|قيمتها|equals|=)\s*", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
-    private static partial Regex EqualityRegex();
-    [GeneratedRegex(@"^(?:(?:اعرض|اذكر|اعطني|أعطني|اعطيني|أعطيني|وريني|طلع|ابغا|أبغا|ابي|أبي|أريد|اريد|قائمة|تقرير عن|ما هي|ماهي|ايش|وش|ما|كم عدد|عدد)\s+)?(?:(?:لي|تقرير|قائمة|بكل|عن|بجميع)\s+)*(?:جميع\s+|كل\s+)?(?:الوثائق|المستندات|الملفات)\s*(?:(?:الموجود[ةه]?|المتاحة)\s*)?(?:في\s*(?:(?:هذا|هذي|كل|جميع)\s+)?(?:المستودع|مستودع|المخزن|المخزن هذا|الريبو|(?:ال\s*)?(?:repasetory|repository|repo)))?$|^(?:كم\s+(?:وثيقة|مستند|ملف)\s+في\s+(?:هذا\s+)?(?:المستودع|المخزن)|(?:list|show|count)\s+(?:me\s+)?(?:all\s+)?documents(?:\s+(?:in|from)\s+(?:this\s+|the\s+)?repository)?)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
-    private static partial Regex InventoryRegex();
-    [GeneratedRegex(@"(?:\s+(?:و|أو|او|and|or)\s+[^؟?]*?(?:الحقل|حقل|التصنيف|موعد|تاريخ|اجراء|إجراء)|(?:>=|<=|!=|≠)|(?:أكبر من|اصغر من|أصغر من|اقل من|أقل من|قبل تاريخ|بعد تاريخ))", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
-    private static partial Regex CompoundFilterRegex();
-    [GeneratedRegex(@"(?:\b(?:not\s+equal(?:s)?|does\s+not\s+equal|unequal)\b|(?:لا|ليس|ليست|غير)\s+(?:يساوي|تساوي|مساوي[ةه]?|مساو[ٍي])|(?:>=|<=|!=|≠)|(?:أكبر من|اصغر من|أصغر من|اقل من|أقل من|قبل تاريخ|بعد تاريخ))", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
-    private static partial Regex UnsupportedComparisonRegex();
 }

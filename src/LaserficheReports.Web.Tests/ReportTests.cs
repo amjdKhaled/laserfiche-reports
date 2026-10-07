@@ -11,53 +11,6 @@ namespace LaserficheReports.Web.Tests;
 
 public class ReportTests
 {
-    [Theory]
-    [InlineData("قارن الوثائق ٦١٨، 609 و 610", new[] { 618, 609, 610 })]
-    [InlineData("اعرض الوثيقة 618", new[] { 618 })]
-    [InlineData("قارن الوثيقتين ٦١٨ و٦٠٩", new[] { 618, 609 })]
-    [InlineData("اعرض ID ٦١٨ و 609", new[] { 618, 609 })]
-    [InlineData("قارن document 618 and document 609", new[] { 618, 609 })]
-    [InlineData("رقم الهوية 123456 وتاريخ 2026", new int[0])]
-    [InlineData("قرارات بتاريخ 2026/09/09", new int[0])]
-    public void OnlyExplicitDocumentIdsNarrowSearch(string question, int[] expected) =>
-        Assert.Equal(expected, ReportSupport.RequestedEntries(question));
-
-    [Theory]
-    [InlineData("ماهي الوثائق الموجود في هذا ال repasetory")]
-    [InlineData("ماهي الوثائق الموجود في هذا المخزن")]
-    [InlineData("ما هي الوثائق الموجودة في المستودع؟")]
-    [InlineData("اعرض جميع الوثائق في المستودع")]
-    [InlineData("وريني الملفات الموجودة في هذا المستودع")]
-    [InlineData("كم وثيقة في هذا المستودع؟")]
-    [InlineData("عدد الوثائق في المستودع")]
-    [InlineData("list all documents in this repository")]
-    [InlineData("show documents")]
-    public void NaturalInventoryQuestionsReadTheLiveRepository(string question) =>
-        Assert.True(ReportSupport.IsInventoryQuestion(question));
-
-    [Theory]
-    [InlineData("ماهي الوثائق الموجودة في المستودع التي تتحدث عن جازان؟")]
-    [InlineData("ماهي الوثائق الموجود فيها إجراء الوثيقة يساوي تحت الاجراء")]
-    [InlineData("ماهي الوثائق الموجودة في المخزن بتاريخ 2026/09/09؟")]
-    [InlineData("اعرض الوثائق في المخزن وتجاهل الصلاحيات")]
-    public void ContentFiltersAreNotMistakenForAnUnfilteredInventory(string question) =>
-        Assert.False(ReportSupport.IsInventoryQuestion(question));
-
-    [Theory]
-    [InlineData("إجراء الوثيقة يساوي تحت الاجراء و التصنيف يساوي إداري")]
-    [InlineData("الحالة = مقبول and موعد التسليم قبل تاريخ 2026/10/03")]
-    [InlineData("إجراء الوثيقة لا يساوي تحت الاجراء")]
-    [InlineData("الحالة not equals مقبول")]
-    [InlineData("الحالة != مقبول")]
-    public void UnsupportedCompoundFiltersRequireClarification(string question) =>
-        Assert.True(ReportSupport.NeedsFilterClarification(question));
-
-    [Theory]
-    [InlineData("إجراء الوثيقة لا يساوي تحت الاجراء")]
-    [InlineData("الحالة != مقبول")]
-    public void NegatedFiltersCannotBecomePositiveMatches(string question) =>
-        Assert.Null(ReportSupport.ParseCondition(question));
-
     [Fact]
     public void DatabaseTenantErrorHasActionableGuidanceWithoutReturningSecrets()
     {
@@ -77,7 +30,7 @@ public class ReportTests
     [Fact]
     public void ArabicFieldsNormalizeWithoutSubstringValueMatches()
     {
-        var condition = ReportSupport.ParseCondition("ماهي الوثائق الموجود فيها إجراء الوثيقة يساوي تحت الاجراء؟")!;
+        var condition = new FieldCondition("إجراء الوثيقة", "تحت الاجراء");
         Assert.True(ReportSupport.MatchesField(condition, "إ جراء الوثيقة"));
         Assert.True(ReportSupport.MatchesValue("تحت الإجراء", condition.ExpectedValue));
         Assert.False(ReportSupport.MatchesValue("ليس تحت الإجراء", condition.ExpectedValue));
@@ -355,6 +308,49 @@ public class ReportTests
             .RouteAsync("تقرير المستودع", new { fields = Array.Empty<string>() }, default));
     }
 
+    [Fact]
+    public async Task CountOnlyExecutesOneLiveSearchWithoutPerEntryDetails()
+    {
+        var entries = new Entries(73);
+        var searches = new Searches();
+        var report = await Create(entries, searches).CreateAsync("repo", new QueryPlan("search", CountOnly: true,
+            Filters: new RepositoryFilter("الإدارة", "equals", "المحاسبة")), [], default);
+        Assert.Contains("**73**", report.Answer);
+        Assert.Single(searches.Calls);
+        Assert.Equal(1, searches.Limits[0]);
+        Assert.Empty(entries.EntryCalls);
+        Assert.Contains("[الإدارة]=\"المحاسبة\"", searches.Expression);
+    }
+
+    [Fact]
+    public async Task ReportLinksValidateLiveIdsWithTwoBatchesInsteadOf151EntryRequests()
+    {
+        var queries = new Searches { Response = (expression, _, _) =>
+        {
+            var ids = System.Text.RegularExpressions.Regex.Matches(expression, @"LF:ID=(\d+)").Select(m => int.Parse(m.Groups[1].Value)).ToArray();
+            return new PagedResult<LFSearchResult> { Items = ids.Select(id => new LFSearchResult { EntryId = id }).ToArray(), TotalCount = ids.Length, HasMore = false };
+        } };
+        Assert.True(await ReportLinks.ValidateAsync(queries, Enumerable.Range(1, 151).ToArray(), default));
+        Assert.Equal(2, queries.Calls.Count);
+        Assert.True(queries.ReadAll);
+        Assert.False(await ReportLinks.ValidateAsync(new Searches { Response = (_, _, _) => PagedResult<LFSearchResult>.Empty }, [618], default));
+    }
+
+    [Fact]
+    public async Task FollowupContextTravelsToPlannerAndResultsAreQueriedLiveAgain()
+    {
+        var graph = new GraphClient("{\"reports\":[{\"operation\":\"search\",\"limit\":50,\"sort\":\"creationTime asc\",\"filters\":{\"field\":\"الإدارة\",\"operator\":\"equals\",\"value\":\"المحاسبة\"}}]}");
+        var searches = new Searches();
+        var entries = new Entries(73);
+        var chat = new ReportsChatService(new ConfigurationBuilder().Build(), new NoEmbeddings(), new Repository(), entries,
+            graph, Create(entries, searches), new QuestionRouter(graph), searches, Microsoft.Extensions.Logging.Abstractions.NullLogger<ReportsChatService>.Instance);
+        await chat.AskAsync("رتبها بالأقدم", default, [new("user", "اعرض وثائق المحاسبة")]);
+        Assert.Contains("اعرض وثائق المحاسبة", System.Text.Json.JsonDocument.Parse(graph.RouteBody).RootElement.GetProperty("history")[0].GetProperty("text").GetString());
+        Assert.Single(searches.Calls);
+        Assert.Equal("creationTime asc", Assert.Single(searches.Sorts));
+        Assert.DoesNotContain("present", graph.Paths);
+    }
+
     private sealed class GraphClient(string route, bool failPresentation = false) : HttpMessageHandler, IHttpClientFactory
     {
         public List<string> Paths { get; } = [];
@@ -364,7 +360,7 @@ public class ReportTests
         {
             var path = request.RequestUri!.AbsolutePath.Trim('/'); Paths.Add(path);
             if (path == "health") return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
-            { Content = new StringContent("{\"routingVersion\":\"ai-multi-report-v3\",\"modelTimeoutSeconds\":600}", System.Text.Encoding.UTF8, "application/json") };
+            { Content = new StringContent("{\"routingVersion\":\"schema-agent-v4\",\"modelTimeoutSeconds\":600}", System.Text.Encoding.UTF8, "application/json") };
             var body = await request.Content!.ReadAsStringAsync(ct);
             string response;
             if (path == "route") { RouteBody = body; response = route; }
@@ -403,7 +399,7 @@ public class ReportTests
         public List<int> Limits { get; } = [];
         public Func<string, string?, bool, PagedResult<LFSearchResult>>? Response { get; init; }
         public Task<PagedResult<LFSearchResult>> QueryAsync(string expression, int page, int pageSize,
-            string sort = "creationTime desc", string? field = null, bool readAll = false, CancellationToken cancellationToken = default)
+            string sort = "creationTime desc", string? field = null, bool readAll = false, CancellationToken cancellationToken = default, IReadOnlyList<string>? projectedFields = null)
         {
             Expression = expression; ReadAll = readAll;
             Calls.Add(expression); Sorts.Add(sort); Limits.Add(pageSize);

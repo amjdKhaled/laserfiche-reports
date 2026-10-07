@@ -71,6 +71,16 @@ public sealed class LaserficheSearchPagingTests
         await Assert.ThrowsAsync<JsonException>(() => Create(http).QueryAsync("trusted", 1, 20, readAll: true));
     }
 
+    [Fact]
+    public async Task MultipleFieldProjectionUsesRepeatedParametersAndAscendingSort()
+    {
+        var http = new Responses("{\"taskId\":\"task\",\"status\":\"Completed\"}", "{\"@odata.count\":0,\"value\":[]}");
+        await Create(http).QueryAsync("trusted", 1, 20, sort: "creationTime asc", projectedFields: ["القسم", "قيمة الطلب"]);
+        var url = Uri.UnescapeDataString(http.Urls[1]);
+        Assert.Contains("&fields=القسم&fields=قيمة الطلب", url);
+        Assert.Contains("$orderby=creationTime asc", url);
+    }
+
     private static LaserficheSearchService Create(Responses http) => new(http, new Repository(),
         new LaserficheApiAdapter(new Monitor()), new InMemorySearchAuditLog(), NullLogger<LaserficheSearchService>.Instance);
     private sealed class Repository : IRepositoryContext
