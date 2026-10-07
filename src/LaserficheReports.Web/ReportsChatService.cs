@@ -104,11 +104,16 @@ internal sealed class ReportsChatService(
             try { result = plan.Operation == "clarify"
                 ? new ChatResult(request.Clarification ?? "وضح معيار هذا التقرير.", [])
                 : await ExecutePlanAsync(repository, plan, plan.Question ?? question, cancellationToken); }
+            catch (RepositoryScopeClarificationException clarification)
+            {
+                result = new ChatResult(clarification.Message, []);
+            }
             catch (Exception error) when (request.Reports.Length > 1 && !cancellationToken.IsCancellationRequested &&
                 error is LaserficheException or NpgsqlException or HttpRequestException or InvalidOperationException or ArgumentException)
             {
-                logger.LogWarning("Report section failed Operation={Operation} ErrorType={ErrorType}", plan.Operation, error.GetType().Name);
-                result = new ChatResult("تعذر إكمال هذا التقرير؛ لم تُعرض نتائج أو أعداد غير مؤكدة.", []);
+                logger.LogWarning("Report section failed Operation={Operation} ErrorType={ErrorType} Reason={Reason}", plan.Operation, error.GetType().Name,
+                    error is ArgumentException ? error.Message : "upstream failure");
+                result = new ChatResult(error is ArgumentException ? error.Message : "تعذر إكمال هذا التقرير؛ لم تُعرض نتائج أو أعداد غير مؤكدة.", []);
             }
             sections.Add(new ReportSection(plan.Title ?? "تقرير", result.Answer, result.Sources, result.Scope,
                 result.RelatedEntryIds, result.Quality));

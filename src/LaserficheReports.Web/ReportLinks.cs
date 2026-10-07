@@ -34,6 +34,17 @@ internal static class ReportLinks
     internal static async Task<bool> ValidateAsync(ILaserficheSearchService searches, int[] ids, CancellationToken ct) =>
         await AccessibleAsync(searches, ids, ct) is not null;
 
+    internal static string DiscoveredBaseUrl(string advertised)
+    {
+        if (string.IsNullOrWhiteSpace(advertised)) return "";
+        if (!Uri.TryCreate(advertised, UriKind.Absolute, out var uri) ||
+            uri.Scheme is not ("http" or "https") || !string.IsNullOrEmpty(uri.UserInfo))
+            throw new ArgumentException("عنوان Web Client الذي أرجعه المستودع غير صالح.");
+        // Repository discovery returns /laserfiche?repo=...; the entry link supplies
+        // its own validated repository. Do not append Browse.aspx after the query.
+        return new UriBuilder(uri) { Query = "", Fragment = "" }.Uri.GetLeftPart(UriPartial.Path).TrimEnd('/');
+    }
+
     internal static string EntryUrl(string baseUrl, string repository, int id, bool folder = false)
     {
         if (id <= 0) throw new ArgumentException("رقم الوثيقة غير صالح.");
@@ -61,7 +72,7 @@ internal static class ReportLinks
             var baseUrl = config["Laserfiche:WebClientBaseUrl"];
             if (string.IsNullOrWhiteSpace(baseUrl))
             {
-                try { baseUrl = (await repositoryService.GetRepositoryInfoAsync(ct)).WebClientUrl; }
+                try { baseUrl = DiscoveredBaseUrl((await repositoryService.GetRepositoryInfoAsync(ct)).WebClientUrl); }
                 catch (LaserficheReports.Domain.Exceptions.LaserficheException error)
                 { loggerFactory.CreateLogger("ReportLinks").LogWarning("Web Client discovery unavailable Status={Status}", error.StatusCode); }
             }

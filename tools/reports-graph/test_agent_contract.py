@@ -81,7 +81,7 @@ class AgentContractTests(unittest.TestCase):
                          {'field': 'الموعد', 'operator': 'less_than', 'relative': {'unit': 'day'}},
                          {'field': 'الحالة', 'operator': 'not_equals', 'value': 'مكتمل'}]}}
         plan = {'operation': 'search', 'title': 'تقرير وثائق', 'selection': selection}
-        catalog = {'fields': [{'name': 'الموعد'}, {'name': 'الحالة'}], 'templates': ['عقود']}
+        catalog = {'fields': [{'name': 'الموعد', 'fieldType': 'Date'}, {'name': 'الحالة', 'fieldType': 'String'}], 'templates': ['عقود']}
         model = FakeModel([json.dumps({'reports': [plan]})])
         result = plan_reports(model, {'question': 'طلب طبيعي', 'catalog': catalog})['reports'][0]
         self.assertEqual(result['template'], 'عقود')
@@ -161,8 +161,8 @@ class AgentContractTests(unittest.TestCase):
             result = plan_reports(model, {'question': 'وثائق', 'catalog': {'fields': [{'name': 'حقل فعلي', 'fieldType': 'Date'}]}})
             self.assertEqual(result['reports'][0]['operation'], 'search')
             self.assertEqual(len(requests), 1)
-            self.assertNotIn('resultType', requests[0]['format']['$defs']['RoutePlan']['properties'])
-            self.assertIn('selection', requests[0]['format']['$defs']['RoutePlan']['required'])
+            self.assertNotIn('resultType', requests[0]['format']['$defs']['RoutePlan']['anyOf'][0]['properties'])
+            self.assertIn('selection', requests[0]['format']['$defs']['RoutePlan']['anyOf'][0]['required'])
             self.assertEqual(requests[0]['options']['num_predict'], 1536)
             self.assertFalse(requests[0]['stream'])
             self.assertEqual(json.loads(requests[0]['messages'][1]['content'])['catalog']['fields'], [['حقل فعلي', 'Date', False]])

@@ -301,3 +301,16 @@ test('chat references reveal compact evidence and open only their verified entry
   assert.match(opened,/DocView.aspx.*id=622/);
   await window.happyDOM.abort();
 });
+test('a one-column statistics table renders with the existing table component', () => {
+  const window=setup();
+  const node=window.ReportsMarkdown.render('| العدد |\n| --- |\n| 76 |');
+  assert.equal(node.querySelectorAll('.report-table').length,1);
+  assert.equal(node.querySelector('th').textContent,'العدد');
+  assert.equal(node.querySelector('td').textContent,'76');
+});
+
+test('a paragraph before a horizontal rule is not mistaken for a one-column table', () => {
+  const window=setup();
+  const node=window.ReportsMarkdown.render('نص التقرير\n---');
+  assert.equal(node.querySelector('.report-table'),null);
+});
