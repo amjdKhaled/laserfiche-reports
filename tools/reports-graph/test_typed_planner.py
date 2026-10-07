@@ -55,3 +55,38 @@ class TypedPlannerTests(unittest.TestCase):
         result = plan_reports(model, {'question': 'كم وثيقة نشطة لغاية 2036 وما أقل؟', 'catalog': CATALOG})
         self.assertEqual(result['reports'][0]['operation'], 'clarify')
         self.assertIn('Numeric fields cannot be compared', model.calls[1][-1].content)
+
+    def test_operation_union_forbids_unrequested_aggregation_on_search(self):
+        validator = Draft202012Validator(planner_schema_for_catalog(CATALOG).model_json_schema())
+        for option in [{'metrics': [{'function': 'count'}]}, {'groupFields': [{'field': 'حالة السجل'}]},
+                       {'rollup': 'sum'}, {'having': {'metric': 0, 'operator': 'greater_than', 'value': 1}}]:
+            with self.subTest(option=option): self.assertFalse(validator.is_valid(plan(**option)))
+        self.assertTrue(validator.is_valid(plan(allResults=True)))
+        grouped = plan(); grouped['reports'][0].update(operation='group', groupFields=[{'field': 'حالة السجل'}], metrics=[{'function': 'count'}])
+        self.assertTrue(validator.is_valid(grouped))
+
+    def test_bounds_grammar_requires_range_and_exactly_one_upper_bound(self):
+        validator = Draft202012Validator(planner_schema_for_catalog(CATALOG).model_json_schema())
+        for condition in [
+            {'field': 'أجل الحفظ', 'operator': 'less_than', 'value': '2037-01-01', 'upper': '2038-01-01'},
+            {'field': 'أجل الحفظ', 'operator': 'between', 'value': '2036-01-01'},
+            {'field': 'أجل الحفظ', 'operator': 'between', 'value': '2036-01-01', 'upper': '2037-01-01', 'upperRelative': {'unit': 'year'}},
+            {'field': 'مدة النشاط', 'operator': 'between', 'value': '1', 'upper': '2036-01-01'}]:
+            with self.subTest(condition=condition): self.assertFalse(validator.is_valid(plan(condition)))
+        for condition in [
+            {'field': 'أجل الحفظ', 'operator': 'less_than', 'value': '2037-01-01'},
+            {'field': 'أجل الحفظ', 'operator': 'between', 'value': '2036-01-01', 'upper': '2037-01-01'},
+            {'field': 'أجل الحفظ', 'operator': 'date_between', 'relative': {'unit': 'month'}, 'upperRelative': {'unit': 'month', 'boundary': 'end'}},
+            {'field': 'مدة النشاط', 'operator': 'between', 'value': '1', 'upper': '10'}]:
+            with self.subTest(condition=condition): self.assertTrue(validator.is_valid(plan(condition)))
+
+    def test_inventory_draft_stays_listing_with_one_planning_call(self):
+        model = FakeModel([json.dumps(plan(allResults=True))])
+        result = plan_reports(model, {'question': 'اعطني تقرير عن كل الوثائق الموجودة في هذا المخزن', 'catalog': CATALOG})
+        self.assertEqual(len(model.calls), 1)
+        actual = result['reports'][0]
+        self.assertEqual(actual['operation'], 'search')
+        self.assertEqual(actual['resultType'], 'documents')
+        self.assertTrue(actual['allResults'])
+        self.assertEqual(actual['metrics'], [])
+        self.assertIsNone(actual['rollup'])

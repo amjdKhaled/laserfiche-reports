@@ -453,6 +453,23 @@ public class ReportTests
         Assert.Single(queries.Calls);
     }
 
+    [Fact]
+    public async Task WholeRepositoryReportRunsLiveSearchAndReturnsEveryDocumentRow()
+    {
+        var graph = new GraphClient("{\"reports\":[{\"resultType\":\"documents\",\"operation\":\"search\",\"requiresFilter\":false,\"allResults\":true,\"limit\":50}]}");
+        var queries = new Searches();
+        var entries = new Entries(73) { PageCount = 2 };
+        var chat = new ReportsChatService(new ConfigurationBuilder().Build(), new NoEmbeddings(), new Repository(), entries,
+            graph, Create(entries, queries), new QuestionRouter(graph), queries, Microsoft.Extensions.Logging.Abstractions.NullLogger<ReportsChatService>.Instance);
+        var answer = await chat.AskAsync("اعطني تقرير عن كل الوثائق الموجودة في هذا المخزن", default);
+        Assert.True(queries.ReadAll);
+        Assert.Equal(73, answer.RelatedEntryIds.Length);
+        Assert.Contains("| رقم الوثيقة | اسم الوثيقة | تاريخ الإنشاء | آخر تعديل | عدد الصفحات | المرجع |", answer.Answer);
+        Assert.Contains("| 73 |", answer.Answer);
+        Assert.DoesNotContain("عدد المجموعات", answer.Answer);
+        Assert.DoesNotContain("| المسار |", answer.Answer);
+    }
+
     private static LiveRepositoryReportService Create(Entries entries, Searches search, Definitions? definitions = null) => new(entries, search,
         definitions ?? new Definitions(), new Templates(), Microsoft.Extensions.Logging.Abstractions.NullLogger<LiveRepositoryReportService>.Instance);
 

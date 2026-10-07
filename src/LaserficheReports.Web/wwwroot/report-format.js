@@ -70,7 +70,7 @@
         inline(heading, headings[2], sourceCount, sourcePrefix); article.append(heading); i++; continue;
       }
       const header = cells(lines[i]);
-      if (header.length > 1 && i + 1 < lines.length && divider(lines[i + 1], header.length)) {
+      if ((header.length > 1 || header.length === 1 && /^\s*\|.*\|\s*$/.test(lines[i])) && i + 1 < lines.length && divider(lines[i + 1], header.length)) {
         const wrap = document.createElement('div'); wrap.className = 'report-table-wrap';
         wrap.tabIndex = 0; wrap.setAttribute('aria-label', 'جدول نتائج التقرير');
         const table = document.createElement('table'); table.className = 'report-table';

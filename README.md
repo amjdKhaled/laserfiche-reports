@@ -542,3 +542,19 @@ contains held-out natural Arabic acceptance questions, including folder counts,
 inclusive future-year bounds and ambiguous numeric retention fields. Its fixtures
 are never imported by runtime routing. Live acceptance must run against local
 Ollama/Laserfiche after updating both the graph and .NET application.
+
+
+## Operation-specific planning grammar
+
+Planner `intent-v5.8` uses separate JSON grammar branches for repository searches,
+aggregation and clarification. Search cannot generate metrics, grouping, having or
+rollup properties. Range operators require exactly one upper bound; ordinary
+comparisons cannot generate an upper bound. Validation stays strict: the backend
+never changes search to aggregation just to accept an invalid draft. Inventory
+requests remain complete document listings. No wording-specific handlers are used.
+
+One-column Markdown tables also render in the existing table component. Document
+columns, styling, model and unlimited timeouts remain unchanged. Tests exercise
+invalid grammar combinations, valid ranges, complete 73-document chat execution
+with live-service fixtures and one-column rendering. They do not replace acceptance
+against the deployed Qwen and Laserfiche services.
