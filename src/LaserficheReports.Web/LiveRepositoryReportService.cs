@@ -292,7 +292,11 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
         if (plan.GroupFields?.Length > 0 || plan.Metrics?.Length > 0 || plan.SortField != null || plan.Having != null || plan.Rollup != null)
             result = await CompleteProjectionAsync(result, plan, ct);
         if (plan.Operation == "group" && (plan.GroupFields?.Length > 0 || plan.Metrics?.Length > 0 || plan.GroupBy == null))
-            return RepositoryAggregation.Render(repositoryId, plan, result, (await SchemaAsync(ct)).Values, ids);
+        {
+            var aggregationWatch = System.Diagnostics.Stopwatch.StartNew();
+            try { return RepositoryAggregation.Render(repositoryId, plan, result, (await SchemaAsync(ct)).Values, ids); }
+            finally { logger.LogInformation("Stage=AGGREGATION DurationMs={DurationMs}", aggregationWatch.ElapsedMilliseconds); }
+        }
         if (plan.SortField != null) result = RepositoryAggregation.SortPage(result, plan, (await SchemaAsync(ct)).Values);
         if (plan.Operation == "group")
         {

@@ -7,6 +7,24 @@ namespace LaserficheReports.Web.Tests;
 
 public sealed class GraphDependencyTests
 {
+    [Fact]
+    public async Task GraphCallsCarryTheCurrentRequestIdInsteadOfAStaleHeader()
+    {
+        string? actual = null;
+        var endpoint = new Factory(request =>
+        {
+            actual = Assert.Single(request.Headers.GetValues("X-Request-ID"));
+            return new HttpResponseMessage(HttpStatusCode.OK);
+        });
+        using var handler = new GraphCorrelationHandler(new Microsoft.AspNetCore.Http.HttpContextAccessor
+        { HttpContext = new Microsoft.AspNetCore.Http.DefaultHttpContext { TraceIdentifier = "request:17" } })
+        { InnerHandler = endpoint };
+        using var client = new HttpClient(handler);
+        client.DefaultRequestHeaders.Add("X-Request-ID", "old");
+        using var response = await client.GetAsync("http://graph.test/health");
+        Assert.Equal("request:17", actual);
+    }
+
     [Theory]
     [InlineData("ollama_unavailable")]
     [InlineData("model_not_found")]

@@ -57,6 +57,7 @@ builder.Services.AddLaserficheInfrastructure(builder.Configuration);
 builder.Services.AddScoped<ReportsChatService>();
 builder.Services.AddScoped<LiveRepositoryReportService>();
 builder.Services.AddScoped<QuestionRouter>();
+builder.Services.AddTransient<GraphCorrelationHandler>();
 builder.Services.AddHttpClient("ReportsGraph", client =>
 {
     var baseUrl = builder.Configuration["ReportsGraph:BaseUrl"] ?? "http://127.0.0.1:8766";
@@ -66,7 +67,7 @@ builder.Services.AddHttpClient("ReportsGraph", client =>
         throw new InvalidOperationException("ReportsGraph:BaseUrl must be local HTTP.");
     client.BaseAddress = new Uri(uri.AbsoluteUri.TrimEnd('/') + "/");
     client.Timeout = TimeSpan.FromSeconds(Math.Clamp(builder.Configuration.GetValue<int?>("ReportsGraph:TimeoutSeconds") ?? 1500, 120, 7200));
-}).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+}).AddHttpMessageHandler<GraphCorrelationHandler>().ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
 {
     AllowAutoRedirect = false,
     UseProxy = false

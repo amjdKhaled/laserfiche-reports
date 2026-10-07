@@ -7,12 +7,14 @@ an insufficient extraction to a complete answer.
 import json
 import re
 import unicodedata
+from contextvars import ContextVar
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt
 
 
 PROMPT_VERSION = "reports-grounded-v2.1"
+REQUEST_ID = ContextVar("reports_request_id", default="")
 
 
 class StrictModel(BaseModel):
@@ -105,13 +107,15 @@ def compact_schema(value):
             for key, item in value.items() if key not in ("title", "default", "description")}
 
 
-def invoke_structured(model, messages, schema, max_tokens=None, *, compact=False, num_ctx=16384, diagnostics=False, embed_schema=True):
+def invoke_structured(model, messages, schema, max_tokens=None, *, compact=False, num_ctx=16384, diagnostics=False, embed_schema=True, stream=None):
     # LangChain sends the actual schema to Ollama, rather than JSON mode alone.
     from langchain_core.messages import SystemMessage
     contract = schema.model_json_schema()
     if compact:
         contract = compact_schema(contract)
     options = {"format": contract}
+    if stream is not None:
+        options["stream"] = stream
     if max_tokens is not None:
         options["options"] = {"num_ctx": num_ctx, "temperature": 0, "num_predict": max_tokens}
     target = model.bind(**options) if hasattr(model, "bind") else model
@@ -126,8 +130,9 @@ def invoke_structured(model, messages, schema, max_tokens=None, *, compact=False
         metadata = getattr(reply, "response_metadata", {}) or {}
         usage = getattr(reply, "usage_metadata", {}) or {}
         import logging
-        logging.getLogger(__name__).warning("Stage=PLANNER_MODEL Context=%s OutputLimit=%s InputChars=%s Metrics=%s",
-            num_ctx, max_tokens, sum(len(str(message.content)) for message in grounded_messages),
+        logging.getLogger(__name__).warning("Stage=PLANNER_MODEL RequestId=%s Context=%s OutputLimit=%s InputChars=%s SchemaChars=%s Metrics=%s",
+            REQUEST_ID.get(), num_ctx, max_tokens, sum(len(str(message.content)) for message in grounded_messages),
+            len(json.dumps(contract, ensure_ascii=False, separators=(",", ":"))),
             {key: metadata.get(key, usage.get(key)) for key in ("load_duration", "prompt_eval_duration", "eval_duration", "prompt_eval_count", "eval_count", "done_reason", "input_tokens", "output_tokens")})
     return reply.content
 
