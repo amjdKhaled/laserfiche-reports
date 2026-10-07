@@ -132,4 +132,13 @@ public class StructuredRepositoryTests
         Assert.Equal(3, result.TotalCount);
         Assert.True(result.HasNextPage);
     }
+
+    [Fact]
+    public void CompleteMetadataSortKeepsAllRowsBeyondInternalBatchSize()
+    {
+        var data = new PagedResult<LFSearchResult> { Items = [Row(1, "أ", "مفتوح", "100"), Row(2, "أ", "مفتوح", "2"), Row(3, "أ", "مفتوح", "30")], TotalCount = 3 };
+        var result = RepositoryAggregation.SortPage(data, new QueryPlan("search", Limit: 1, SortField: "التكلفة", AllResults: true), Schema);
+        Assert.Equal(new[] { 2, 3, 1 }, result.Items.Select(i => i.EntryId));
+        Assert.False(result.HasNextPage);
+    }
 }

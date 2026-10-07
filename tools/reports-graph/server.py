@@ -319,6 +319,7 @@ class RoutePlan(StrictModel):
     entryType: Literal["document", "folder", "all"] = "document"
     page: int = Field(default=1, ge=1, le=1000000)
     countOnly: bool = False
+    allResults: bool = True
     groupFields: list[GroupDimension] = Field(default_factory=list, max_length=4)
     metrics: list[AggregateMetric] = Field(default_factory=list, max_length=4)
     aggregateSort: Literal["metric asc", "metric desc", "group asc", "group desc"] | None = None
@@ -378,14 +379,19 @@ start بداية الفترة، end بداية الفترة التالية (حد
 الأسبوع التقويمي يبدأ الأحد. للفترة استخدم AND greater_or_equal(start) وless_than(end)؛ between حداه شاملان.
 لآخر N أشهر المتحركة: >= relative month offset=-N boundary=rolling و< relative day offset=1 boundary=start.
 للتأخر: حقل الموعد المناسب less_than relative اليوم؛ لا تضف حالة لم يطلبها المستخدم ولم يثبت معناها.
-countOnly=true للعدد؛ يحفظ Backend TotalCount الكامل، لا تحسبه من حجم الصفحة.
+طلب تقرير أو قائمة وثائق يعني operation=search مع filters المناسبة وعرض صف لكل وثيقة، وليس group أو countOnly. كلمة تقرير وحدها لا تعني تجميعًا.
+اختر group فقط عندما يطلب المستخدم إحصاءً أو توزيعًا أو مقارنةً أو حسابًا عبر مجموعات. لا تستبدل قائمة الوثائق بجدول أعداد أو توزيع زمني غير مطلوب.
+كل شرط في السؤال يجب أن يظهر في filters حتى في تقارير التجميع؛ لا تكتف بالتجميع حسب الحقل بدل تطبيق شرطه. إن لم يوجد حقل مناسب لشرط ضروري، اطلب توضيحًا ولا تُرجع كل المستودع دون الشرط.
+countOnly=true فقط عندما يطلب المستخدم العدد دون قائمة؛ يحفظ Backend TotalCount الكامل، لا تحسبه من حجم الصفحة.
 groupFields أبعاد الحقول أو الخصائص، bucket للتوزيع الزمني؛ metrics حسابات Backend count/sum/average/min/max/distinct_count.
 metric count بلا field يحسب الوثائق؛ مع field يحسب الوثائق ذات قيمة؛ الحسابات الرقمية تتجاهل الفراغ ولا تعتبره صفرًا.
 having يصف شرطًا على المقياس المحسوب (metric رقم المقياس بدءًا من صفر، operator مقارنة رقمية، value رقم).
 يمكن كشف الأسماء/القيم المتكررة عبر groupFields المناسب وcount وhaving على العدد، دون ادعاء أن تشابه الاسم يثبت تكرار المحتوى.
 rollup يحسب average/sum/min/max للمقياس الأول عبر كل المجموعات قبل pagination؛ يفيد في متوسط الأعداد لكل فترة زمنية.
 aggregateSort يحدد ترتيب المجموعة أو المقياس الأول؛ limit/page تحدد المجموعات المعروضة بعد حساب النطاق الكامل.
-بحث listing يستعمل page/limit. sort لترتيب properties؛ sortField وsortDirection لترتيب حقل Metadata.
+بحث listing الافتراضي allResults=true وpage=1 لعرض جميع الوثائق المطابقة بجدول الوثائق الأصلي؛ limit حجم دفعة البحث الداخلية وليس حد التقرير الكامل.
+إذا طلب المستخدم عددًا محدودًا أو صفحة محددة أو أحدث N نتائج، استخدم allResults=false وpage/limit. لا تحول الطلب المحدود إلى عرض كامل.
+sort لترتيب properties؛ sortField وsortDirection لترتيب حقل Metadata. اجعل title بالعربية للسؤال العربي، دون اختراع أسماء حقول.
 latest_created/latest_modified للوثيقة الأخيرة: limit=1 وcontent=false. recent قائمة حديثة، created/modified تدعم from/to القديمة.
 لكل مطلب مستقل title وquestion يصفانه وحده. entryIds/folderId تأتي فقط من السؤال أو history، لا تخترعها.
 history سياق المحادثة الحالية؛ افهم التعديلات المتتابعة وأعد الخطة الكاملة مع الشروط السابقة المناسبة. أعد الاستعلام حيًا دائمًا.

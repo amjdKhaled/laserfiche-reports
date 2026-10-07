@@ -6,6 +6,15 @@ from server import plan_reports, ReportRequest, validate_plan_schema, build_grap
 from test_graph import FakeModel
 
 class AgentContractTests(unittest.TestCase):
+    def test_listing_defaults_to_all_rows_but_explicit_limit_can_be_preserved(self):
+        for options, expected in [({}, True), ({'allResults': False, 'limit': 5}, False)]:
+            plan = {'operation': 'search', 'title': 'تقرير الوثائق', 'question': 'كشف الوثائق', 'limit': 50, **options}
+            model = FakeModel([json.dumps({'reports': [plan]}, ensure_ascii=False)])
+            result = plan_reports(model, {'question': plan['question'], 'catalog': {'fields': []}})
+            self.assertEqual(result['reports'][0]['allResults'], expected)
+            if not expected:
+                self.assertEqual(result['reports'][0]['limit'], 5)
+
     def test_held_out_cases_exercise_contract_but_fake_model_is_not_language_evaluation(self):
         self.assertGreaterEqual(len(CASES), 30)
         for case in CASES:

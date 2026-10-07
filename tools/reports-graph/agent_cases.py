@@ -25,6 +25,9 @@ def add(questions, expect, history=None, catalog=None):
                       "history": history or [], "expect": copy.deepcopy(expect)})
 
 add(["كم ملف عندنا الحين؟", "عطني إجمالي المستندات بدون سردها", "أحتاج تعداد الوثائق الحالية"], {"operation": "search", "countOnly": True})
+add(["اعطيني تقرير عن الوثائق المنتهي موعد تسليمها", "أحتاج كشف بأسماء المستندات التي تجاوزت المهلة، كلها", "جهز لي تقرير بالملفات المتأخرة واحد واحد"],
+    {"operation": "search", "filters": OVERDUE, "allResults": True, "countOnly": False})
+add(["ورني أول خمس وثائق تجاوزت أجلها"], {"operation": "search", "filters": OVERDUE, "allResults": False, "limit": 5})
 add(["وش اللي تعدى وقت إنجازه؟", "هل فيه مستندات فاتت المهلة المحددة لها؟", "أطلع العناصر اللي كان مفروض تنتهي قبل اليوم", "أود حصر الوثائق ذات المواعيد المنقضية"], {"operation": "search", "filters": OVERDUE})
 for field in ["آخر موعد", "تاريخ الاستحقاق", "موعد التسليم"]:
     schema = copy.deepcopy(CATALOG); schema["fields"][0]["name"] = field

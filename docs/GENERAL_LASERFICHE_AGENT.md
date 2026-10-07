@@ -16,7 +16,7 @@ The generic operations map to SearchEntries, AggregateEntries, GetEntry/GetEntry
 - Date expressions resolved in Backend using Asia/Riyadh: day/week/month/year, calendar start/end and rolling offsets. Calendar weeks start Sunday. Calendar periods use `>= start` and `< end`; the end is exclusive. Explicit dates use ISO `yyyy-MM-dd`.
 - Listing with page/limit and created/modified/name/ID sorting. Metadata sorting reads the bounded full selection then sorts numerically, by date, or by text and pages the sorted result.
 - Grouping by up to four metadata fields or entry properties, with day/week/month/year buckets for dates. Up to four metrics: count, sum, average, min, max, distinct_count. Generic `having` conditions filter computed metrics; `rollup` calculates the first metric across all groups before paging (including average document counts per month). Numeric metrics require numeric fields. Rollup averages include observed groups; missing time buckets are not automatically filled with zeros. Groups are sorted/paged **after** complete calculation; null metric values are not zero.
-- Exact count-only responses use Laserfiche TotalCount without downloading entry details. Paginated listings retain the complete count separately from visible rows.
+- Exact count-only responses use Laserfiche TotalCount without downloading entry details. A document report uses the original document table, without a path column; it is not implicitly an aggregation. The planner defaults `allResults=true` for ordinary listings, so the backend follows all search pages and verifies row count against TotalCount. Explicit limited/recent/page requests retain pagination via `allResults=false`. Complete listings, like aggregation, retain the 10,000-result safety bound and fail explicitly rather than silently omitting documents. Rows are rendered by the backend without sending them to Qwen.
 - Document metadata by ID; name lookup must resolve uniquely before reading a particular document. Duplicate names produce a short request to choose an ID, with candidates.
 - OCR summaries read only content chunks (never indexed metadata). `contentMode=search` uses scoped lexical/vector retrieval for topic matching; `summary` reads selected document passages. Hybrid retrieval is restricted to IDs from live Laserfiche. Current names and permissions come from live search or live entry checks.
 
@@ -36,15 +36,15 @@ The API's field projection format and search syntax follow official documentatio
 
 ## Validation performed here
 
-- Python contract/grounding/HTTP tests: 59 passed (fake models; **not proof of Qwen language comprehension**).
-- Web Backend tests: 84 passed; 1 external PostgreSQL integration test skipped.
+- Python contract/grounding/HTTP tests: 60 passed (fake models; **not proof of Qwen language comprehension**).
+- Web Backend tests: 90 passed; 1 external PostgreSQL integration test skipped.
 - Infrastructure tests: 251 passed, including repeated field parameters and ascending sorting.
 - Existing UI/export tests: 17 passed.
-- Actual ASP.NET process with HTTP fixtures: login, live search filter compilation, 20 displayed rows/TotalCount=50, count-only=50, grouping=25+25, and link validation succeeded. Zero entry GETs and zero `/present` calls in that fixture. The fixture uses predetermined tool plans, not real Qwen. Its ~0.15s listing time is **not a real Ollama/Laserfiche performance measurement**.
+- Actual ASP.NET process with HTTP fixtures: login, live search filter compilation, 50 displayed rows/TotalCount=50 across three search pages, original document columns without path, count-only=50, grouping=25+25, and link validation succeeded. Zero entry GETs and zero `/present` calls in that fixture. The fixture uses predetermined tool plans, not real Qwen. Its ~0.15s listing time is **not a real Ollama/Laserfiche performance measurement**.
 
 ## Required real-model acceptance
 
-`tools/reports-graph/agent_cases.py` contains **52 held-out Arabic questions**, formal/colloquial paraphrases, three different due-date schemas, counts, relative dates, compound conditions, negation, aggregation, sorting, follow-up, document/folder/template questions, OCR and hybrid intent. It is never imported by the production planner. Expected plans are not sent to Qwen. Unit tests exercise the contract only.
+`tools/reports-graph/agent_cases.py` contains **56 held-out Arabic questions**, formal/colloquial paraphrases, three different due-date schemas, counts, relative dates, compound conditions, negation, aggregation, sorting, follow-up, document/folder/template questions, OCR and hybrid intent. It is never imported by the production planner. Expected plans are not sent to Qwen. Unit tests exercise the contract only.
 
 Run after fetching this branch and restarting the graph and Web application:
 
