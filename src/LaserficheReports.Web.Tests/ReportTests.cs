@@ -12,6 +12,39 @@ namespace LaserficheReports.Web.Tests;
 public class ReportTests
 {
     [Fact]
+    public async Task CompleteDocumentReportKeepsOriginalColumnsAndEveryLiveRow()
+    {
+        var query = new Searches();
+        var result = await Create(new Entries(73), query).CreateAsync("repo",
+            new QueryPlan("search", AllResults: true), [], default);
+        Assert.True(query.ReadAll);
+        Assert.Equal(73, result.Sources.Count);
+        Assert.Equal(73, result.RelatedEntryIds.Length);
+        Assert.True(result.Scope!.Exhaustive);
+        Assert.Contains("| رقم الوثيقة | اسم الوثيقة | تاريخ الإنشاء | آخر تعديل | عدد الصفحات | المرجع |", result.Answer);
+        Assert.Contains("| 73 |", result.Answer);
+        Assert.DoesNotContain("| المسار |", result.Answer);
+        Assert.DoesNotContain("Date / month", result.Answer);
+        Assert.DoesNotContain("ليست القائمة الكاملة", result.Answer);
+    }
+
+    [Fact]
+    public async Task IncompleteSearchCannotPretendToBeCompleteDocumentReport()
+    {
+        var query = new Searches { Response = (_, _, _) => new()
+        { Items = [new LFSearchResult { EntryId = 1, Name = "واحد", PageCount = 1 }], TotalCount = 73, HasMore = true } };
+        await Assert.ThrowsAsync<ArgumentException>(() => Create(new Entries(73), query).CreateAsync("repo",
+            new QueryPlan("search", AllResults: true), [], default));
+    }
+
+    [Theory]
+    [InlineData("recent", false, false)]
+    [InlineData("search", true, false)]
+    [InlineData("search", false, true)]
+    public void CompleteListingDoesNotOverrideExplicitCountsContentOrRecentLimits(string operation, bool count, bool content) =>
+        Assert.False(new QueryPlan(operation, AllResults: true, CountOnly: count, Content: content).CompleteListing);
+
+    [Fact]
     public void DatabaseTenantErrorHasActionableGuidanceWithoutReturningSecrets()
     {
         var error = new Npgsql.PostgresException("no tenant identifier provided (ENOIDENTIFIER)", "ERROR", "ERROR", "XX000");

@@ -8,8 +8,9 @@ internal sealed record QueryPlan(string Operation, string? Field = null, string?
     bool Content = false, string? GroupBy = null, string? From = null, string? To = null, string? Title = null, string? Sort = null, int[]? EntryIds = null, string? Question = null,
     RepositoryFilter? Filters = null, string EntryType = "document", int Page = 1, bool CountOnly = false,
     GroupDimension[]? GroupFields = null, AggregateMetric[]? Metrics = null, string? AggregateSort = null,
-    string? SortField = null, string SortDirection = "asc", bool RequireUnique = false, string ContentMode = "summary", AggregateHaving? Having = null, string? Rollup = null)
+    string? SortField = null, string SortDirection = "asc", bool RequireUnique = false, string ContentMode = "summary", AggregateHaving? Having = null, string? Rollup = null, bool AllResults = false)
 {
+    public bool CompleteListing => AllResults && Page == 1 && !Content && !CountOnly && !RequireUnique && Operation is "search" or "created" or "modified" or "folders";
     public QueryKind Kind => Content ? Operation == "content" && Filters == null && Field == null && Template == null && FolderId == null && Name == null ? QueryKind.OCR_QUERY : QueryKind.HYBRID_QUERY
         : QueryKind.LASERFICHE_QUERY;
 }
