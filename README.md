@@ -495,5 +495,25 @@ parallel reads, preserving its diagnostic ID. Ordinary 429 throttling still uses
 bounded retries. No active Laserfiche sessions are terminated automatically and no
 licensing settings are changed. Sign out of unused clients and verify the affected
 account's session limit and Named User license in Laserfiche Administration Console;
-retry after the cooldown. The upstream message alone does not identify which of
+Background reads share the cooldown; an explicit sign-in sends one fresh attempt so recovery does not wait for a cached 9030. The upstream message alone does not identify which of
 those licensing constraints is responsible. Planner/model/UI remain unchanged.
+
+
+## Reports session renewal and failed sign-in
+
+Access-token cache misses renew with the existing refresh token on the v2 Token
+endpoint, under the same repository/session scope and single-flight lock. Renewal
+never changes account. Rejected refresh credentials require explicit sign-in;
+transient renewal failures preserve the refresh token and surface the live error.
+Empty/expired renewal responses are rejected rather than cached.
+
+A failed account or repository switch restores the previous selection, credentials,
+report generation and token scope. A successful switch commits a new isolated
+scope. Signing in again with the same existing credentials reuses or renews the
+current token instead of opening another password-grant session. UI, table,
+planner, qwen2.5:7b and unlimited AI timeout defaults are unchanged.
+
+Regression coverage includes actual loopback HTTP login requests with browser
+cookies, failed/successful account switches, concurrent refresh, invalid renewal
+responses and immediate explicit recovery after 9030. These fixtures do not
+replace acceptance against the deployed Laserfiche and Ollama services.
