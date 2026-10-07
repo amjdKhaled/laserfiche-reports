@@ -28,6 +28,16 @@ public class ReportLinksTests
         Assert.Throws<ArgumentException>(() => ReportLinks.EntryUrl("javascript:alert(1)", "Repo", 618));
     }
 
+    [Fact]
+    public void SessionLicenseErrorIsNotReportedAsReadPermissionFailure()
+    {
+        var error = new LaserficheReports.Domain.Exceptions.LaserficheException("private", 429, "9030");
+        var message = RepositoryReadError.Message(error);
+        Assert.Contains("9030", message);
+        Assert.Contains("Named User", message);
+        Assert.DoesNotContain("صلاحية قراءة", message);
+    }
+
     [Theory]
     [InlineData(401, "مصادقة")]
     [InlineData(403, "صلاحية")]

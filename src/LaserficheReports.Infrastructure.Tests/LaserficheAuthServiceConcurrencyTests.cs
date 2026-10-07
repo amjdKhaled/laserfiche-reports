@@ -36,6 +36,36 @@ public sealed class LaserficheAuthServiceConcurrencyTests
         Assert.Equal(2, handler.CallCount);
     }
 
+    [Theory]
+    [InlineData("{\"errorCode\":9030,\"title\":\"Session license limit\"}")]
+    [InlineData("{\"errorCode\":\"9030\",\"title\":\"Session license limit\"}")]
+    public async Task LicenseSessionLimit_IsNotRetriedAndPreservesErrorDuringCooldown(string body)
+    {
+        var handler = new CountingHandler(HttpStatusCode.TooManyRequests, body);
+        var service = CreateService(handler);
+        var first = await Assert.ThrowsAsync<LaserficheException>(() => service.GetTokenAsync(Repo()));
+        var next = await Assert.ThrowsAsync<LaserficheException>(() => service.GetTokenAsync(Repo()));
+        Assert.Equal(1, handler.CallCount);
+        Assert.Equal("9030", first.LFErrorCode);
+        Assert.Equal("9030", next.LFErrorCode);
+        Assert.Equal(first.DiagnosticId, next.DiagnosticId);
+        await Assert.ThrowsAsync<LaserficheException>(() => service.GetTokenAsync(Repo("Other")));
+        Assert.Equal(2, handler.CallCount);
+    }
+
+    [Fact]
+    public async Task ConcurrentLiveReads_DoNotRepeatSessionLicenseRejection()
+    {
+        var handler = new CountingHandler(HttpStatusCode.TooManyRequests, "{\"errorCode\":9030}");
+        var service = CreateService(handler);
+        await Task.WhenAll(Enumerable.Range(0,20).Select(async _ =>
+        {
+            var error = await Assert.ThrowsAsync<LaserficheException>(() => service.GetTokenAsync(Repo()));
+            Assert.Equal("9030", error.LFErrorCode);
+        }));
+        Assert.Equal(1, handler.CallCount);
+    }
+
     // ── Factory ────────────────────────────────────────────────────────────────
 
     private static LaserficheAuthService CreateService(

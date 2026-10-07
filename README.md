@@ -484,3 +484,16 @@ search submission. Errors distinguish authentication, permissions, missing entri
 and server/gateway failure without exposing response bodies. No stale repository
 facts substitute for failed live reads. Planner version is `intent-v5.6`; model and
 unlimited timeout defaults are unchanged.
+
+
+## HTTP 429 / Laserfiche error 9030
+
+9030 from `/Token` indicates session capacity or user license allocation, not an
+invalid AI query. Token acquisition no longer retries this code as temporary rate
+throttling. A one-minute account/repository cooldown shares the typed failure among
+parallel reads, preserving its diagnostic ID. Ordinary 429 throttling still uses
+bounded retries. No active Laserfiche sessions are terminated automatically and no
+licensing settings are changed. Sign out of unused clients and verify the affected
+account's session limit and Named User license in Laserfiche Administration Console;
+retry after the cooldown. The upstream message alone does not identify which of
+those licensing constraints is responsible. Planner/model/UI remain unchanged.

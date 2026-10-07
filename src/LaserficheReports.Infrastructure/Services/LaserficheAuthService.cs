@@ -43,6 +43,7 @@ namespace LaserficheReports.Infrastructure.Services;
 /// HTTP 429, the implementation retries up to <see cref="MaxTokenRetries"/>
 /// times, honouring the <c>Retry-After</c> header when present and falling
 /// back to conservative exponential back-off (1 s, 2 s) otherwise.
+/// Session/license rejection 9030 is not retried and has a one-minute account cooldown.
 /// Deterministic 4xx errors (400, 401, 403, 404) are never retried.
 /// </para>
 /// <para>
@@ -449,7 +450,7 @@ internal sealed class LaserficheAuthService : ILaserficheAuthService
     /// <para>
     /// Retries up to <see cref="MaxTokenRetries"/> times on HTTP 429, honouring the
     /// <c>Retry-After</c> header when present and applying exponential back-off
-    /// (1 s, 2 s) otherwise.  All other error statuses are not retried.
+    /// (1 s, 2 s) otherwise, except session/license error 9030. Other error statuses are not retried.
     /// </para>
     /// <para>
     /// The password is never logged.
@@ -464,6 +465,11 @@ internal sealed class LaserficheAuthService : ILaserficheAuthService
     {
         var cooldownKey = "LFLoginCooldown:" + tokenUrl + ":" +
             Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(username.ToUpperInvariant())));
+        // 9030 is a session/license rejection, not transient request throttling.
+        // Share its short cooldown across parallel reads for this account/repository.
+        var sessionLimitKey = "LFSessionLimit:" + cooldownKey;
+        if (_cache.TryGetValue(sessionLimitKey, out Domain.Exceptions.LaserficheException? sessionLimit) && sessionLimit is not null)
+            throw sessionLimit;
         if (!retryTooManyRequests && _cache.TryGetValue(cooldownKey, out DateTimeOffset retryAt))
             throw new Domain.Exceptions.LaserficheException(
                 $"Laserfiche sign-in is rate limited until {retryAt:O}. No new sign-in request was sent.", 429);
@@ -504,6 +510,10 @@ internal sealed class LaserficheAuthService : ILaserficheAuthService
                 .ConfigureAwait(false);
             sw.Stop();
 
+            var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+            var lfCode = TryExtractLFErrorCode(body);
+            var licensedSessionLimit = response.StatusCode == HttpStatusCode.TooManyRequests && lfCode == "9030";
+
             if (!retryTooManyRequests && response.StatusCode == HttpStatusCode.TooManyRequests)
             {
                 var now = DateTimeOffset.UtcNow;
@@ -516,7 +526,7 @@ internal sealed class LaserficheAuthService : ILaserficheAuthService
             // ── HTTP 429 — rate limited ───────────────────────────────────────
             // Retry up to MaxTokenRetries times with Retry-After / exponential back-off.
             // This should rarely trigger after the single-flight fix eliminates the storm.
-            if (retryTooManyRequests &&
+            if (retryTooManyRequests && !licensedSessionLimit &&
                 response.StatusCode == HttpStatusCode.TooManyRequests &&
                 attempt < MaxTokenRetries)
             {
@@ -533,15 +543,10 @@ internal sealed class LaserficheAuthService : ILaserficheAuthService
             }
 
             // ── Non-success (including 429 after retries exhausted) ───────────
-            var body = await response.Content
-                .ReadAsStringAsync(cancellationToken)
-                .ConfigureAwait(false);
-
             if (!response.IsSuccessStatusCode)
             {
                 var diagId    = GenerateDiagnosticId();
                 var sanitized = SanitizeBody(body);
-                var lfCode    = TryExtractLFErrorCode(body);
 
                 _logger.LogError(
                     "[LF AUTH] [DiagID:{DiagId}] Token request FAILED: " +
@@ -558,12 +563,15 @@ internal sealed class LaserficheAuthService : ILaserficheAuthService
                     _options.EffectiveApiVersion,
                     sanitized);
 
-                throw new Domain.Exceptions.LaserficheException(
+                var failure = new Domain.Exceptions.LaserficheException(
                     $"Laserfiche API returned HTTP {(int)response.StatusCode}.",
                     (int)response.StatusCode,
                     lfCode,
                     sanitized,
                     diagId);
+                if (licensedSessionLimit)
+                    _cache.Set(sessionLimitKey, failure, TimeSpan.FromMinutes(1));
+                throw failure;
             }
 
             _logger.LogDebug(
