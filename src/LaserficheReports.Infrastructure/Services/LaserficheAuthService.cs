@@ -213,6 +213,29 @@ internal sealed class LaserficheAuthService : ILaserficheAuthService
                 return cachedToken;
             }
 
+            if (_cache.TryGetValue("LFRefreshRejected:" + cacheKey, out bool refreshRejected) && refreshRejected)
+                throw new UnauthorizedAccessException("The Laserfiche session renewal was rejected. Sign in again.");
+
+            // Renew the same identity instead of opening another password-grant session.
+            if (_cache.TryGetValue(RefreshKeyFor(repository), out string? refreshToken) &&
+                !string.IsNullOrWhiteSpace(refreshToken))
+            {
+                try
+                {
+                    var renewed = await RequestRefreshTokenAsync(
+                        _adapter.BuildTokenUrlV2(repository.RepositoryId), refreshToken, cancellationToken)
+                        .ConfigureAwait(false);
+                    CacheTokenResponse(repository, cacheKey, renewed);
+                    return renewed.AccessToken;
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    _cache.Remove(RefreshKeyFor(repository));
+                    _cache.Set("LFRefreshRejected:" + cacheKey, true, TimeSpan.FromHours(8));
+                    throw; // Never silently change accounts after a rejected refresh.
+                }
+            }
+
             // ── We are the sole caller acquiring a token for this key right now
             _logger.LogDebug(
                 "Token cache miss for repository {Key}. Acquiring new token.",
@@ -266,9 +289,7 @@ internal sealed class LaserficheAuthService : ILaserficheAuthService
                 .ConfigureAwait(false);
 
             var expirySeconds = Math.Max(tokenResponse.ExpiresIn - EarlyExpiryBufferSeconds, 30);
-            _cache.Set(cacheKey, tokenResponse.AccessToken, TimeSpan.FromSeconds(expirySeconds));
-            if (!string.IsNullOrWhiteSpace(tokenResponse.RefreshToken))
-                _cache.Set(RefreshKeyFor(repository), tokenResponse.RefreshToken, TimeSpan.FromHours(8));
+            CacheTokenResponse(repository, cacheKey, tokenResponse);
 
             _logger.LogDebug(
                 "Token acquired for repository {Key}. Expires in {Seconds}s (cached for {CacheSeconds}s).",
@@ -387,9 +408,7 @@ internal sealed class LaserficheAuthService : ILaserficheAuthService
 
             // Warm the token cache so subsequent GetTokenAsync calls skip re-authentication.
             var expirySeconds = Math.Max(tokenResponse.ExpiresIn - EarlyExpiryBufferSeconds, 30);
-            _cache.Set(cacheKey, tokenResponse.AccessToken, TimeSpan.FromSeconds(expirySeconds));
-            if (!string.IsNullOrWhiteSpace(tokenResponse.RefreshToken))
-                _cache.Set(RefreshKeyFor(repository), tokenResponse.RefreshToken, TimeSpan.FromHours(8));
+            CacheTokenResponse(repository, cacheKey, tokenResponse);
 
             _logger.LogInformation(
                 "[LF AUTH] Login succeeded for repository {RepoId}. Token cached for {CacheSeconds}s.",
@@ -425,10 +444,21 @@ internal sealed class LaserficheAuthService : ILaserficheAuthService
         using var response = await client.PostAsync(tokenUrl, form, cancellationToken)
             .ConfigureAwait(false);
         var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+        if (response.StatusCode is HttpStatusCode.BadRequest or HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+            throw new UnauthorizedAccessException("The Repository API refresh token was rejected. Sign in again.");
         if (!response.IsSuccessStatusCode)
-            throw new UnauthorizedAccessException("The Repository API refresh token was rejected.");
-        return JsonSerializer.Deserialize<TokenResponse>(body, JsonOptions.Default)
-            ?? throw new UnauthorizedAccessException("The Repository API refresh response was invalid.");
+            throw new Domain.Exceptions.LaserficheException(
+                "The Repository API could not renew the session.", (int)response.StatusCode,
+                TryExtractLFErrorCode(body));
+        TokenResponse? token;
+        try { token = JsonSerializer.Deserialize<TokenResponse>(body, JsonOptions.Default); }
+        catch (JsonException)
+        {
+            throw new Domain.Exceptions.LaserficheException("The Repository API refresh response was invalid.", 502);
+        }
+        if (token is null || string.IsNullOrWhiteSpace(token.AccessToken) || token.ExpiresIn <= 0)
+            throw new Domain.Exceptions.LaserficheException("The Repository API refresh response was invalid.", 502);
+        return token;
     }
 
     private void CacheTokenResponse(
@@ -436,7 +466,8 @@ internal sealed class LaserficheAuthService : ILaserficheAuthService
         string cacheKey,
         TokenResponse response)
     {
-        var expirySeconds = Math.Max(response.ExpiresIn - EarlyExpiryBufferSeconds, 30);
+        var expirySeconds = Math.Max(1, Math.Min(response.ExpiresIn, Math.Max(response.ExpiresIn - EarlyExpiryBufferSeconds, 30)));
+        _cache.Remove("LFRefreshRejected:" + cacheKey);
         _cache.Set(cacheKey, response.AccessToken, TimeSpan.FromSeconds(expirySeconds));
         if (!string.IsNullOrWhiteSpace(response.RefreshToken))
             _cache.Set(RefreshKeyFor(repository), response.RefreshToken, TimeSpan.FromHours(8));
@@ -468,7 +499,7 @@ internal sealed class LaserficheAuthService : ILaserficheAuthService
         // 9030 is a session/license rejection, not transient request throttling.
         // Share its short cooldown across parallel reads for this account/repository.
         var sessionLimitKey = "LFSessionLimit:" + cooldownKey;
-        if (_cache.TryGetValue(sessionLimitKey, out Domain.Exceptions.LaserficheException? sessionLimit) && sessionLimit is not null)
+        if (retryTooManyRequests && _cache.TryGetValue(sessionLimitKey, out Domain.Exceptions.LaserficheException? sessionLimit) && sessionLimit is not null)
             throw sessionLimit;
         if (!retryTooManyRequests && _cache.TryGetValue(cooldownKey, out DateTimeOffset retryAt))
             throw new Domain.Exceptions.LaserficheException(
@@ -514,7 +545,7 @@ internal sealed class LaserficheAuthService : ILaserficheAuthService
             var lfCode = TryExtractLFErrorCode(body);
             var licensedSessionLimit = response.StatusCode == HttpStatusCode.TooManyRequests && lfCode == "9030";
 
-            if (!retryTooManyRequests && response.StatusCode == HttpStatusCode.TooManyRequests)
+            if (!retryTooManyRequests && !licensedSessionLimit && response.StatusCode == HttpStatusCode.TooManyRequests)
             {
                 var now = DateTimeOffset.UtcNow;
                 var delay = response.Headers.RetryAfter?.Delta

@@ -402,6 +402,96 @@ public sealed class LaserficheAuthServiceTokenTests
     // Helpers — response factories
     // ─────────────────────────────────────────────────────────────────────────
 
+
+    [Fact]
+    public async Task ExpiredAccess_ConcurrentReads_RefreshOnceWithoutPasswordGrant()
+    {
+        var handler = StatusHandler(HttpStatusCode.OK,
+            "{\"access_token\":\"old-access\",\"refresh_token\":\"renewal\",\"expires_in\":900}");
+        var svc = CreateService(handler);
+        var repo = MakeRepo();
+        Assert.True(await svc.TryAuthenticateAsync(repo, "u", "p"));
+        await svc.InvalidateTokenAsync(repo);
+        handler.Response = new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(
+            "{\"access_token\":\"new-access\",\"refresh_token\":\"rotated\",\"expires_in\":900}") };
+        var tokens = await Task.WhenAll(Enumerable.Range(0, 20).Select(_ => svc.GetTokenAsync(repo)));
+        Assert.All(tokens, token => Assert.Equal("new-access", token));
+        Assert.Equal(2, handler.RequestCount);
+        Assert.Contains("grant_type=refresh_token", handler.LastRequestBody);
+        Assert.Contains("refresh_token=renewal", handler.LastRequestBody);
+        Assert.DoesNotContain("password", handler.LastRequestBody);
+        Assert.EndsWith("/v2/Repositories/TestRepo/Token", handler.LastRequestUri);
+    }
+
+    [Fact]
+    public async Task RefreshGatewayFailure_PreservesRefreshAndDoesNotOpenPasswordSession()
+    {
+        var handler = StatusHandler(HttpStatusCode.OK,
+            "{\"access_token\":\"old\",\"refresh_token\":\"renewal\",\"expires_in\":900}");
+        var svc = CreateService(handler);
+        var repo = MakeRepo();
+        await svc.TryAuthenticateAsync(repo, "u", "p");
+        await svc.InvalidateTokenAsync(repo);
+        handler.Response = new HttpResponseMessage(HttpStatusCode.ServiceUnavailable) { Content = new StringContent("{}") };
+        var error = await Assert.ThrowsAsync<LaserficheException>(() => svc.GetTokenAsync(repo));
+        Assert.Equal(503, error.StatusCode);
+        handler.Response = new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(
+            "{\"access_token\":\"recovered\",\"expires_in\":900}") };
+        Assert.Equal("recovered", await svc.GetTokenAsync(repo));
+        Assert.Contains("grant_type=refresh_token", handler.LastRequestBody);
+        Assert.Equal(3, handler.RequestCount);
+    }
+
+    [Fact]
+    public async Task RejectedRefresh_RepeatedReadsDoNotFallBackToPassword()
+    {
+        var handler = StatusHandler(HttpStatusCode.OK,
+            "{\"access_token\":\"old\",\"refresh_token\":\"renewal\",\"expires_in\":900}");
+        var svc = CreateService(handler);
+        var repo = MakeRepo();
+        await svc.TryAuthenticateAsync(repo, "u", "p");
+        await svc.InvalidateTokenAsync(repo);
+        handler.Response = new HttpResponseMessage(HttpStatusCode.Unauthorized) { Content = new StringContent("{}") };
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => svc.GetTokenAsync(repo));
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => svc.GetTokenAsync(repo));
+        Assert.Equal(2, handler.RequestCount);
+        handler.Response = new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(
+            "{\"access_token\":\"signed-in-again\",\"expires_in\":900}") };
+        Assert.True(await svc.TryAuthenticateAsync(repo, "u", "p"));
+        Assert.Equal("signed-in-again", await svc.GetTokenAsync(repo));
+    }
+
+    [Theory]
+    [InlineData("{}")]
+    [InlineData("{\"access_token\":\"\",\"expires_in\":900}")]
+    [InlineData("{\"access_token\":\"invalid\",\"expires_in\":0}")]
+    public async Task InvalidRefreshResponse_IsNotCached(string body)
+    {
+        var handler = StatusHandler(HttpStatusCode.OK,
+            "{\"access_token\":\"old\",\"refresh_token\":\"renewal\",\"expires_in\":900}");
+        var svc = CreateService(handler);
+        var repo = MakeRepo();
+        await svc.TryAuthenticateAsync(repo, "u", "p");
+        await svc.InvalidateTokenAsync(repo);
+        handler.Response = new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body) };
+        var error = await Assert.ThrowsAsync<LaserficheException>(() => svc.GetTokenAsync(repo));
+        Assert.Equal(502, error.StatusCode);
+    }
+
+    [Fact]
+    public async Task ExplicitLogin_After9030_CanRecoverImmediately()
+    {
+        var handler = StatusHandler(HttpStatusCode.TooManyRequests, "{\"errorCode\":9030}");
+        var svc = CreateService(handler);
+        var repo = MakeRepo();
+        await Assert.ThrowsAsync<LaserficheException>(() => svc.TryAuthenticateAsync(repo, "u", "p"));
+        handler.Response = new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(
+            "{\"access_token\":\"available-now\",\"expires_in\":900}") };
+        Assert.True(await svc.TryAuthenticateAsync(repo, "u", "p"));
+        Assert.Equal("available-now", await svc.GetTokenAsync(repo));
+        Assert.Equal(2, handler.RequestCount);
+    }
+
     private static TestHttpMessageHandler SuccessHandler()
     {
         const string json = @"{""access_token"":""test-token-value"",""expires_in"":3600,""token_type"":""Bearer""}";
