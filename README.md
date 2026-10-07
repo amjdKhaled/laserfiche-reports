@@ -350,6 +350,7 @@ Validation:
 
 ```powershell
 dotnet test
+.\tools\reports-graph\.venv\Scripts\python.exe -m pip install -r tools/reports-graph/requirements-test.txt
 .\tools\reports-graph\.venv\Scripts\python.exe -m unittest discover -s tools/reports-graph -p "test_*.py"
 ```
 
@@ -440,3 +441,23 @@ wrapping tables and horizontal scrolling inside the table on small screens.
 
 See [repository reports setup and limits](docs/REPOSITORY_REPORTS.md), including
 `Laserfiche:WebClientBaseUrl` for a custom Web Client directory.
+
+
+## Planner selection contract (intent-v5.5)
+
+The model-facing schema requires `selection` on every report. Unrestricted discovery
+uses `{ "requiresFilter": false }`. Restricted requests must include a nonempty
+structured filter, entry IDs, folder ID, name, or template in `selection` alongside
+`requiresFilter: true`. Recursive filters require either a value, a relative date,
+an empty-value operator, or an AND/OR group of conditions. The server translates this
+into the existing Backend contract; repository field validation and the unfiltered
+query guard remain in place. Legacy flat plans remain accepted for existing clients.
+No question-specific handlers or UI changes are included.
+
+Schema definition GETs retry once after HTTP 502/503/504, respecting cancellation.
+Persistent failures and authentication errors remain errors; old schema is never
+substituted. Model/planner timeout defaults remain zero (unlimited).
+
+Restart both services after updating. The graph startup line should show
+`planner=intent-v5.5`. Regression tests use HTTP fixtures, not a live Qwen/Laserfiche
+installation; semantic output from the actual model still requires live acceptance.

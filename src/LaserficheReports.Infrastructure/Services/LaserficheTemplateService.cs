@@ -62,7 +62,7 @@ internal sealed class LaserficheTemplateService : ILaserficheTemplateService
             page++;
             _logger.LogDebug("Fetching template definitions page {Page}: {Url}", page, nextUrl);
 
-            using var response = await client.GetAsync(nextUrl, cancellationToken).ConfigureAwait(false);
+            using var response = await RepositoryDefinitionReader.GetAsync(client, nextUrl, _logger, cancellationToken).ConfigureAwait(false);
             var body = await response.Content
                 .ReadAsStringAsync(cancellationToken)
                 .ConfigureAwait(false);
