@@ -1,7 +1,7 @@
 import json
 import unittest
 from jsonschema import Draft202012Validator
-from server import planner_request, validate_plan_schema, planner_schema_for_catalog, plan_reports
+from server import planner_request, validate_plan_schema, planner_schema_for_catalog, plan_reports, canonicalize_property_names
 from test_graph import FakeModel
 
 CATALOG = {'fields': [{'name': 'أجل الحفظ', 'fieldType': 'Date'},
@@ -14,6 +14,45 @@ def plan(filters=None, **options):
         {'requiresFilter': True, 'filters': filters} if filters else {'requiresFilter': False}, **options}]}
 
 class TypedPlannerTests(unittest.TestCase):
+    def test_api_date_alias_is_canonicalized_without_a_second_model_call(self):
+        output = plan({'field': 'creationTime', 'operator': 'less_than', 'value': '2037-01-01'}, countOnly=True)
+        model = FakeModel([json.dumps(output)])
+        result = plan_reports(model, {'question': 'كم وثيقة منشأة في 2036 وما أقل؟', 'catalog': CATALOG})
+        self.assertEqual(len(model.calls), 1)
+        self.assertEqual(result['reports'][0]['filters']['field'], 'created')
+        self.assertEqual(result['reports'][0]['resultType'], 'count')
+
+    def test_alias_never_overwrites_real_metadata_field(self):
+        catalog = {**CATALOG, 'fields': CATALOG['fields'] + [{'name': 'creationTime', 'fieldType': 'Integer'}]}
+        request = planner_request(json.dumps(plan({'field': 'creationTime', 'operator': 'equals', 'value': '2036'})), 'سؤال')
+        canonicalize_property_names(request, catalog)
+        validate_plan_schema(request, catalog)
+        self.assertEqual(request.reports[0].filters.field, 'creationTime')
+
+    def test_all_field_slots_and_templates_use_live_names(self):
+        validator = Draft202012Validator(planner_schema_for_catalog(CATALOG).model_json_schema())
+        for output in [plan(sortField='creationTime'), plan(field='حالة السجل'),
+                       plan(sortField='غير موجود')]:
+            with self.subTest(output=output): self.assertFalse(validator.is_valid(output))
+        for slot in ['groupFields', 'metrics']:
+            output = plan(operation='group', **{slot: [{'field': 'غير موجود', **({'function': 'count'} if slot == 'metrics' else {})}]})
+            self.assertFalse(validator.is_valid(output))
+        output = plan()
+        output['reports'][0]['selection'] = {'requiresFilter': True, 'template': 'قالب مخترع'}
+        self.assertFalse(validator.is_valid(output))
+        self.assertTrue(validator.is_valid(plan(sort='creationTime desc', allResults=False, limit=1)))
+
+    def test_expiry_count_is_one_output_and_preserves_the_named_metadata_field(self):
+        output = plan({'field': 'أجل الحفظ', 'operator': 'less_than', 'value': '2037-01-01'}, countOnly=True)
+        model = FakeModel([json.dumps(output)])
+        result = plan_reports(model, {'question': 'كم وثيقة أجل الحفظ فيها لغاية 2036 وما أقل؟', 'catalog': CATALOG})
+        actual = result['reports'][0]
+        self.assertEqual(len(result['reports']), 1)
+        self.assertTrue(actual['countOnly'])
+        self.assertEqual(actual['filters']['field'], 'أجل الحفظ')
+        self.assertIsNone(actual['sort'])
+        self.assertIn('وما أقل', model.calls[0][0].content)
+
     def test_generation_grammar_uses_actual_field_names_and_types(self):
         validator = Draft202012Validator(planner_schema_for_catalog(CATALOG).model_json_schema())
         for condition in [

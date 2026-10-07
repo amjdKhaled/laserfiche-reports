@@ -558,3 +558,57 @@ columns, styling, model and unlimited timeouts remain unchanged. Tests exercise
 invalid grammar combinations, valid ranges, complete 73-document chat execution
 with live-service fixtures and one-column rendering. They do not replace acceptance
 against the deployed Qwen and Laserfiche services.
+
+### Planner v5.9: live field namespace and year bounds
+
+The planner now constrains sorting, grouping, metric fields and template names
+to the selected repository catalog, in addition to filter fields. API property
+aliases (`creationTime`, `lastModifiedTime`, `id`) are translated to their query
+properties (`created`, `modified`, `entryId`) before validation, only when the
+alias is not itself an actual metadata field. Sort expressions keep API names.
+The incomplete legacy `field` shortcut is no longer offered in the generation
+schema; structured filters carry both the field and its predicate.
+
+Arabic upper-bound phrases such as `2036 وما أقل` are explained to the model as
+one selection condition, not a request for a second oldest-document report.
+A single total uses `countOnly`; an inclusive Gregorian year bound on a date
+field uses `<2037-01-01`. Retention duration, retention year and creation time
+must not be substituted for one another. Ambiguous field meaning still needs
+clarification. These are planning instructions, not a guarantee of model accuracy.
+
+`PLANNER_VALIDATED` now logs the chosen field/operator tree and sort choices
+without logging filter values. Regression tests use simulated model responses;
+acceptance testing must also compare answers from the installed local model
+against the actual repository, especially expiry/retention questions.
+
+After updating, restart the graph process and confirm `planner=intent-v5.9`.
+
+### Planner v6.0: general semantic intent audit
+
+Normal `/route` requests now include an independent local-model intent audit
+after schema/type validation and before any Laserfiche query is returned. The
+audit checks output type, scope, all conditions and logical nesting, actual field
+meanings/types, and calendar/date boundaries against the original question,
+live catalog and conversation history. A rejected plan is repaired and audited
+again under the same overall planning deadline. Repeated semantic rejection
+never returns an executable plan; genuine ambiguity can return a precise
+clarification. Invalid model output and dependency failures remain explicit errors.
+
+The instructions cover general AND/OR conditions, negation, empty values,
+numeric and date ranges, units, follow-ups, counts versus lists, sorting and
+content analysis. They do not implement a hard-coded router for particular
+Arabic questions. Unsupported calculations/calendars/criteria must be clarified,
+not silently approximated. A general question uses the entire selected repository
+unless explicitly restricted; content evidence still has retrieval coverage limits.
+
+Confirm `planner=intent-v6.0; planIntentReview=True` on restart, and
+`planIntentReview: true` in `/health`. `PLAN_INTENT_REVIEW` logs the checks. The
+additional audit normally adds one model call, and failed plans can require
+two additional calls. On slow CPU-only installations this increases latency.
+The `--skip-plan-review` server flag explicitly opts out of this safeguard.
+
+The reviewer uses the same local model in a separate call; it is fallible. Unit
+and HTTP tests simulate responses to verify rejection, repair, safe clarification,
+context preservation and shared deadlines. They do not prove the installed
+model understands every future question or validate counts against a real
+Laserfiche repository. Live acceptance testing remains necessary.
