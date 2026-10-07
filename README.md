@@ -461,3 +461,26 @@ substituted. Model/planner timeout defaults remain zero (unlimited).
 Restart both services after updating. The graph startup line should show
 `planner=intent-v5.5`. Regression tests use HTTP fixtures, not a live Qwen/Laserfiche
 installation; semantic output from the actual model still requires live acceptance.
+
+
+## Report references and Web Client links
+
+Reports show the first three evidence references in compact rows, with the rest
+under “عرض المزيد”. Clicking a bracketed reference opens its exact evidence row.
+References retain the document ID, name, OCR page when available, original excerpt,
+and whether the evidence came from live metadata or indexed content. Arabic cells
+align right; dates and IDs use isolated LTR values inside RTL cells.
+
+Web Client links prefer `Laserfiche:WebClientBaseUrl`, then the URL advertised by the
+current repository, then the API host plus `/laserfiche`. Set the override to the
+same canonical Web Client host used in your browser if discovery is unavailable.
+Individual documents use `DocView.aspx?db=...&id=...`; folder links and grouped
+searches retain their corresponding Browse URLs. Access is validated live in batches.
+Repository API authentication does not create a Web Client browser session; an
+expired or absent Web Client session still requires its normal sign-in.
+
+Safe entry, metadata and search-result GETs retry one transient 502/503/504, never a
+search submission. Errors distinguish authentication, permissions, missing entries
+and server/gateway failure without exposing response bodies. No stale repository
+facts substitute for failed live reads. Planner version is `intent-v5.6`; model and
+unlimited timeout defaults are unchanged.

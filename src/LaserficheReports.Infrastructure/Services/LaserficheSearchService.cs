@@ -219,7 +219,7 @@ internal sealed class LaserficheSearchService : ILaserficheSearchService
         {
             await Task.Delay(PollInterval, cancellationToken).ConfigureAwait(false);
 
-            using var statusResponse = await client.GetAsync(statusUrl, cancellationToken).ConfigureAwait(false);
+            using var statusResponse = await RepositoryDefinitionReader.GetAsync(client, statusUrl, _logger, cancellationToken).ConfigureAwait(false);
             var statusBody = await statusResponse.Content
                 .ReadAsStringAsync(cancellationToken)
                 .ConfigureAwait(false);
@@ -312,7 +312,7 @@ internal sealed class LaserficheSearchService : ILaserficheSearchService
 
             if (body is null)
             {
-                using var response = await client.GetAsync(nextUrl, cancellationToken).ConfigureAwait(false);
+                using var response = await RepositoryDefinitionReader.GetAsync(client, nextUrl, _logger, cancellationToken).ConfigureAwait(false);
                 body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
 
                 if (!response.IsSuccessStatusCode)

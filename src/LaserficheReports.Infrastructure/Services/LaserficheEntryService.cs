@@ -48,7 +48,7 @@ internal sealed class LaserficheEntryService : ILaserficheEntryService
         var url = _adapter.BuildEntryUrl(repo.RepositoryId, entryId, Adapters.EntryResource.Details);
 
         using var client = _httpClientFactory.CreateClient("LaserficheAuthenticated");
-        using var response = await client.GetAsync(url, cancellationToken).ConfigureAwait(false);
+        using var response = await RepositoryDefinitionReader.GetAsync(client, url, _logger, cancellationToken).ConfigureAwait(false);
         await EnsureSuccessAsync(response, url, cancellationToken).ConfigureAwait(false);
 
         var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
@@ -67,7 +67,7 @@ internal sealed class LaserficheEntryService : ILaserficheEntryService
         var url = _adapter.BuildEntryUrl(repo.RepositoryId, entryId, Adapters.EntryResource.Fields);
 
         using var client = _httpClientFactory.CreateClient("LaserficheAuthenticated");
-        using var response = await client.GetAsync(url, cancellationToken).ConfigureAwait(false);
+        using var response = await RepositoryDefinitionReader.GetAsync(client, url, _logger, cancellationToken).ConfigureAwait(false);
         var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
         var contentType = response.Content.Headers.ContentType?.ToString() ?? "(missing)";
 
@@ -180,7 +180,7 @@ internal sealed class LaserficheEntryService : ILaserficheEntryService
         var url = _adapter.BuildFolderChildrenUrl(repo.RepositoryId, entryId);
 
         using var client = _httpClientFactory.CreateClient("LaserficheAuthenticated");
-        using var response = await client.GetAsync(url, cancellationToken).ConfigureAwait(false);
+        using var response = await RepositoryDefinitionReader.GetAsync(client, url, _logger, cancellationToken).ConfigureAwait(false);
         await EnsureSuccessAsync(response, url, cancellationToken).ConfigureAwait(false);
 
         var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
@@ -357,7 +357,7 @@ internal sealed class LaserficheEntryService : ILaserficheEntryService
             string body;
             try
             {
-                using var response = await client.GetAsync(nextUrl, cancellationToken).ConfigureAwait(false);
+                using var response = await RepositoryDefinitionReader.GetAsync(client, nextUrl, _logger, cancellationToken).ConfigureAwait(false);
 
                 body = await response.Content
                     .ReadAsStringAsync(cancellationToken)

@@ -137,7 +137,36 @@ function renderMessages() {
       const sourcePrefix = `source-${chat.id}-${messageIndex}-${partIndex}`;
       const bubble = el('div', 'bubble');
       if (message.role === 'assistant') {
-        bubble.append(ReportsMarkdown.render(message.text || '', 0, sourcePrefix));
+        bubble.append(ReportsMarkdown.render(message.text || '', message.sources?.length || 0, sourcePrefix));
+        if (message.sources?.length) {
+          const sources = el('div', 'sources sources-compact'); sources.dir = 'rtl';
+          const more = el('details', 'sources-more');
+          more.append(el('summary', '', `عرض المزيد من المراجع (${Math.max(0,message.sources.length - 3)})`));
+          const extra = el('div', 'sources-extra'); more.append(extra);
+          message.sources.forEach((source, index) => {
+            const row = el('details', 'source'); row.id = `${sourcePrefix}-${index + 1}`;
+            row.append(el('summary', '', `[${index + 1}] ${source.documentName || 'وثيقة'} — ${source.entryId}${source.pageNumber ? ` · الصفحة ${source.pageNumber}` : ''}`));
+            row.append(el('p', '', source.textSource?.startsWith('laserfiche-metadata') ? 'المصدر: بيانات Laserfiche الحية وقت التقرير.' : 'المصدر: النص المفهرس للوثيقة؛ راجع الأصل للتحقق.'));
+            row.append(el('pre', '', source.text || 'لا يوجد مقتطف نصي لهذا المرجع.'));
+            const link = el('button', 'source-link', 'فتح الوثيقة في Laserfiche ↗'); link.type = 'button';
+            link.onclick = async () => {
+              const epoch = sessionEpoch;
+              const preview = window.open('about:blank', 'laserfiche-report-results');
+              link.disabled = true;
+              try {
+                const result = await api('/api/reports/laserfiche-links', {method:'POST', headers:{'Content-Type':'application/json'},
+                  body:JSON.stringify({repositoryId:message.scope?.repositoryId || message.repositoryId, entryIds:[source.entryId], openSingle:true})});
+                if (epoch !== sessionEpoch) { preview?.close(); return; }
+                if (preview && result.urls?.[0]) preview.location.replace(result.urls[0]);
+                else { preview?.close(); link.textContent = 'اسمح بفتح نافذة الوثيقة وأعد المحاولة'; }
+              } catch(error) { preview?.close(); link.textContent = error.message; }
+              finally { link.disabled = false; }
+            };
+            row.append(link); (index < 3 ? sources : extra).append(row);
+          });
+          if (message.sources.length > 3) sources.append(more);
+          bubble.append(sources);
+        }
         const originalQuestion = chat.messages.slice(0, messageIndex).reverse().find(previous => previous.role === 'user')?.text;
         const reportQuestion = message.title ? message.title + ' — ' + originalQuestion : originalQuestion;
         bubble.querySelectorAll('.report-table-wrap').forEach((wrap, tableIndex) => {
@@ -195,7 +224,7 @@ function renderMessages() {
             reportResultsWindow = preview;
             try {
               const result = await api('/api/reports/laserfiche-links', {method:'POST', headers:{'Content-Type':'application/json'},
-                body:JSON.stringify({repositoryId:message.scope?.repositoryId || message.repositoryId,entryIds:message.relatedEntryIds})});
+                body:JSON.stringify({repositoryId:message.scope?.repositoryId || message.repositoryId,entryIds:message.relatedEntryIds,openSingle:true})});
               if (epoch !== sessionEpoch) { if (!reusedWindow) preview?.close(); return; }
               const links = el('div', 'report-open-links');
               result.urls.forEach((url,i) => {

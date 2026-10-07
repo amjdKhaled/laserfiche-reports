@@ -360,6 +360,7 @@ internal sealed class LaserficheRepositoryService : ILaserficheRepositoryService
         {
             RepositoryId   = repository.RepoId,
             RepositoryName = repository.RepoName,
+            WebClientUrl   = repository.WebclientUrl,
             // Use any version found in HTTP response headers; fall back to a descriptive label
             // that at least tells the user which API version is in use.
             ServerVersion  = serverVersion ?? $"Laserfiche API {_adapter.ApiVersion}",

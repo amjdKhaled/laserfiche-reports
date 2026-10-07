@@ -93,8 +93,12 @@
           const kind = /(?:المسار|path)/i.test(names[column]) ? 'path' : /(?:تاريخ|تعديل|date|modified)/i.test(names[column]) ? 'date' : /(?:رقم|مرجع|عدد الصفحات|reference|\bid\b)/i.test(names[column]) ? 'compact' : 'text';
           for (const row of [headRow, ...body.children]) {
             const cell = row.children[column]; cell.classList.add('report-cell-' + kind);
-            if (row !== headRow && kind !== 'text') cell.dir = 'ltr';
-            else cell.dir = article.dir;
+            cell.dir = article.dir;
+            if (row !== headRow && (kind === 'date' || kind === 'compact')) {
+              const value = document.createElement('bdi'); value.dir = 'ltr';
+              while (cell.firstChild) value.append(cell.firstChild);
+              cell.append(value);
+            }
           }
         }
         table.append(head, body); wrap.append(table); article.append(wrap); continue;

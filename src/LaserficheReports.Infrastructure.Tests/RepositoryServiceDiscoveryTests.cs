@@ -78,6 +78,7 @@ public sealed class RepositoryServiceDiscoveryTests
 
         Assert.Equal("TestRepo", info.RepositoryId);
         Assert.Equal("Test Repository", info.RepositoryName);
+        Assert.Equal("http://lf/Laserfiche", info.WebClientUrl);
     }
 
     // ── Requirement 6: V2 OData wrapper parsing ───────────────────────────────
@@ -106,6 +107,7 @@ public sealed class RepositoryServiceDiscoveryTests
 
         Assert.Equal("TestRepo", info.RepositoryId);
         Assert.Equal("Test Repository", info.RepositoryName);
+        Assert.Equal("http://lf-server.test/Laserfiche", info.WebClientUrl);
     }
 
     [Fact]
