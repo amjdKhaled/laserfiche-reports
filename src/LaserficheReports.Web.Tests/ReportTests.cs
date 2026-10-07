@@ -12,6 +12,39 @@ namespace LaserficheReports.Web.Tests;
 public class ReportTests
 {
     [Fact]
+    public async Task CompleteDocumentReportKeepsOriginalColumnsAndEveryLiveRow()
+    {
+        var query = new Searches();
+        var result = await Create(new Entries(73), query).CreateAsync("repo",
+            new QueryPlan("search", AllResults: true), [], default);
+        Assert.True(query.ReadAll);
+        Assert.Equal(73, result.Sources.Count);
+        Assert.Equal(73, result.RelatedEntryIds.Length);
+        Assert.True(result.Scope!.Exhaustive);
+        Assert.Contains("| رقم الوثيقة | اسم الوثيقة | تاريخ الإنشاء | آخر تعديل | عدد الصفحات | المرجع |", result.Answer);
+        Assert.Contains("| 73 |", result.Answer);
+        Assert.DoesNotContain("| المسار |", result.Answer);
+        Assert.DoesNotContain("Date / month", result.Answer);
+        Assert.DoesNotContain("ليست القائمة الكاملة", result.Answer);
+    }
+
+    [Fact]
+    public async Task IncompleteSearchCannotPretendToBeCompleteDocumentReport()
+    {
+        var query = new Searches { Response = (_, _, _) => new()
+        { Items = [new LFSearchResult { EntryId = 1, Name = "واحد", PageCount = 1 }], TotalCount = 73, HasMore = true } };
+        await Assert.ThrowsAsync<ArgumentException>(() => Create(new Entries(73), query).CreateAsync("repo",
+            new QueryPlan("search", AllResults: true), [], default));
+    }
+
+    [Theory]
+    [InlineData("recent", false, false)]
+    [InlineData("search", true, false)]
+    [InlineData("search", false, true)]
+    public void CompleteListingDoesNotOverrideExplicitCountsContentOrRecentLimits(string operation, bool count, bool content) =>
+        Assert.False(new QueryPlan(operation, AllResults: true, CountOnly: count, Content: content).CompleteListing);
+
+    [Fact]
     public void DatabaseTenantErrorHasActionableGuidanceWithoutReturningSecrets()
     {
         var error = new Npgsql.PostgresException("no tenant identifier provided (ENOIDENTIFIER)", "ERROR", "ERROR", "XX000");
@@ -242,8 +275,8 @@ public class ReportTests
     {
         var graph = new GraphClient("""
             {"reports":[
-                {"operation":"latest_modified","title":"آخر وثيقة معدلة","question":"آخر تعديل","limit":1,"entryIds":[]},
-                {"operation":"latest_created","title":"آخر وثيقة منشأة","question":"آخر إنشاء","limit":1,"entryIds":[]}]}
+                {"resultType":"documents","requiresFilter":false,"operation":"latest_modified","title":"آخر وثيقة معدلة","question":"آخر تعديل","limit":1,"entryIds":[]},
+                {"resultType":"documents","requiresFilter":false,"operation":"latest_created","title":"آخر وثيقة منشأة","question":"آخر إنشاء","limit":1,"entryIds":[]}]}
             """, presentationUnavailable);
         var index = 0;
         var query = new Searches { Response = (_, _, _) => new PagedResult<LFSearchResult>
@@ -339,7 +372,7 @@ public class ReportTests
     [Fact]
     public async Task FollowupContextTravelsToPlannerAndResultsAreQueriedLiveAgain()
     {
-        var graph = new GraphClient("{\"reports\":[{\"operation\":\"search\",\"limit\":50,\"sort\":\"creationTime asc\",\"filters\":{\"field\":\"الإدارة\",\"operator\":\"equals\",\"value\":\"المحاسبة\"}}]}");
+        var graph = new GraphClient("{\"reports\":[{\"resultType\":\"documents\",\"requiresFilter\":true,\"operation\":\"search\",\"limit\":50,\"sort\":\"creationTime asc\",\"filters\":{\"field\":\"الإدارة\",\"operator\":\"equals\",\"value\":\"المحاسبة\"}}]}");
         var searches = new Searches();
         var entries = new Entries(73);
         var chat = new ReportsChatService(new ConfigurationBuilder().Build(), new NoEmbeddings(), new Repository(), entries,
@@ -360,7 +393,7 @@ public class ReportTests
         {
             var path = request.RequestUri!.AbsolutePath.Trim('/'); Paths.Add(path);
             if (path == "health") return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
-            { Content = new StringContent("{\"routingVersion\":\"schema-agent-v4\",\"modelTimeoutSeconds\":600}", System.Text.Encoding.UTF8, "application/json") };
+            { Content = new StringContent("{\"routingVersion\":\"schema-agent-v5\",\"modelTimeoutSeconds\":600}", System.Text.Encoding.UTF8, "application/json") };
             var body = await request.Content!.ReadAsStringAsync(ct);
             string response;
             if (path == "route") { RouteBody = body; response = route; }
