@@ -17,7 +17,7 @@ const message = {
   sources: [{ entryId: 618, documentName: 'وثيقة أصلية', path: '\\قسم\\وثيقة', pageNumber: null,
               textSource: 'laserfiche-metadata-live', text: 'إجراء الوثيقة: تحت الإجراء' }]
 };
-test('downloaded HTML preserves tables, scope, question, UTC date and original evidence', () => {
+test('downloaded HTML preserves tables, scope, question, UTC date without a sources appendix', () => {
   const window = setup();
   const exported = window.ReportsDownload.html(message, 'ما الحالة؟');
   const document = new Window().document; document.write(exported);
@@ -26,8 +26,9 @@ test('downloaded HTML preserves tables, scope, question, UTC date and original e
   assert(document.body.textContent.includes('ما الحالة؟'));
   assert(document.body.textContent.includes('2026-10-03T18:00:00.000Z'));
   assert(document.body.textContent.includes('التقرير جزئي'));
-  assert(document.querySelector('#export-source-1 pre').textContent.includes('إجراء الوثيقة: تحت الإجراء'));
-  assert.equal(document.querySelector('a').getAttribute('href'), '#export-source-1');
+  assert.equal(document.querySelector('#export-source-1'),null);
+  assert.equal(document.querySelector('a'),null);
+  assert.equal(message.sources.length,1);
   assert.equal(document.querySelectorAll('button').length, 0);
 });
 test('untrusted question, model HTML, document names and source text cannot become executable markup', () => {
@@ -40,12 +41,13 @@ test('untrusted question, model HTML, document names and source text cannot beco
   assert(document.querySelector('meta[http-equiv="Content-Security-Policy"]').content.includes("default-src 'none'"));
   assert(document.body.textContent.includes(payload));
 });
-test('Markdown export includes evidence and never invents a generation timestamp for old history', () => {
+test('Markdown export omits evidence and never invents a generation timestamp for old history', () => {
   const window = setup();
   const content = window.ReportsDownload.markdown({ ...message, generatedAt: undefined }, 'السؤال');
   assert(content.includes('غير مسجل في المحادثة'));
   assert(content.includes('فُحصت 73 وثيقة'));
-  assert(content.includes('إجراء الوثيقة: تحت الإجراء'));
+  assert(!content.includes('نصوص المصادر الأصلية'));
+  assert(!content.includes('إجراء الوثيقة: تحت الإجراء'));
 });
 test('renderer handles escaped pipes and a final cell ending in a backslash, and keeps English LTR', () => {
   const window = setup();
@@ -199,7 +201,8 @@ test('multiple reports have separate rows, downloads and Web Client selections',
   const cards=[...window.document.querySelectorAll('.message.assistant')];assert.equal(cards.length,2);
   assert.equal(cards[0].querySelector('.label').textContent,'آخر تعديل');
   assert.equal(cards[0].querySelector('.report-scope strong').textContent,'1');
-  assert.equal(cards[0].querySelector('.report-cell-path').dir,'ltr');
+  assert.equal(cards[0].querySelector('.report-cell-path'),null);
+  assert.equal(cards[0].querySelector('tbody .report-cell-date').dir,'ltr');
   for(const card of cards){
     [...card.querySelectorAll('button')].find(b=>b.textContent==='تحميل التقرير').click();
     [...card.querySelectorAll('button')].find(b=>b.textContent.startsWith('فتح وثائق')).click();
@@ -208,6 +211,62 @@ test('multiple reports have separate rows, downloads and Web Client selections',
   assert.deepEqual(requested,[[42],[619]]);assert.equal(opened,1);
   assert.equal(navigated.length,2);assert(navigated.every(url=>url.startsWith('https://desktop-k1svi53/')));
   assert.deepEqual(downloaded.map(r=>r.sources[0].entryId),[42,619]);
-  assert.equal(new Set([...window.document.querySelectorAll('.sources details')].map(node=>node.id)).size,2);
+  assert.equal(window.document.querySelectorAll('.sources').length,0);
   await window.happyDOM.abort();
+});
+
+test('chat keeps result tables and internal evidence without displaying sources', async()=>{
+  const window=setup();
+  window.document.write(readFileSync(root+'index.html','utf8').replace(/<script[^>]*>[\s\S]*?<\/script>/g,''));
+  const sources=Array.from({length:8},(_,i)=>({...message.sources[0],entryId:100+i,documentName:`وثيقة ${i+1}`}));
+  window.fetch=async url=>({ok:true,status:200,json:async()=>url==='/api/session/status'
+    ?{authenticated:true,username:'tester',repository:'RepoA',server:'https://localhost'}
+    :{...message,answer:'| رقم الوثيقة | عدد الصفحات | المسار | المرجع |\n| --- | --- | --- | --- |\n| 107 | 12 | \\قسم\\وثيقة | [8] |',sources}});
+  window.eval(readFileSync(root+'app.js','utf8'));await new Promise(r=>setTimeout(r,20));
+  window.document.getElementById('question').value='اعرض الوثائق';
+  window.document.getElementById('ask-form').dispatchEvent(new window.Event('submit',{cancelable:true}));
+  await new Promise(r=>setTimeout(r,20));
+  assert.equal(window.document.querySelector('.sources-compact'),null);
+  assert.equal(window.document.querySelector('.sources-more'),null);
+  const table=window.document.querySelector('.report-table');
+  assert.equal(table.querySelectorAll('th').length,3);
+  assert.equal(table.querySelectorAll('tbody td')[1].textContent,'12');
+  assert.equal(table.querySelector('.report-reference'),null);
+  assert(table.textContent.includes('[8]'));
+  const history=JSON.parse(window.localStorage.getItem('laserfiche-reports-chat-v2:https%3A%2F%2Flocalhost:repoa:tester'));
+  assert.equal(history[0].messages.at(-1).sources.length,8);
+  await window.happyDOM.abort();
+});
+
+test('path columns disappear from old reports without shifting cells or altering evidence',()=>{
+  const window=setup();const report={...message,text:'| رقم الوثيقة | المسار | اسم الوثيقة | عدد الصفحات | المرجع |\n| --- | --- | --- | --- | --- |\n| 42 | \\قسم\\وثيقة | اسم \\| آخر | 7 | [1] |'};
+  const table=window.ReportsMarkdown.render(report.text,1).querySelector('table');
+  assert.deepEqual([...table.querySelectorAll('th')].map(x=>x.textContent),['رقم الوثيقة','اسم الوثيقة','عدد الصفحات','المرجع']);
+  assert.deepEqual([...table.querySelectorAll('td')].map(x=>x.textContent),['42','اسم | آخر','7','[1]']);
+  assert(!window.ReportsDownload.markdown(report,'سؤال').includes('| المسار |'));
+  assert.equal(report.sources[0].path,message.sources[0].path);
+});
+test('chat deletion is scoped, persisted and a late answer cannot restore it',async()=>{
+  const window=setup();window.document.write(readFileSync(root+'index.html','utf8').replace(/<script[^>]*>[\s\S]*?<\/script>/g,''));
+  const key='laserfiche-reports-chat-v2:https%3A%2F%2Flocalhost:repoa:tester',other='laserfiche-reports-chat-v2:https%3A%2F%2Flocalhost:repob:tester';
+  const saved=[{id:'one',title:'المحادثة الأولى',messages:[{role:'user',text:'سؤال قديم'}]},{id:'two',title:'المحادثة الثانية',messages:[]}];
+  window.localStorage.setItem(key,JSON.stringify(saved));window.localStorage.setItem(other,JSON.stringify(saved));let complete;
+  window.fetch=async url=>url==='/api/reports/chat'?new Promise(resolve=>{complete=resolve;}):({ok:true,status:200,json:async()=>({authenticated:true,username:'tester',repository:'RepoA',server:'https://localhost'})});
+  window.eval(readFileSync(root+'app.js','utf8'));await new Promise(r=>setTimeout(r,20));
+  window.document.querySelector('.history-open').click();window.document.getElementById('question').value='سؤال معلق';
+  window.document.getElementById('ask-form').dispatchEvent(new window.Event('submit',{cancelable:true}));
+  await new Promise(r=>setTimeout(r,5));window.document.querySelector('.history-delete').click();
+  assert.equal(window.document.querySelectorAll('.history-row').length,1);
+  assert.equal(JSON.parse(window.localStorage.getItem(key))[0].id,'two');assert.equal(JSON.parse(window.localStorage.getItem(other)).length,2);
+  complete({ok:true,status:200,json:async()=>({answer:'نتيجة متأخرة',sources:[]})});await new Promise(r=>setTimeout(r,20));
+  assert.equal(JSON.parse(window.localStorage.getItem(key)).length,1);assert(!window.document.getElementById('messages').textContent.includes('نتيجة متأخرة'));
+  await window.happyDOM.abort();
+});
+test('Office reports include professional headers, printing without a sources appendix',async()=>{
+  const window=setup();const doc=Buffer.from(await window.ReportsOffice.docx(message,'السؤال').arrayBuffer()).toString('utf8');
+  assert(doc.includes('word/styles.xml'));assert(doc.includes('word/footer1.xml'));assert(doc.includes('w:tblHeader'));assert(doc.includes('NUMPAGES'));assert(!doc.includes('ملحق المصادر والأدلة'));
+  assert(!doc.includes('إجراء الوثيقة: تحت الإجراء'));
+  const sheet=Buffer.from(await window.ReportsOffice.xlsx(message,'السؤال').arrayBuffer()).toString('utf8');
+  assert(sheet.includes('state="frozen"'));assert(sheet.includes('autoFilter'));assert(sheet.includes('_xlnm.Print_Titles'));assert(sheet.includes('orientation="landscape"'));assert(sheet.includes('FF0754CA'));assert(!sheet.includes('إجراء الوثيقة: تحت الإجراء'));
+  assert(!sheet.includes('name="المصادر"'));
 });

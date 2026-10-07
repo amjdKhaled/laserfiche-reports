@@ -386,6 +386,7 @@ internal sealed class LaserficheSearchService : ILaserficheSearchService
     private static LFSearchResult MapSearchResult(SearchResultResource r) => new()
     {
         EntryId = r.Id,
+        PageCount = r.PageCount,
         Name = r.Name,
         FullPath = r.FullPath,
         EntryType = ParseEntryType(r.EntryType ?? r.ODataType),
@@ -553,6 +554,9 @@ internal sealed class LaserficheSearchService : ILaserficheSearchService
 
         [JsonPropertyName("creator")]
         public string? Creator { get; init; }
+
+        [JsonPropertyName("pageCount")]
+        public int? PageCount { get; init; }
 
         [JsonPropertyName("creationTime")]
         public DateTimeOffset? CreationTime { get; init; }

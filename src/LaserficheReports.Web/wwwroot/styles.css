@@ -64,3 +64,20 @@
 .report-table .report-cell-path{min-width:210px;text-align:left;unicode-bidi:isolate;overflow-wrap:anywhere}
 .report-table .report-cell-text{min-width:170px;text-align:start;unicode-bidi:plaintext;overflow-wrap:anywhere}
 .report-scope .report-body p{margin:0}
+
+/* Small, scoped refinements; preserve the existing report and page design. */
+.report-table th{vertical-align:top;white-space:normal;unicode-bidi:isolate}
+.report-table th.report-cell-path{text-align:left}
+.report-table th.report-cell-date{text-align:left}
+.sources.sources-compact{display:flex;flex-direction:column;gap:0}
+.sources-compact .source{width:100%;border:0;border-bottom:1px solid #dce5f7;border-radius:0;padding:4px 8px;background:transparent}
+.sources-compact .source summary{font-weight:400;font-size:12px;line-height:1.6}
+.sources-more{width:100%;font-size:12px;padding:4px 8px}
+.sources-more>summary{cursor:pointer;color:#154680}
+.sources-extra{margin-top:4px}
+
+/* Keep chat deletion inside each existing history row. */
+.history-row{display:flex;align-items:center;gap:3px}
+.history .history-open{flex:1;min-width:0}
+.history .history-delete{flex:none;width:26px;height:28px;padding:0;line-height:1;font-size:20px;color:#7b879a;text-align:center;border-radius:6px}
+.history .history-delete:hover{color:#b43b3b;background:#fff0f0}

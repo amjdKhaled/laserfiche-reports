@@ -17,9 +17,10 @@ public sealed class LaserficheSearchPagingTests
     public async Task FieldSyntaxIsWellFormedAndCountIsServerTotal()
     {
         var http = new Responses("{\"taskId\":\"task\",\"status\":\"Completed\"}",
-            "{\"@odata.count\":73,\"value\":[{\"id\":1,\"name\":\"مستند\",\"entryType\":\"Document\"}]}");
+            "{\"@odata.count\":73,\"value\":[{\"id\":1,\"name\":\"مستند\",\"entryType\":\"Document\",\"pageCount\":9}]}");
         var result = await Create(http).SearchByFieldAsync("إجراء الوثيقة", "تحت الإجراء", 1, 20);
         Assert.Equal(73, result.TotalCount);
+        Assert.Equal(9, result.Items[0].PageCount);
         Assert.True(result.IsTotalCountExact);
         Assert.True(result.HasNextPage);
         Assert.Equal("{[]:[إجراء الوثيقة]=\"تحت الإجراء\"}", JsonDocument.Parse(http.Body!).RootElement.GetProperty("searchCommand").GetString());

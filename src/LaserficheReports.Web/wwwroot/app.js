@@ -99,7 +99,17 @@ function renderHistory() {
   chats.forEach(chat => {
     const button = el('button', chat.id === active ? 'selected' : '', chat.title);
     button.onclick = () => { active = chat.id; renderHistory(); renderMessages(); showTab('chat'); };
-    $('history').append(button);
+    button.classList.add('history-open');
+    const row = el('div', 'history-row');
+    const remove = el('button', 'history-delete', '×');
+    remove.type = 'button'; remove.title = 'حذف المحادثة';
+    remove.setAttribute('aria-label', `حذف المحادثة: ${chat.title}`);
+    remove.onclick = () => {
+      chats = chats.filter(item => item.id !== chat.id);
+      if (active === chat.id) active = null;
+      save(); renderHistory(); renderMessages();
+    };
+    row.append(button, remove); $('history').append(row);
   });
 }
 function renderMessages() {
@@ -127,7 +137,7 @@ function renderMessages() {
       const sourcePrefix = `source-${chat.id}-${messageIndex}-${partIndex}`;
       const bubble = el('div', 'bubble');
       if (message.role === 'assistant') {
-        bubble.append(ReportsMarkdown.render(message.text || '', message.sources?.length || 0, sourcePrefix));
+        bubble.append(ReportsMarkdown.render(message.text || '', 0, sourcePrefix));
         const originalQuestion = chat.messages.slice(0, messageIndex).reverse().find(previous => previous.role === 'user')?.text;
         const reportQuestion = message.title ? message.title + ' — ' + originalQuestion : originalQuestion;
         bubble.querySelectorAll('.report-table-wrap').forEach((wrap, tableIndex) => {
@@ -202,26 +212,6 @@ function renderMessages() {
         }
       } else bubble.textContent = message.text;
       item.append(bubble);
-      if (message.sources?.length) {
-        const sources = el('div', 'sources');
-        message.sources.forEach((source, index) => {
-          const isMetadata = source.textSource?.startsWith('laserfiche-metadata');
-          const card = el('details', 'source');
-          card.id = `${sourcePrefix}-${index + 1}`;
-          card.append(el('summary', '',
-            `[${index + 1}] ${source.documentName || 'وثيقة'} · ${isMetadata ? 'بيانات Laserfiche' : `صفحة ${source.pageNumber || '—'}`}`));
-          card.append(el('small', 'source-path', source.path || `Entry ${source.entryId}`));
-          card.append(el('p', 'source-text', source.text || ''));
-          if (source.pageNumber) {
-            const link = el('a', 'source-link', 'عرض صورة الصفحة ↗');
-            link.href = `/api/laserfiche/documents/${source.entryId}/pages/${source.pageNumber}/image?repositoryId=${encodeURIComponent(message.scope?.repositoryId || message.repositoryId || sessionRepository)}&sessionGeneration=${encodeURIComponent(sessionGeneration)}`;
-            link.target = '_blank'; link.rel = 'noopener';
-            card.append(link);
-          }
-          sources.append(card);
-        });
-        item.append(sources);
-      }
       container.append(item);
       });
     });
@@ -261,7 +251,7 @@ $('ask-form').onsubmit = async event => {
   renderHistory(); renderMessages();
   try {
     const result = await api('/api/reports/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question }) });
-    if (epoch !== sessionEpoch) return;
+    if (epoch !== sessionEpoch || !chats.includes(chat)) return;
     chat.messages[chat.messages.length - 1] = { role: 'assistant', repositoryId: sessionRepository, relatedEntryIds: result.relatedEntryIds, reports: result.reports, text: result.answer, sources: result.sources, scope: result.scope, generatedAt: result.generatedAt, quality: result.quality };
   } catch (error) {
     chat.messages[chat.messages.length - 1] = { role: 'assistant', text: `تعذر إكمال السؤال: ${error.message}` };

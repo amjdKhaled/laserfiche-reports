@@ -178,7 +178,7 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
     {
         var definitions = await fields.GetFieldDefinitionsAsync(ct);
         var templateDefinitions = await templates.GetTemplateDefinitionsAsync(ct);
-        return new { fields = definitions.Values.Select(f => new { f.Name, f.FieldType, f.Description }).Distinct().ToArray(),
+        return new { fields = definitions.Values.Select(f => new { f.Name, f.FieldType }).Distinct().ToArray(),
             templates = templateDefinitions.Select(t => t.Name).ToArray() };
     }
 
@@ -223,7 +223,20 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
         }
         var enriched = new List<LFSearchResult>();
         foreach (var item in result.Items)
-            enriched.Add(string.IsNullOrWhiteSpace(item.FullPath) ? item with { FullPath = await entries.GetEntryPathAsync(item.EntryId, ct) } : item);
+        {
+            // Search responses may omit pageCount. Read only the displayed entries,
+            // never OCR or all repository records. A missing value remains unknown.
+            var pageCount = item.PageCount;
+            if (pageCount is null && item.EntryType is not (LFEntryType.Folder or LFEntryType.RecordSeries))
+            {
+                try { pageCount = (await entries.GetEntryAsync(item.EntryId, ct)).PageCount; }
+                catch (Exception error) when (!ct.IsCancellationRequested &&
+                    error is LaserficheReports.Domain.Exceptions.LaserficheException or HttpRequestException or OperationCanceledException)
+                { logger.LogWarning("Page count unavailable EntryId={EntryId} ErrorType={ErrorType}", item.EntryId, error.GetType().Name); }
+            }
+            enriched.Add(item with { PageCount = pageCount,
+                FullPath = string.IsNullOrWhiteSpace(item.FullPath) ? await entries.GetEntryPathAsync(item.EntryId, ct) : item.FullPath });
+        }
         result = result with { Items = enriched };
         var evidence = result.Items.Select(i => new Evidence(i.EntryId, i.Name, i.FullPath, null, 1,
             $"الاسم: {i.Name}\nالمسار: {i.FullPath}", "laserfiche-metadata-live")).ToArray();
@@ -232,8 +245,8 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
             "تعذر تأكيد إجمالي النتائج من استجابة المستودع؛ العدد الإجمالي غير متاح.";
         if (!latest && result.HasNextPage) detail += $" عُرضت {result.Items.Count} نتيجة فقط؛ هذه ليست القائمة الكاملة.";
         var tableRows = string.Join("\n", result.Items.Select((i, index) =>
-            $"| {i.EntryId} | {ReportSupport.Cell(i.Name)} | {ReportSupport.Cell(i.FullPath)} | {Date(i.CreationTime)} | {Date(i.LastModifiedTime)} | [{index + 1}] |"));
-        return new ChatResult("# " + ReportSupport.Cell(plan.Title ?? "تقرير المستودع") + "\n\n" + detail + "\n\n| رقم الوثيقة | اسم الوثيقة | المسار | تاريخ الإنشاء | آخر تعديل | المرجع |\n| --- | --- | --- | --- | --- | --- |\n" +
+            $"| {i.EntryId} | {ReportSupport.Cell(i.Name)} | {Date(i.CreationTime)} | {Date(i.LastModifiedTime)} | {i.PageCount?.ToString(CultureInfo.InvariantCulture) ?? "—"} | [{index + 1}] |"));
+        return new ChatResult("# " + ReportSupport.Cell(plan.Title ?? "تقرير المستودع") + "\n\n" + detail + "\n\n| رقم الوثيقة | اسم الوثيقة | تاريخ الإنشاء | آخر تعديل | عدد الصفحات | المرجع |\n| --- | --- | --- | --- | --- | --- |\n" +
             (result.Items.Count == 0 ? "| — | لم يتم العثور على نتائج مطابقة | — | — | — | — |" : tableRows), evidence,
             new AnswerScope(ids.Count > 0 ? "selected-documents" : "repository", repositoryId,
                 result.IsTotalCountExact ? result.TotalCount : result.Items.Count, evidence.Length,
