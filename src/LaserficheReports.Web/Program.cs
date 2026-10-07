@@ -184,7 +184,7 @@ app.Use(async (context, next) =>
     catch (LaserficheException error) when (!context.Response.HasStarted)
     {
         context.Response.StatusCode = error.StatusCode is 401 or 403 or 404 ? error.StatusCode : 502;
-        await context.Response.WriteAsJsonAsync(new { error = "تعذر الوصول إلى Laserfiche. تحقق من المستودع وبيانات الدخول وصلاحيات الوثيقة." });
+        await context.Response.WriteAsJsonAsync(new { error = RepositoryReadError.Message(error), upstreamStatus = error.StatusCode, requestId = context.TraceIdentifier });
     }
     catch (ArgumentException error) when (!context.Response.HasStarted)
     {
@@ -301,9 +301,9 @@ app.MapPost("/api/reports/chat", async (ChatQuestion request, ReportsChatService
     }
     catch (LaserficheException exception)
     {
-        app.Logger.LogWarning(exception, "Laserfiche access check failed during chat.");
+        app.Logger.LogWarning(exception, "Laserfiche read failed Status={Status} Code={Code} RequestId={RequestId}", exception.StatusCode, exception.LFErrorCode, System.Diagnostics.Activity.Current?.Id);
         return Results.Json(new { error = "laserfiche_unavailable",
-            message = "تعذر التحقق من صلاحية قراءة الوثائق في Laserfiche. تحقق من الاتصال ثم أعد المحاولة." },
+            message = RepositoryReadError.Message(exception), upstreamStatus = exception.StatusCode, diagnosticId = exception.DiagnosticId },
             statusCode: StatusCodes.Status503ServiceUnavailable);
     }
     catch (PostgresException exception)

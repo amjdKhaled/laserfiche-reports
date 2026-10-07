@@ -11,6 +11,9 @@ public sealed record RepositoryInfo
     /// <summary>Human-readable name of the repository as configured on the Laserfiche Server.</summary>
     public string RepositoryName { get; init; } = string.Empty;
 
+    /// <summary>Web Client base URL advertised by the active repository.</summary>
+    public string WebClientUrl { get; init; } = string.Empty;
+
     /// <summary>Version string of the Laserfiche Server hosting this repository.</summary>
     public string ServerVersion { get; init; } = string.Empty;
 

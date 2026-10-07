@@ -68,7 +68,12 @@
 /* Small, scoped refinements; preserve the existing report and page design. */
 .report-table th{vertical-align:top;white-space:normal;unicode-bidi:isolate}
 .report-table th.report-cell-path{text-align:left}
-.report-table th.report-cell-date{text-align:left}
+.report-table th.report-cell-date{text-align:start}
+.report-table .report-cell-date{text-align:start}
+.report-body[dir="rtl"]{text-align:right}
+.report-body[dir="rtl"] .report-table{direction:rtl}
+.sources-compact pre{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;font-size:12px;line-height:1.7}
+.sources-compact .source-link{font:inherit;font-size:12px;color:#0754ca;cursor:pointer}
 .sources.sources-compact{display:flex;flex-direction:column;gap:0}
 .sources-compact .source{width:100%;border:0;border-bottom:1px solid #dce5f7;border-radius:0;padding:4px 8px;background:transparent}
 .sources-compact .source summary{font-weight:400;font-size:12px;line-height:1.6}

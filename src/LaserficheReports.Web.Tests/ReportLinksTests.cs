@@ -20,6 +20,36 @@ public class ReportLinksTests
         Assert.Contains("{LF:ID=1001}", Uri.UnescapeDataString(urls[2]));
         Assert.Empty(ReportLinks.Build("https://localhost/laserfiche", "repo", []));
     }
+    [Fact]
+    public void IndividualReferenceUsesDocumentQueryParametersAndFolderUsesBrowse()
+    {
+        Assert.Equal("https://lf.test/Laserfiche/DocView.aspx?db=HR%20%26%20Finance&id=618", ReportLinks.EntryUrl("https://lf.test/Laserfiche", "HR & Finance", 618));
+        Assert.Equal("https://lf.test/Laserfiche/Browse.aspx?db=Repo#?id=10", ReportLinks.EntryUrl("https://lf.test/Laserfiche", "Repo", 10, true));
+        Assert.Throws<ArgumentException>(() => ReportLinks.EntryUrl("javascript:alert(1)", "Repo", 618));
+    }
+
+    [Fact]
+    public void SessionLicenseErrorIsNotReportedAsReadPermissionFailure()
+    {
+        var error = new LaserficheReports.Domain.Exceptions.LaserficheException("private", 429, "9030");
+        var message = RepositoryReadError.Message(error);
+        Assert.Contains("9030", message);
+        Assert.Contains("Named User", message);
+        Assert.DoesNotContain("صلاحية قراءة", message);
+    }
+
+    [Theory]
+    [InlineData(401, "مصادقة")]
+    [InlineData(403, "صلاحية")]
+    [InlineData(504, "بوابته")]
+    public void ReadErrorsIdentifyAuthenticationPermissionAndGatewaySeparately(int status, string expected)
+    {
+        var error = new LaserficheReports.Domain.Exceptions.LaserficheException("private upstream details", status);
+        var message = RepositoryReadError.Message(error);
+        Assert.Contains(expected, message);
+        Assert.DoesNotContain("private", message);
+    }
+
     [Theory]
     [InlineData("javascript:alert(1)")]
     [InlineData("https://user:secret@localhost/laserfiche")]

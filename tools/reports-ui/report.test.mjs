@@ -202,7 +202,7 @@ test('multiple reports have separate rows, downloads and Web Client selections',
   assert.equal(cards[0].querySelector('.label').textContent,'آخر تعديل');
   assert.equal(cards[0].querySelector('.report-scope strong').textContent,'1');
   assert.equal(cards[0].querySelector('.report-cell-path'),null);
-  assert.equal(cards[0].querySelector('tbody .report-cell-date').dir,'ltr');
+  assert.equal(cards[0].querySelector('tbody .report-cell-date').dir,'rtl');
   for(const card of cards){
     [...card.querySelectorAll('button')].find(b=>b.textContent==='تحميل التقرير').click();
     [...card.querySelectorAll('button')].find(b=>b.textContent.startsWith('فتح وثائق')).click();
@@ -211,11 +211,11 @@ test('multiple reports have separate rows, downloads and Web Client selections',
   assert.deepEqual(requested,[[42],[619]]);assert.equal(opened,1);
   assert.equal(navigated.length,2);assert(navigated.every(url=>url.startsWith('https://desktop-k1svi53/')));
   assert.deepEqual(downloaded.map(r=>r.sources[0].entryId),[42,619]);
-  assert.equal(window.document.querySelectorAll('.sources').length,0);
+  assert.equal(window.document.querySelectorAll('.sources').length,2);
   await window.happyDOM.abort();
 });
 
-test('chat keeps result tables and internal evidence without displaying sources', async()=>{
+test('chat keeps the existing table and exposes references in compact rows', async()=>{
   const window=setup();
   window.document.write(readFileSync(root+'index.html','utf8').replace(/<script[^>]*>[\s\S]*?<\/script>/g,''));
   const sources=Array.from({length:8},(_,i)=>({...message.sources[0],entryId:100+i,documentName:`وثيقة ${i+1}`}));
@@ -226,12 +226,12 @@ test('chat keeps result tables and internal evidence without displaying sources'
   window.document.getElementById('question').value='اعرض الوثائق';
   window.document.getElementById('ask-form').dispatchEvent(new window.Event('submit',{cancelable:true}));
   await new Promise(r=>setTimeout(r,20));
-  assert.equal(window.document.querySelector('.sources-compact'),null);
-  assert.equal(window.document.querySelector('.sources-more'),null);
+  assert.equal(window.document.querySelectorAll('.sources-compact>.source').length,3);
+  assert.equal(window.document.querySelector('.sources-extra').children.length,5);
   const table=window.document.querySelector('.report-table');
   assert.equal(table.querySelectorAll('th').length,3);
   assert.equal(table.querySelectorAll('tbody td')[1].textContent,'12');
-  assert.equal(table.querySelector('.report-reference'),null);
+  assert.equal(table.querySelector('.report-reference').textContent,'[8]');
   assert(table.textContent.includes('[8]'));
   const history=JSON.parse(window.localStorage.getItem('laserfiche-reports-chat-v2:https%3A%2F%2Flocalhost:repoa:tester'));
   assert.equal(history[0].messages.at(-1).sources.length,8);
@@ -269,4 +269,35 @@ test('Office reports include professional headers, printing without a sources ap
   const sheet=Buffer.from(await window.ReportsOffice.xlsx(message,'السؤال').arrayBuffer()).toString('utf8');
   assert(sheet.includes('state="frozen"'));assert(sheet.includes('autoFilter'));assert(sheet.includes('_xlnm.Print_Titles'));assert(sheet.includes('orientation="landscape"'));assert(sheet.includes('FF0754CA'));assert(!sheet.includes('إجراء الوثيقة: تحت الإجراء'));
   assert(!sheet.includes('name="المصادر"'));
+});
+test('Arabic dates and IDs keep RTL cell alignment with isolated LTR values', () => {
+  const window=setup();
+  const node=window.ReportsMarkdown.render('| رقم الوثيقة | تاريخ الإنشاء |\n| --- | --- |\n| 618 | 7/22/2026 |');
+  assert.equal(node.dir,'rtl');
+  for(const cell of node.querySelectorAll('tbody td')) {
+    assert.equal(cell.dir,'rtl'); assert.equal(cell.querySelector('bdi').dir,'ltr');
+  }
+});
+test('chat references reveal compact evidence and open only their verified entry', async () => {
+  const window=setup();
+  window.document.write(readFileSync(root+'index.html','utf8').replace(/<script[^>]*>[\s\S]*?<\/script>/g,''));
+  const sources=Array.from({length:5},(_,i)=>({entryId:618+i,documentName:`وثيقة ${i+1}`,text:'مقتطف موثق',textSource:'ocr'}));
+  let request, opened;
+  window.open=()=>({location:{replace:url=>opened=url},close(){}});
+  window.fetch=async(url,options)=>({ok:true,status:200,json:async()=>{
+    if(url==='/api/session/status')return {authenticated:true,username:'tester',repository:'RepoA',server:'https://localhost'};
+    if(url==='/api/reports/laserfiche-links'){request=JSON.parse(options.body);return {urls:['https://localhost/Laserfiche/DocView.aspx?db=RepoA&id=622']};}
+    return {answer:'النتيجة [5]',sources,generatedAt:'2026-10-07',relatedEntryIds:sources.map(s=>s.entryId)};
+  }});
+  window.eval(readFileSync(root+'app.js','utf8'));await new Promise(r=>setTimeout(r,20));
+  window.document.getElementById('question').value='لخص الوثائق';
+  window.document.getElementById('ask-form').dispatchEvent(new window.Event('submit',{cancelable:true}));
+  await new Promise(r=>setTimeout(r,20));
+  const ref=window.document.querySelector('.report-reference');assert.equal(ref.textContent,'[5]');ref.click();
+  assert.equal(window.document.querySelector('.sources-more').open,true);
+  const row=window.document.querySelector('.sources-extra .source:last-child');assert.equal(row.open,true);
+  row.querySelector('button').click();await new Promise(r=>setTimeout(r,20));
+  assert.deepEqual(request.entryIds,[622]);assert.equal(request.openSingle,true);
+  assert.match(opened,/DocView.aspx.*id=622/);
+  await window.happyDOM.abort();
 });

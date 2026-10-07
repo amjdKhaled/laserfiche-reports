@@ -461,3 +461,39 @@ substituted. Model/planner timeout defaults remain zero (unlimited).
 Restart both services after updating. The graph startup line should show
 `planner=intent-v5.5`. Regression tests use HTTP fixtures, not a live Qwen/Laserfiche
 installation; semantic output from the actual model still requires live acceptance.
+
+
+## Report references and Web Client links
+
+Reports show the first three evidence references in compact rows, with the rest
+under “عرض المزيد”. Clicking a bracketed reference opens its exact evidence row.
+References retain the document ID, name, OCR page when available, original excerpt,
+and whether the evidence came from live metadata or indexed content. Arabic cells
+align right; dates and IDs use isolated LTR values inside RTL cells.
+
+Web Client links prefer `Laserfiche:WebClientBaseUrl`, then the URL advertised by the
+current repository, then the API host plus `/laserfiche`. Set the override to the
+same canonical Web Client host used in your browser if discovery is unavailable.
+Individual documents use `DocView.aspx?db=...&id=...`; folder links and grouped
+searches retain their corresponding Browse URLs. Access is validated live in batches.
+Repository API authentication does not create a Web Client browser session; an
+expired or absent Web Client session still requires its normal sign-in.
+
+Safe entry, metadata and search-result GETs retry one transient 502/503/504, never a
+search submission. Errors distinguish authentication, permissions, missing entries
+and server/gateway failure without exposing response bodies. No stale repository
+facts substitute for failed live reads. Planner version is `intent-v5.6`; model and
+unlimited timeout defaults are unchanged.
+
+
+## HTTP 429 / Laserfiche error 9030
+
+9030 from `/Token` indicates session capacity or user license allocation, not an
+invalid AI query. Token acquisition no longer retries this code as temporary rate
+throttling. A one-minute account/repository cooldown shares the typed failure among
+parallel reads, preserving its diagnostic ID. Ordinary 429 throttling still uses
+bounded retries. No active Laserfiche sessions are terminated automatically and no
+licensing settings are changed. Sign out of unused clients and verify the affected
+account's session limit and Named User license in Laserfiche Administration Console;
+retry after the cooldown. The upstream message alone does not identify which of
+those licensing constraints is responsible. Planner/model/UI remain unchanged.

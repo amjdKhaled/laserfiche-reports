@@ -3,7 +3,7 @@ using Microsoft.Extensions.Logging;
 
 namespace LaserficheReports.Infrastructure.Services;
 
-/// <summary>Retries a transient gateway failure once, only for safe schema reads.</summary>
+/// <summary>Retries a transient gateway failure once, only for safe repository GETs.</summary>
 internal static class RepositoryDefinitionReader
 {
     internal static async Task<HttpResponseMessage> GetAsync(
@@ -15,7 +15,7 @@ internal static class RepositoryDefinitionReader
 
         var status = (int)response.StatusCode;
         response.Dispose();
-        logger.LogWarning("Repository schema read returned HTTP {Status}; retrying once.", status);
+        logger.LogWarning("Repository read returned HTTP {Status}; retrying once.", status);
         await Task.Delay(TimeSpan.FromMilliseconds(250), cancellationToken).ConfigureAwait(false);
         return await client.GetAsync(url, cancellationToken).ConfigureAwait(false);
     }
