@@ -4,6 +4,16 @@ using Xunit;
 public class ReportLinksTests
 {
     [Fact]
+    public void AdvertisedRepositoryQueryIsNormalizedBeforeBuildingEntryLinks()
+    {
+        var root = ReportLinks.DiscoveredBaseUrl("https://localhost/laserfiche?repo=TestEmployee");
+        Assert.Equal("https://localhost/laserfiche", root);
+        Assert.Equal("https://localhost/laserfiche/DocView.aspx?db=TestEmployee&id=619",
+            ReportLinks.EntryUrl(root, "TestEmployee", 619));
+        Assert.Throws<ArgumentException>(() => ReportLinks.DiscoveredBaseUrl("javascript:alert(1)"));
+        Assert.Throws<ArgumentException>(() => ReportLinks.Build("https://localhost/laserfiche?repo=A", "A", [1]));
+    }
+    [Fact]
     public void SearchIncludesEveryDistinctDocumentAndEncodesRepository()
     {
         var url = Assert.Single(ReportLinks.Build("https://desktop-k1svi53/Laserfiche", "HR & المالية", [618, 42, 618]));

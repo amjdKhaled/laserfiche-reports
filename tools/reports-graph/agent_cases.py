@@ -95,3 +95,14 @@ add(["وش القوالب اللي أقدر أستخدمها هنا؟"], {"opera
 add(["اقرأ المستند 619 واشرح أهم نقطة فيه"], {"content": True, "entryIds": [619]})
 add(["دور داخل نصوص ملفات المحاسبة عن التأمين"], {"content": True, "contentMode": "search", "filters": leaf("القسم", "equals", "المحاسبة")})
 add(["خلها حسب القيمة من الأقل وبنفس الشروط"], {"filters": {"logic": "and", "conditions": [leaf("القسم", "equals", "المحاسبة"), leaf("حالة المعاملة", "equals", "مفتوح")]}, "sortField": "قيمة الطلب", "sortDirection": "asc"}, history)
+
+# Location/count/year cases are acceptance fixtures, never runtime handlers.
+add(["كم عدد الوثائق الموجودة في مركز الوثائق والمحفوظات؟", "عد لي مستندات مجلد العقود مع المجلدات اللي تحته"],
+    {"operation": "search", "countOnly": True, "folderName": "مركز الوثائق والمحفوظات"})
+# Keep each location's expected name literal rather than sharing the first fixture.
+CASES[-1]["expect"]["folderName"] = "العقود"
+add(["كم وثيقة تاريخ إنجازها لغاية 2036 وما أقل؟", "عد المستندات التي موعد إنجازها بنهاية سنة 2036 أو قبلها"],
+    {"operation": "search", "countOnly": True, "filters": leaf("أجل الإنجاز", "less_than", "2037-01-01")})
+add(["كم وثيقة نشطة لغاية 2036 وما أقل؟"], {"operation": "clarify"}, catalog={
+    "fields": [{"name": "مدة النشاط", "fieldType": "Integer"}, {"name": "تاريخ الإنشاء", "fieldType": "Date"}],
+    "entryProperties": CATALOG["entryProperties"], "templates": []})

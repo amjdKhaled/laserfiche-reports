@@ -8,13 +8,13 @@ internal sealed record QueryPlan(string Operation, string? Field = null, string?
     bool Content = false, string? GroupBy = null, string? From = null, string? To = null, string? Title = null, string? Sort = null, int[]? EntryIds = null, string? Question = null,
     RepositoryFilter? Filters = null, string EntryType = "document", int Page = 1, bool CountOnly = false,
     GroupDimension[]? GroupFields = null, AggregateMetric[]? Metrics = null, string? AggregateSort = null,
-    string? SortField = null, string SortDirection = "asc", bool RequireUnique = false, string ContentMode = "summary", AggregateHaving? Having = null, string? Rollup = null, bool AllResults = false, string? ResultType = null, bool RequiresFilter = false)
+    string? SortField = null, string SortDirection = "asc", bool RequireUnique = false, string ContentMode = "summary", AggregateHaving? Having = null, string? Rollup = null, bool AllResults = false, string? ResultType = null, bool RequiresFilter = false, string? FolderName = null, bool IncludeSubfolders = false)
 {
     public void ValidateIntent()
     {
         if (Operation == "clarify")
         {
-            if (Filters != null || Field != null || Template != null || FolderId != null || Name != null || EntryIds?.Length > 0 || GroupFields?.Length > 0 || Metrics?.Length > 0 || Having != null || Rollup != null)
+            if (Filters != null || Field != null || Template != null || FolderId != null || FolderName != null || Name != null || EntryIds?.Length > 0 || GroupFields?.Length > 0 || Metrics?.Length > 0 || Having != null || Rollup != null)
                 throw new ArgumentException("طلب التوضيح لا يجوز أن ينفذ استعلامًا.");
             return;
         }
@@ -23,11 +23,11 @@ internal sealed record QueryPlan(string Operation, string? Field = null, string?
             ResultType != null && Operation == "group" && ResultType != "statistics" ||
             ResultType == "count" && (!CountOnly || Operation == "group") || ResultType == "content" && !Content)
             throw new ArgumentException("خطة العرض لا تطابق المطلوب؛ لا يمكن استبدال قائمة الوثائق بجدول إحصاءات.");
-        if (RequiresFilter && Operation != "clarify" && Filters == null && Field == null && Template == null && FolderId == null && Name == null && !(EntryIds?.Length > 0) && From == null)
+        if (RequiresFilter && Operation != "clarify" && Filters == null && Field == null && Template == null && FolderId == null && FolderName == null && Name == null && !(EntryIds?.Length > 0) && From == null)
             throw new ArgumentException("خطة البحث لا تحتوي الشرط المطلوب؛ لم أنفذ بحثًا غير مقيّد بدلًا منه.");
     }
     public bool CompleteListing => AllResults && Page == 1 && !Content && !CountOnly && !RequireUnique && Operation is "search" or "created" or "modified" or "folders";
-    public QueryKind Kind => Content ? Operation == "content" && Filters == null && Field == null && Template == null && FolderId == null && Name == null ? QueryKind.OCR_QUERY : QueryKind.HYBRID_QUERY
+    public QueryKind Kind => Content ? Operation == "content" && Filters == null && Field == null && Template == null && FolderId == null && FolderName == null && Name == null ? QueryKind.OCR_QUERY : QueryKind.HYBRID_QUERY
         : QueryKind.LASERFICHE_QUERY;
 }
 

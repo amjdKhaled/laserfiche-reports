@@ -93,13 +93,24 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
             expression += $" & {{[{Term(template.Name, true)}]:[]}}";
         }
         if (plan.Name is not null) expression += $" & {{LF:Name=\"{Term(plan.Name)}\", Type={(plan.EntryType == "folder" || plan.Operation == "folders" ? "F" : plan.EntryType == "all" ? "DF" : "D")}}}";
+        if (plan.FolderName is not null)
+        {
+            if (plan.FolderId is not null) throw new ArgumentException("حدد المجلد بالاسم أو الرقم، لا بالاثنين.");
+            var found = await searches.QueryAsync($"{{LF:Name=\"{Term(plan.FolderName)}\", Type=F}}",
+                1, 20, cancellationToken: ct);
+            if (!found.IsTotalCountExact || found.TotalCount != 1 || found.Items.Count != 1)
+                throw new RepositoryScopeClarificationException(found.IsTotalCountExact && found.TotalCount == 0
+                    ? "لم أجد المجلد المطلوب بالاسم؛ وضح اسم المجلد أو رقمه. لم أعتبر ذلك عدد وثائق يساوي صفرًا."
+                    : "اسم المجلد غير محدد بشكل فريد؛ اختر رقم المجلد: " + string.Join("، ", found.Items.Select(i => $"{i.EntryId}: {i.Name}")));
+            plan = plan with { FolderId = found.Items[0].EntryId, FolderName = null };
+        }
         if (plan.FolderId is int folderId)
         {
             var folder = await entries.GetEntryAsync(folderId, ct);
             if (folder.EntryType is not (LFEntryType.Folder or LFEntryType.RecordSeries))
                 throw new ArgumentException("الإدخال المحدد ليس مجلدًا.");
             var path = await entries.GetEntryPathAsync(folderId, ct);
-            expression += $" & {{LF:Lookin=\"{Term(path)}\", Subfolders=N}}";
+            expression += $" & {{LF:Lookin=\"{Term(path)}\", Subfolders={(plan.IncludeSubfolders ? "Y" : "N")}}}";
         }
         if (plan.Operation is "created" or "modified")
         {
@@ -228,6 +239,34 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
         _ => plan.Sort ?? "id asc"
     };
     private static string Date(DateTimeOffset? date) => date?.ToString("yyyy-MM-dd HH:mm:ss zzz", CultureInfo.InvariantCulture) ?? "غير متاح";
+    private static string SelectionSummary(QueryPlan plan)
+    {
+        string Filter(RepositoryFilter node)
+        {
+            if (node.Conditions is { } children)
+                return "(" + string.Join(node.Logic == "or" ? " أو " : " و ", children.Select(Filter)) + ")";
+            var comparison = node.Operator switch
+            {
+                "equals" => "يساوي", "not_equals" => "لا يساوي", "less_than" or "date_before" => "قبل / أقل من",
+                "greater_than" or "date_after" => "بعد / أكبر من", "less_or_equal" => "أقل من أو يساوي",
+                "greater_or_equal" => "أكبر من أو يساوي", "contains" => "يحتوي", "starts_with" => "يبدأ بـ",
+                "is_empty" => "فارغ", "is_not_empty" => "غير فارغ", _ => "بين"
+            };
+            string Value(string? literal, RelativeDate? relative) => relative is null ? literal ?? "" :
+                RepositoryDates.Resolve(relative, RepositoryDates.Today()).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+            return $"{node.Field} {comparison} {Value(node.Value, node.Relative)}" +
+                (node.Upper != null || node.UpperRelative != null ? " و " + Value(node.Upper, node.UpperRelative) : "");
+        }
+        var parts = new List<string>();
+        if (plan.Filters != null) parts.Add(Filter(plan.Filters));
+        if (plan.FolderName != null || plan.FolderId != null) parts.Add("المجلد: " + (plan.FolderName ?? plan.FolderId!.Value.ToString()) +
+            (plan.IncludeSubfolders ? " والمجلدات الفرعية" : " فقط"));
+        if (plan.Name != null) parts.Add("اسم الوثيقة: " + plan.Name);
+        if (plan.Template != null) parts.Add("القالب: " + plan.Template);
+        if (plan.Field != null) parts.Add(plan.Field + " = " + plan.Value);
+        return parts.Count == 0 ? "" : "معيار البحث: " + ReportSupport.Cell(string.Join("؛ ", parts)) + "\n\n";
+    }
+
     internal async Task<object> CatalogAsync(CancellationToken ct)
     {
         var schemaTask = SchemaAsync(ct);
@@ -235,7 +274,7 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
         await Task.WhenAll(schemaTask, templatesTask);
         var definitions = await schemaTask;
         var templateDefinitions = await templatesTask;
-        return new { tool = "GetRepositorySchema", fields = definitions.Values.Select(f => new { f.Name, f.FieldType, f.IsMultiValue, f.IsRequired }).Distinct().ToArray(),
+        return new { tool = "GetRepositorySchema", fields = definitions.Values.Select(f => new { f.Name, f.FieldType, f.IsMultiValue, f.IsRequired, description = string.IsNullOrWhiteSpace(f.Description) ? null : f.Description[..Math.Min(f.Description.Length, 160)] }).Distinct().ToArray(),
             templates = templateDefinitions.Select(t => t.Name).ToArray(), entryProperties = StructuredRepositoryQuery.Builtins,
             tools = new[] { "SearchEntries", "AggregateEntries", "GetEntry", "GetEntryMetadata", "GetFolderContents", "GetTemplates", "GetRepositorySchema", "GetFolderInformation", "GetOcrContent" } };
     }
@@ -287,7 +326,7 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
         if (plan.RequireUnique && (!result.IsTotalCountExact || result.TotalCount != 1))
             return new ChatResult("حدد رقم الوثيقة؛ الاسم يطابق أكثر من إدخال أو لم يمكن تحديد وثيقة واحدة.\n\n" + string.Join("\n", result.Items.Select(i => $"- {i.EntryId}: {ReportSupport.Cell(i.Name)}")), []);
         if (plan.CountOnly && plan.Operation != "group")
-            return new ChatResult(result.IsTotalCountExact ? $"عدد النتائج المطابقة: **{result.TotalCount}**." : "العدد الإجمالي غير متاح؛ لم أقدّر العدد من الصفحة المعروضة.", [],
+            return new ChatResult(result.IsTotalCountExact ? SelectionSummary(plan) + $"عدد النتائج المطابقة: **{result.TotalCount}**." : "العدد الإجمالي غير متاح؛ لم أقدّر العدد من الصفحة المعروضة.", [],
                 new AnswerScope("repository", repositoryId, result.TotalCount, 0, result.IsTotalCountExact, "عدد حي من Laserfiche.", ids));
         if (plan.GroupFields?.Length > 0 || plan.Metrics?.Length > 0 || plan.SortField != null || plan.Having != null || plan.Rollup != null)
             result = await CompleteProjectionAsync(result, plan, ct);
@@ -345,3 +384,5 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
             { RelatedEntryIds = evidence.Select(e => e.EntryId).ToArray() };
     }
 }
+
+internal sealed class RepositoryScopeClarificationException(string message) : ArgumentException(message);

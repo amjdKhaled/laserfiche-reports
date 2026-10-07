@@ -1,0 +1,57 @@
+import json
+import unittest
+from jsonschema import Draft202012Validator
+from server import planner_request, validate_plan_schema, planner_schema_for_catalog, plan_reports
+from test_graph import FakeModel
+
+CATALOG = {'fields': [{'name': 'أجل الحفظ', 'fieldType': 'Date'},
+                       {'name': 'مدة النشاط', 'fieldType': 'Integer'},
+                       {'name': 'حالة السجل', 'fieldType': 'String'}],
+           'entryProperties': ['name', 'created', 'entryId', 'pageCount'], 'templates': []}
+
+def plan(filters=None, **options):
+    return {'reports': [{'operation': 'search', 'title': 'تقرير', 'selection':
+        {'requiresFilter': True, 'filters': filters} if filters else {'requiresFilter': False}, **options}]}
+
+class TypedPlannerTests(unittest.TestCase):
+    def test_generation_grammar_uses_actual_field_names_and_types(self):
+        validator = Draft202012Validator(planner_schema_for_catalog(CATALOG).model_json_schema())
+        for condition in [
+            {'field': 'مدة النشاط', 'operator': 'less_than', 'value': '2036-12-31'},
+            {'field': 'أجل الحفظ', 'operator': 'less_than', 'value': '2036'},
+            {'field': 'حالة السجل', 'operator': 'less_than', 'value': 'نشط'},
+            {'field': 'غير موجود', 'operator': 'equals', 'value': 'نشط'},
+            {'field': 'مدة النشاط', 'operator': 'less_than', 'relative': {'unit': 'year'}}]:
+            with self.subTest(condition=condition): self.assertFalse(validator.is_valid(plan(condition)))
+        self.assertTrue(validator.is_valid(plan({'field': 'أجل الحفظ', 'operator': 'less_than', 'value': '2037-01-01'}, countOnly=True)))
+
+    def test_backend_equivalent_checks_reject_invalid_calendar_integer_and_bounds(self):
+        for condition in [
+            {'field': 'أجل الحفظ', 'operator': 'less_than', 'value': '2036-02-30'},
+            {'field': 'مدة النشاط', 'operator': 'equals', 'value': '1.5'},
+            {'field': 'مدة النشاط', 'operator': 'between', 'value': '10', 'upper': '1'},
+            {'field': 'أجل الحفظ', 'operator': 'date_between', 'value': '2036-01-01'},
+            {'field': 'مدة النشاط', 'operator': 'less_than', 'value': '1', 'upper': '2'}]:
+            with self.subTest(condition=condition), self.assertRaises(ValueError):
+                validate_plan_schema(planner_request(json.dumps(plan(condition)), 'سؤال'), CATALOG)
+
+    def test_named_folder_count_has_one_selection_and_never_matches_document_name(self):
+        output = {'reports': [{'operation': 'search', 'title': 'عدد وثائق المركز',
+            'selection': {'requiresFilter': True, 'folderName': 'مركز الوثائق والمحفوظات'},
+            'includeSubfolders': True, 'countOnly': True}]}
+        model = FakeModel([json.dumps(output)])
+        result = plan_reports(model, {'question': 'كم عدد الوثائق الموجودة في مركز الوثائق والمحفوظات؟', 'catalog': CATALOG})
+        self.assertEqual(len(model.calls), 1)
+        self.assertEqual(len(result['reports']), 1)
+        self.assertEqual(result['reports'][0]['resultType'], 'count')
+        self.assertEqual(result['reports'][0]['folderName'], 'مركز الوثائق والمحفوظات')
+        self.assertIsNone(result['reports'][0]['name'])
+
+    def test_invalid_typed_plan_is_repaired_without_running_repository_query(self):
+        invalid = plan({'field': 'مدة النشاط', 'operator': 'less_than', 'value': '2036-12-31'}, countOnly=True)
+        clarify = {'reports': [{'operation': 'clarify', 'title': 'توضيح معيار النشاط', 'selection': {'requiresFilter': False}}],
+                   'clarification': 'هل تقصد تاريخ انتهاء الحفظ أم مدة النشاط؟'}
+        model = FakeModel([json.dumps(invalid), json.dumps(clarify)])
+        result = plan_reports(model, {'question': 'كم وثيقة نشطة لغاية 2036 وما أقل؟', 'catalog': CATALOG})
+        self.assertEqual(result['reports'][0]['operation'], 'clarify')
+        self.assertIn('Numeric fields cannot be compared', model.calls[1][-1].content)

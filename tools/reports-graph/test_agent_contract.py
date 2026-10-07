@@ -81,7 +81,7 @@ class AgentContractTests(unittest.TestCase):
                          {'field': 'الموعد', 'operator': 'less_than', 'relative': {'unit': 'day'}},
                          {'field': 'الحالة', 'operator': 'not_equals', 'value': 'مكتمل'}]}}
         plan = {'operation': 'search', 'title': 'تقرير وثائق', 'selection': selection}
-        catalog = {'fields': [{'name': 'الموعد'}, {'name': 'الحالة'}], 'templates': ['عقود']}
+        catalog = {'fields': [{'name': 'الموعد', 'fieldType': 'Date'}, {'name': 'الحالة', 'fieldType': 'String'}], 'templates': ['عقود']}
         model = FakeModel([json.dumps({'reports': [plan]})])
         result = plan_reports(model, {'question': 'طلب طبيعي', 'catalog': catalog})['reports'][0]
         self.assertEqual(result['template'], 'عقود')

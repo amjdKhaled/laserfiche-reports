@@ -517,3 +517,28 @@ Regression coverage includes actual loopback HTTP login requests with browser
 cookies, failed/successful account switches, concurrent refresh, invalid renewal
 responses and immediate explicit recovery after 9030. These fixtures do not
 replace acceptance against the deployed Laserfiche and Ollama services.
+
+
+## Typed semantic plans and named repository locations
+
+Planner `intent-v5.7` constrains generated filters to the live field names and type
+families before validating calendar dates, numeric literals, operators and bounds.
+Compact field descriptions provide semantic context without excluding any field
+names. The prompt distinguishes one count with several criteria from independent
+reports, inclusive year bounds from individual years, numeric retention durations
+from dates, and document names from repository locations. Ambiguous status or
+retention meaning requires clarification rather than invented field/value mappings.
+
+`folderName` is resolved live through a folder-name search before applying a folder
+scope. Missing/non-unique names ask for clarification rather than returning a zero
+document count. `includeSubfolders` selects descendants explicitly. Count answers
+state their interpreted criteria so the user can check the scope. Document tables,
+UI, qwen2.5:7b and unlimited timeouts remain unchanged. Advertised Web Client URLs
+such as `/laserfiche?repo=TestEmployee` are normalized before composing entry links.
+
+The regression tests use schema/HTTP fixtures; they do not claim actual Qwen
+understanding on the deployed server. `tools/reports-graph/evaluate_planner.py`
+contains held-out natural Arabic acceptance questions, including folder counts,
+inclusive future-year bounds and ambiguous numeric retention fields. Its fixtures
+are never imported by runtime routing. Live acceptance must run against local
+Ollama/Laserfiche after updating both the graph and .NET application.

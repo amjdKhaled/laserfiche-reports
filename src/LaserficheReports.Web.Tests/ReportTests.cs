@@ -408,6 +408,51 @@ public class ReportTests
         }
     }
 
+    [Fact]
+    public async Task NamedFolderCountResolvesLiveFolderBeforeCountingDocuments()
+    {
+        var query = new Searches { Response = (expression, _, _) => expression.Contains("Type=F}")
+            ? new PagedResult<LFSearchResult> { Items = [new() { EntryId = 90, Name = "مركز الوثائق والمحفوظات", EntryType = LFEntryType.Folder }], TotalCount = 1 }
+            : new PagedResult<LFSearchResult> { Items = [new() { EntryId = 618 }], TotalCount = 73 } };
+        var result = await Create(new Entries(73) { Folder = 90 }, query).CreateAsync("repo",
+            new QueryPlan("search", FolderName: "مركز الوثائق والمحفوظات", IncludeSubfolders: true,
+                CountOnly: true, RequiresFilter: true, ResultType: "count"), [], default);
+        Assert.Contains("**73**", result.Answer);
+        Assert.Contains("معيار البحث: المجلد: مركز الوثائق والمحفوظات والمجلدات الفرعية", result.Answer);
+        Assert.Equal(2, query.Calls.Count);
+        Assert.Contains("Type=F}", query.Calls[0]);
+        Assert.Contains("LF:Lookin=", query.Calls[1]);
+        Assert.Contains("Subfolders=Y", query.Calls[1]);
+        Assert.DoesNotContain("Name=\"مركز الوثائق", query.Calls[1]);
+        Assert.Equal(1, query.Limits[1]);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(2)]
+    public async Task MissingOrAmbiguousFolderNeverBecomesZeroDocumentCount(int found)
+    {
+        var query = new Searches { Response = (_, _, _) => new PagedResult<LFSearchResult>
+            { Items = Enumerable.Range(1, found).Select(id => new LFSearchResult { EntryId = id }).ToArray(), TotalCount = found } };
+        await Assert.ThrowsAsync<RepositoryScopeClarificationException>(() => Create(new Entries(73), query).CreateAsync("repo",
+            new QueryPlan("search", FolderName: "الأرشيف", CountOnly: true, RequiresFilter: true), [], default));
+        Assert.Single(query.Calls);
+    }
+
+    [Fact]
+    public async Task UnresolvedNamedFolderReturnsClarificationInsteadOfFailedChatOrZero()
+    {
+        var graph = new GraphClient("{\"reports\":[{\"resultType\":\"count\",\"operation\":\"search\",\"folderName\":\"الأرشيف\",\"countOnly\":true,\"requiresFilter\":true}]}");
+        var queries = new Searches { Response = (_, _, _) => PagedResult<LFSearchResult>.Empty };
+        var entries = new Entries(73);
+        var chat = new ReportsChatService(new ConfigurationBuilder().Build(), new NoEmbeddings(), new Repository(), entries,
+            graph, Create(entries, queries), new QuestionRouter(graph), queries, Microsoft.Extensions.Logging.Abstractions.NullLogger<ReportsChatService>.Instance);
+        var answer = await chat.AskAsync("كم وثيقة في مجلد الأرشيف؟", default);
+        Assert.Contains("وضح اسم المجلد أو رقمه", answer.Answer);
+        Assert.DoesNotContain("عدد النتائج المطابقة: **0**", answer.Answer);
+        Assert.Single(queries.Calls);
+    }
+
     private static LiveRepositoryReportService Create(Entries entries, Searches search, Definitions? definitions = null) => new(entries, search,
         definitions ?? new Definitions(), new Templates(), Microsoft.Extensions.Logging.Abstractions.NullLogger<LiveRepositoryReportService>.Instance);
 
@@ -468,6 +513,7 @@ public class ReportTests
         public int? DeniedId { get; init; }
         public int? FailureId { get; init; }
         public int? PageCount { get; init; }
+        public int? Folder { get; init; }
         public List<int> EntryCalls { get; } = [];
         private static LFEntry Document(int id) => new() { Id = id, Name = $"وثيقة {id}", FullPath = $"\\قسم\\وثيقة {id}", EntryType = LFEntryType.Document };
         public Task<LFEntry> GetEntryAsync(int entryId, CancellationToken cancellationToken = default)
@@ -475,7 +521,8 @@ public class ReportTests
             EntryCalls.Add(entryId);
             if (entryId == DeniedId) throw new LaserficheException("denied", 403);
             if (entryId == FailureId) throw new LaserficheException("outage", 503);
-            return Task.FromResult(Document(entryId) with { PageCount = PageCount });
+            return Task.FromResult(Document(entryId) with { PageCount = PageCount,
+                EntryType = entryId == Folder ? LFEntryType.Folder : LFEntryType.Document });
         }
         public Task<IReadOnlyList<LFFieldValue>> GetEntryFieldsAsync(int entryId, CancellationToken cancellationToken = default)
         {

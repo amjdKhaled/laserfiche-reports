@@ -58,7 +58,7 @@ class PlanningTests(unittest.TestCase):
         missing = type('MissingModel', (Exception,), {'status_code': 404})()
         self.assertEqual(dependency_error(missing), 'model_not_found')
 
-    def test_planning_keeps_all_catalog_names_but_omits_unused_descriptions(self):
+    def test_planning_keeps_all_names_and_bounds_semantic_descriptions(self):
         from server import plan_reports
         payload = {'question': 'اعرض الوثائق', 'catalog': {'fields': [
             {'name': 'إجراء الوثيقة', 'fieldType': 'String', 'description': 'x' * 10000},
@@ -71,5 +71,6 @@ class PlanningTests(unittest.TestCase):
         self.assertEqual([f[0] for f in sent['catalog']['fields']], ['إجراء الوثيقة', 'الإدارة'])
         self.assertEqual(sent['catalog']['templates'], ['مراسلات', 'عقود'])
         self.assertNotIn('description', model.calls[0][1].content)
-        self.assertLess(len(model.calls[0][1].content), 500)
+        self.assertLess(len(model.calls[0][1].content), 700)
+        self.assertEqual(len(sent['catalog']['fields'][0][3]), 160)
         self.assertEqual(len(payload['catalog']['fields'][0]['description']), 10000)
