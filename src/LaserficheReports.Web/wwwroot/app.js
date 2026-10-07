@@ -250,7 +250,7 @@ $('ask-form').onsubmit = async event => {
   chat.messages.push({ role: 'assistant', text: 'جاري البحث في الوثائق وتحضير الإجابة...' });
   renderHistory(); renderMessages();
   try {
-    const result = await api('/api/reports/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question }) });
+    const result = await api('/api/reports/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question, history: chat.messages.slice(0, -2).slice(-8).map(m => ({ role: m.role, text: m.text.slice(0, m.role === 'user' ? 2000 : 1000) })) }) });
     if (epoch !== sessionEpoch || !chats.includes(chat)) return;
     chat.messages[chat.messages.length - 1] = { role: 'assistant', repositoryId: sessionRepository, relatedEntryIds: result.relatedEntryIds, reports: result.reports, text: result.answer, sources: result.sources, scope: result.scope, generatedAt: result.generatedAt, quality: result.quality };
   } catch (error) {

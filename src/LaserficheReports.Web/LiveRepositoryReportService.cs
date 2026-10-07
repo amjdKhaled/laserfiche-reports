@@ -21,11 +21,30 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
         return value.Replace("\\", "\\\\", StringComparison.Ordinal);
     }
 
+    private IReadOnlyDictionary<int, LFFieldDefinition>? schema;
+    private IReadOnlyList<LFTemplateDefinition>? templateSchema;
+    private async Task<IReadOnlyList<LFTemplateDefinition>> TemplatesAsync(CancellationToken ct) => templateSchema ??= await templates.GetTemplateDefinitionsAsync(ct);
+    private Task<IReadOnlyDictionary<int, LFFieldDefinition>> SchemaAsync(CancellationToken ct) => schema is null ? LoadSchemaAsync(ct) : Task.FromResult(schema);
+    private async Task<IReadOnlyDictionary<int, LFFieldDefinition>> LoadSchemaAsync(CancellationToken ct) => schema = await fields.GetFieldDefinitionsAsync(ct);
+
+    private async Task<IReadOnlyList<LFFieldValue>> EntryFieldsAsync(int id, CancellationToken ct)
+    {
+        var values = await entries.GetEntryFieldsAsync(id, ct);
+        var definitions = schema ?? (values.Any(f => string.IsNullOrWhiteSpace(f.FieldName)) ? await SchemaAsync(ct) : null);
+        return values.Select(value =>
+        {
+            var definition = definitions?.GetValueOrDefault(value.FieldDefinitionId);
+            if (string.IsNullOrWhiteSpace(value.FieldName) && definition == null)
+                throw new ArgumentException("تعذر ربط قيمة الحقل بتعريفه الحالي؛ لم أعرض قيمة ناقصة.");
+            return definition == null ? value : value with { FieldName = definition.Name, FieldType = definition.FieldType, IsMultiValue = definition.IsMultiValue };
+        }).ToArray();
+    }
+
     private sealed record FieldResolution(string[] Preferred, string[] Equivalent);
 
     private async Task<FieldResolution> ResolveFieldsAsync(string question, CancellationToken ct)
     {
-        var definitions = await fields.GetFieldDefinitionsAsync(ct);
+        var definitions = await SchemaAsync(ct);
         var names = definitions.Values.Select(f => f.Name).Where(n => !string.IsNullOrWhiteSpace(n))
             .Distinct(StringComparer.Ordinal).ToArray();
         var candidates = names.Where(n => ReportSupport.MatchesField(new FieldCondition(question, ""), n))
@@ -46,7 +65,9 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
     {
         if (plan.Limit is < 1 or > 200 || ids.Count > 50 || ids.Any(id => id <= 0) || plan.FolderId is <= 0)
             throw new ArgumentException("نطاق الطلب غير صالح. حدد حتى 50 وثيقة وحجم نتائج بين 1 و200.");
-        var expression = plan.Operation == "folders" ? "{LF:Name=\"*\", Type=F}" : Documents;
+        var expression = plan.Operation == "folders" || plan.EntryType == "folder" ? "{LF:Name=\"*\", Type=F}" :
+            plan.EntryType == "all" ? "{LF:Name=\"*\", Type=DF}" : Documents;
+        if (plan.Filters != null) expression += " & " + StructuredRepositoryQuery.Compile(plan.Filters, (await SchemaAsync(ct)).Values, RepositoryDates.Today());
         if (ids.Count > 0) expression += " & (" + string.Join(" | ", ids.Select(id => $"{{LF:ID={id}}}")) + ")";
         string? requestedField = null;
         string? filterClause = null;
@@ -65,12 +86,12 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
         }
         if (plan.Template is not null)
         {
-            var definitions = await templates.GetTemplateDefinitionsAsync(ct);
+            var definitions = await TemplatesAsync(ct);
             var template = definitions.SingleOrDefault(t => ReportSupport.MatchKey(t.Name) == ReportSupport.MatchKey(plan.Template))
                 ?? throw new ArgumentException("القالب المطلوب غير موجود في المستودع الحالي.");
             expression += $" & {{[{Term(template.Name, true)}]:[]}}";
         }
-        if (plan.Name is not null) expression += $" & {{LF:Name=\"{Term(plan.Name)}\", Type=D}}";
+        if (plan.Name is not null) expression += $" & {{LF:Name=\"{Term(plan.Name)}\", Type={(plan.EntryType == "folder" || plan.Operation == "folders" ? "F" : plan.EntryType == "all" ? "DF" : "D")}}}";
         if (plan.FolderId is int folderId)
         {
             var folder = await entries.GetEntryAsync(folderId, ct);
@@ -104,8 +125,13 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
             requestedField = resolvedFields[0];
         }
         var watch = System.Diagnostics.Stopwatch.StartNew();
-        var result = await searches.QueryAsync(expression, 1, plan.Limit,
-            Sort(plan), requestedField, readAll, ct);
+        if (plan.GroupFields?.Length > 0 || plan.Metrics?.Length > 0 || plan.SortField != null || plan.Having != null || plan.Rollup != null)
+            RepositoryAggregation.Validate(plan, (await SchemaAsync(ct)).Values);
+        var projection = (plan.GroupFields ?? []).Select(g => g.Field).Concat((plan.Metrics ?? []).Select(m => m.Field).OfType<string>())
+            .Concat(plan.SortField is null ? [] : new[] { plan.SortField }).Where(f => !StructuredRepositoryQuery.Builtins.Contains(f))
+            .Select(f => StructuredRepositoryQuery.ResolveField(f, (schema ?? throw new InvalidOperationException("Schema not loaded.")).Values).Name).Distinct().ToArray();
+        var result = await searches.QueryAsync(expression, readAll ? 1 : plan.Page, plan.CountOnly ? 1 : plan.Limit,
+            Sort(plan), requestedField, readAll, ct, projection);
         if (filterClause is not null && result.IsTotalCountExact && result.TotalCount == 0)
             result = await ReadNormalizedMatchesAsync(expression, filterClause, equivalentFields, plan, readAll,
                 plan.GroupBy is not null && plan.GroupBy != "template" ? requestedField : null, ct);
@@ -139,7 +165,7 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
                 IReadOnlyList<LFFieldValue>? full = null;
                 if (projected.Any(f => f.HasMoreValues))
                 {
-                    full = await entries.GetEntryFieldsAsync(item.EntryId, ct);
+                    full = await EntryFieldsAsync(item.EntryId, ct);
                     match = full.Any(f => string.Equals(f.FieldName, name, StringComparison.Ordinal) &&
                         ReportSupport.MatchesValue(f.Value, plan.Value!, f.IsMultiValue));
                 }
@@ -147,7 +173,7 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
                 var reportItem = item;
                 if (groupField is not null)
                 {
-                    full ??= await entries.GetEntryFieldsAsync(item.EntryId, ct);
+                    full ??= await EntryFieldsAsync(item.EntryId, ct);
                     var groupValues = full.Where(f => string.Equals(f.FieldName, groupField, StringComparison.Ordinal))
                         .Select(f => new LFSearchField(f.FieldName, [f.Value ?? ""], false)).ToArray();
                     if (groupValues.Length == 0)
@@ -167,6 +193,33 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
         };
     }
 
+    private async Task<PagedResult<LFSearchResult>> CompleteProjectionAsync(PagedResult<LFSearchResult> result, QueryPlan plan, CancellationToken ct)
+    {
+        var names = (plan.GroupFields ?? []).Select(g => g.Field).Concat((plan.Metrics ?? []).Select(m => m.Field).OfType<string>())
+            .Concat(plan.SortField is null ? [] : new[] { plan.SortField }).Where(f => !StructuredRepositoryQuery.Builtins.Contains(f)).Distinct().ToArray();
+        var items = result.Items.ToArray();
+        await Parallel.ForEachAsync(Enumerable.Range(0, items.Length), new ParallelOptions { MaxDegreeOfParallelism = 4, CancellationToken = ct }, async (index, token) =>
+        {
+            var item = items[index];
+            if (item.PageCount == null && ((plan.Metrics ?? []).Any(m => m.Field == "pageCount") || plan.SortField == "pageCount" || (plan.GroupFields ?? []).Any(g => g.Field == "pageCount")))
+            {
+                item = item with { PageCount = (await entries.GetEntryAsync(item.EntryId, token)).PageCount };
+                if (item.PageCount == null) throw new ArgumentException("عدد الصفحات غير متاح لبعض الإدخالات؛ تعذر حسابه بدقة.");
+                items[index] = item;
+            }
+            if (names.Any(n => !item.Fields.Any(f => f.Name == n && !f.HasMoreValues)))
+            {
+                var complete = await EntryFieldsAsync(item.EntryId, token);
+                items[index] = item with { Fields = names.Select(n =>
+                {
+                    var f = complete.FirstOrDefault(f => f.FieldName == n);
+                    return new LFSearchField(n, f?.Value is null ? [] : f.IsMultiValue ? f.Value.Split(", ") : [f.Value], false);
+                }).ToArray() };
+            }
+        });
+        return result with { Items = items };
+    }
+
     private static string Sort(QueryPlan plan) => plan.Operation switch
     {
         "latest_created" => "creationTime desc",
@@ -176,38 +229,68 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
     private static string Date(DateTimeOffset? date) => date?.ToString("yyyy-MM-dd HH:mm:ss zzz", CultureInfo.InvariantCulture) ?? "غير متاح";
     internal async Task<object> CatalogAsync(CancellationToken ct)
     {
-        var definitions = await fields.GetFieldDefinitionsAsync(ct);
-        var templateDefinitions = await templates.GetTemplateDefinitionsAsync(ct);
-        return new { fields = definitions.Values.Select(f => new { f.Name, f.FieldType }).Distinct().ToArray(),
-            templates = templateDefinitions.Select(t => t.Name).ToArray() };
+        var schemaTask = SchemaAsync(ct);
+        var templatesTask = TemplatesAsync(ct);
+        await Task.WhenAll(schemaTask, templatesTask);
+        var definitions = await schemaTask;
+        var templateDefinitions = await templatesTask;
+        return new { tool = "GetRepositorySchema", fields = definitions.Values.Select(f => new { f.Name, f.FieldType, f.IsMultiValue, f.IsRequired }).Distinct().ToArray(),
+            templates = templateDefinitions.Select(t => t.Name).ToArray(), entryProperties = StructuredRepositoryQuery.Builtins,
+            tools = new[] { "SearchEntries", "AggregateEntries", "GetEntry", "GetEntryMetadata", "GetFolderContents", "GetTemplates", "GetRepositorySchema", "GetFolderInformation", "GetOcrContent" } };
     }
 
     public async Task<ChatResult> CreateAsync(string repositoryId, QueryPlan plan, IReadOnlyList<int> ids,
         CancellationToken ct)
     {
+        if (plan.Operation == "schema")
+        {
+            if (plan.Template != null) throw new ArgumentException("هذه الأداة تعرض تعريفات حقول المستودع؛ ربط الحقول بتعريف قالب بعينه غير متاح من عقد الخدمة الحالي.");
+            var definitions = (await SchemaAsync(ct)).Values;
+            if (plan.Field != null) definitions = [StructuredRepositoryQuery.ResolveField(plan.Field, definitions)];
+            return new ChatResult("# حقول المستودع الحالية\n\n| الحقل | النوع | متعدد القيم | إلزامي |\n| --- | --- | --- | --- |\n" + string.Join("\n", definitions.Select(f => $"| {ReportSupport.Cell(f.Name)} | {ReportSupport.Cell(f.FieldType)} | {f.IsMultiValue} | {f.IsRequired} |")), []);
+        }
+        if (plan.Operation == "folder_information")
+        {
+            if (plan.FolderId is not int folderId) throw new ArgumentException("حدد رقم المجلد.");
+            var folder = await entries.GetEntryAsync(folderId, ct);
+            if (folder.EntryType is not (LFEntryType.Folder or LFEntryType.RecordSeries)) throw new ArgumentException("الإدخال ليس مجلدًا.");
+            return new ChatResult($"المجلد {folderId}: {ReportSupport.Cell(folder.Name)}\nالمسار: {ReportSupport.Cell(string.IsNullOrWhiteSpace(folder.FullPath) ? await entries.GetEntryPathAsync(folderId, ct) : folder.FullPath)}", []) { RelatedEntryIds = [folderId] };
+        }
         if (plan.Operation == "templates")
         {
-            var list = await templates.GetTemplateDefinitionsAsync(ct);
+            var list = await TemplatesAsync(ct);
             return new ChatResult("# قوالب المستودع\n\n| رقم القالب | اسم القالب |\n| --- | --- |\n" +
                 string.Join("\n", list.Select(t => $"| {t.Id} | {ReportSupport.Cell(t.Name)} |")), []);
         }
         if (plan.Operation == "metadata")
         {
             if (ids.Count == 0) throw new ArgumentException("حدد رقم الوثيقة المطلوبة.");
-            var sources = new List<Evidence>();
-            foreach (var id in ids)
+            if (ids.Count > 50 || ids.Any(id => id <= 0)) throw new ArgumentException("حدد حتى 50 إدخالًا صالحًا.");
+            var sources = new Evidence[ids.Count];
+            await Parallel.ForEachAsync(Enumerable.Range(0, ids.Count), new ParallelOptions { MaxDegreeOfParallelism = 4, CancellationToken = ct }, async (index, token) =>
             {
-                var entry = await entries.GetEntryAsync(id, ct);
-                var values = await entries.GetEntryFieldsAsync(id, ct);
-                var path = await entries.GetEntryPathAsync(id, ct);
-                sources.Add(new Evidence(id, entry.Name, path, null, 1,
+                var id = ids[index];
+                var entry = await entries.GetEntryAsync(id, token);
+                var values = await EntryFieldsAsync(id, token);
+                var path = string.IsNullOrWhiteSpace(entry.FullPath) ? await entries.GetEntryPathAsync(id, token) : entry.FullPath;
+                sources[index] = new Evidence(id, entry.Name, path, null, 1,
                     $"الاسم: {entry.Name}\nالمسار: {path}\nالقالب: {entry.TemplateName}\nتاريخ الإنشاء: {entry.CreationTime}\nتاريخ التعديل: {entry.LastModifiedTime}\n" +
-                    string.Join("\n", values.Select(f => $"{f.FieldName}: {f.Value}")), "laserfiche-metadata-live"));
-            }
+                    string.Join("\n", values.Select(f => $"{f.FieldName}: {f.Value}")), "laserfiche-metadata-live");
+            });
             return new ChatResult(string.Join("\n\n", sources.Select(e => $"## الوثيقة {e.EntryId}\n\n" + e.Text)), sources)
                 { RelatedEntryIds = ids.ToArray() };
         }
-        var result = await SelectAsync(plan, ids, plan.Operation == "group", ct);
+        var result = await SelectAsync(plan, ids, plan.Operation == "group" || plan.SortField != null, ct);
+        if (plan.RequireUnique && (!result.IsTotalCountExact || result.TotalCount != 1))
+            return new ChatResult("حدد رقم الوثيقة؛ الاسم يطابق أكثر من إدخال أو لم يمكن تحديد وثيقة واحدة.\n\n" + string.Join("\n", result.Items.Select(i => $"- {i.EntryId}: {ReportSupport.Cell(i.Name)}")), []);
+        if (plan.CountOnly && plan.Operation != "group")
+            return new ChatResult(result.IsTotalCountExact ? $"عدد النتائج المطابقة: **{result.TotalCount}**." : "العدد الإجمالي غير متاح؛ لم أقدّر العدد من الصفحة المعروضة.", [],
+                new AnswerScope("repository", repositoryId, result.TotalCount, 0, result.IsTotalCountExact, "عدد حي من Laserfiche.", ids));
+        if (plan.GroupFields?.Length > 0 || plan.Metrics?.Length > 0 || plan.SortField != null || plan.Having != null || plan.Rollup != null)
+            result = await CompleteProjectionAsync(result, plan, ct);
+        if (plan.Operation == "group" && (plan.GroupFields?.Length > 0 || plan.Metrics?.Length > 0 || plan.GroupBy == null))
+            return RepositoryAggregation.Render(repositoryId, plan, result, (await SchemaAsync(ct)).Values, ids);
+        if (plan.SortField != null) result = RepositoryAggregation.SortPage(result, plan, (await SchemaAsync(ct)).Values);
         if (plan.Operation == "group")
         {
             if (result.HasNextPage) throw new InvalidOperationException("An aggregation requires all live search results.");
@@ -221,22 +304,23 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
             return new ChatResult(table, [], new AnswerScope("repository", repositoryId, result.Items.Count, 0, true,
                 "حُسب التوزيع من نتائج البحث الحالية المتاحة لحسابك.", ids));
         }
-        var enriched = new List<LFSearchResult>();
-        foreach (var item in result.Items)
+        // Reuse search values. Only missing page counts require details, bounded to 4 calls.
+        var enriched = new LFSearchResult[result.Items.Count];
+        await Parallel.ForEachAsync(Enumerable.Range(0, result.Items.Count), new ParallelOptions { MaxDegreeOfParallelism = 4, CancellationToken = ct }, async (index, token) =>
         {
-            // Search responses may omit pageCount. Read only the displayed entries,
-            // never OCR or all repository records. A missing value remains unknown.
-            var pageCount = item.PageCount;
-            if (pageCount is null && item.EntryType is not (LFEntryType.Folder or LFEntryType.RecordSeries))
+            var item = result.Items[index];
+            if (item.PageCount is null && item.EntryType is not (LFEntryType.Folder or LFEntryType.RecordSeries))
             {
-                try { pageCount = (await entries.GetEntryAsync(item.EntryId, ct)).PageCount; }
-                catch (Exception error) when (!ct.IsCancellationRequested &&
-                    error is LaserficheReports.Domain.Exceptions.LaserficheException or HttpRequestException or OperationCanceledException)
+                try
+                {
+                    var detail = await entries.GetEntryAsync(item.EntryId, token);
+                    item = item with { PageCount = detail.PageCount, FullPath = string.IsNullOrWhiteSpace(item.FullPath) ? detail.FullPath : item.FullPath };
+                }
+                catch (Exception error) when (!token.IsCancellationRequested && error is LaserficheReports.Domain.Exceptions.LaserficheException or HttpRequestException or OperationCanceledException)
                 { logger.LogWarning("Page count unavailable EntryId={EntryId} ErrorType={ErrorType}", item.EntryId, error.GetType().Name); }
             }
-            enriched.Add(item with { PageCount = pageCount,
-                FullPath = string.IsNullOrWhiteSpace(item.FullPath) ? await entries.GetEntryPathAsync(item.EntryId, ct) : item.FullPath });
-        }
+            enriched[index] = item;
+        });
         result = result with { Items = enriched };
         var evidence = result.Items.Select(i => new Evidence(i.EntryId, i.Name, i.FullPath, null, 1,
             $"الاسم: {i.Name}\nالمسار: {i.FullPath}", "laserfiche-metadata-live")).ToArray();

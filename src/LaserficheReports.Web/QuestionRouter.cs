@@ -5,15 +5,19 @@ namespace LaserficheReports.Web;
 internal enum QueryKind { LASERFICHE_QUERY, OCR_QUERY, HYBRID_QUERY }
 internal sealed record QueryPlan(string Operation, string? Field = null, string? Value = null,
     string? Template = null, int? FolderId = null, string? Name = null, int Limit = 50,
-    bool Content = false, string? GroupBy = null, string? From = null, string? To = null, string? Title = null, string? Sort = null, int[]? EntryIds = null, string? Question = null)
+    bool Content = false, string? GroupBy = null, string? From = null, string? To = null, string? Title = null, string? Sort = null, int[]? EntryIds = null, string? Question = null,
+    RepositoryFilter? Filters = null, string EntryType = "document", int Page = 1, bool CountOnly = false,
+    GroupDimension[]? GroupFields = null, AggregateMetric[]? Metrics = null, string? AggregateSort = null,
+    string? SortField = null, string SortDirection = "asc", bool RequireUnique = false, string ContentMode = "summary", AggregateHaving? Having = null, string? Rollup = null)
 {
-    public QueryKind Kind => Content ? Operation == "content" ? QueryKind.OCR_QUERY : QueryKind.HYBRID_QUERY
+    public QueryKind Kind => Content ? Operation == "content" && Filters == null && Field == null && Template == null && FolderId == null && Name == null ? QueryKind.OCR_QUERY : QueryKind.HYBRID_QUERY
         : QueryKind.LASERFICHE_QUERY;
 }
 
 internal sealed class QuestionRouter(IHttpClientFactory clients)
 {
-    public async Task<ReportRequest> RouteAsync(string question, object catalog, CancellationToken cancellationToken)
+    public async Task<ReportRequest> RouteAsync(string question, object catalog, CancellationToken cancellationToken,
+        ChatTurn[]? history = null)
     {
         var client = clients.CreateClient("ReportsGraph");
         try
@@ -21,7 +25,7 @@ internal sealed class QuestionRouter(IHttpClientFactory clients)
             using var health = await client.GetAsync("health", cancellationToken);
             await GraphServiceException.EnsureSuccessAsync(health, "planning", cancellationToken);
             var status = await health.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>(cancellationToken);
-            if (!status.TryGetProperty("routingVersion", out var version) || version.GetString() != "ai-multi-report-v3" ||
+            if (!status.TryGetProperty("routingVersion", out var version) || version.GetString() != "schema-agent-v4" ||
                 !status.TryGetProperty("modelTimeoutSeconds", out var timeout) || !timeout.TryGetInt32(out var seconds) || seconds < 60)
                 throw new GraphServiceException("graph_protocol_mismatch", "planning", GraphServiceException.MessageFor("graph_protocol_mismatch"));
         }
@@ -31,7 +35,7 @@ internal sealed class QuestionRouter(IHttpClientFactory clients)
         }
         HttpResponseMessage routeResponse;
         try { routeResponse = await client.PostAsJsonAsync("route",
-            new { question, catalog, today = DateOnly.FromDateTime(DateTime.Now).ToString("yyyy-MM-dd") }, cancellationToken); }
+            new { question, catalog, today = RepositoryDates.Today().ToString("yyyy-MM-dd"), timezone = "Asia/Riyadh", history = history ?? [] }, cancellationToken); }
         catch (HttpRequestException error)
         {
             throw new GraphServiceException("graph_unavailable", "planning", GraphServiceException.MessageFor("graph_unavailable"), error);
@@ -42,13 +46,21 @@ internal sealed class QuestionRouter(IHttpClientFactory clients)
             ?? throw new InvalidOperationException("لم يرجع الذكاء الاصطناعي خطة للطلب.");
         if (request.Reports is null || request.Reports.Length is < 1 or > 6)
             throw new ArgumentException("اطلب من تقرير واحد إلى ستة تقارير في السؤال الواحد.");
-        var explicitIds = ReportSupport.RequestedEntries(question);
+        var context = question + " " + string.Join(" ", (history ?? []).Select(t => t.Text));
+        var mentionedIds = System.Text.RegularExpressions.Regex.Matches(context, @"\p{Nd}+")
+            .Select(m => string.Concat(m.Value.Select(c => char.GetNumericValue(c).ToString(System.Globalization.CultureInfo.InvariantCulture))))
+            .Select(s => int.TryParse(s, out var id) ? id : 0).ToHashSet();
         foreach (var plan in request.Reports)
         {
-            if (plan.Operation is not ("search" or "folders" or "metadata" or "templates" or "recent" or "latest_created" or "latest_modified" or "created" or "modified" or "group" or "content" or "clarify") ||
-                plan.Limit is < 1 or > 200 || plan.Sort is not (null or "creationTime desc" or "lastModifiedTime desc" or "id asc") ||
-                (plan.EntryIds?.Any(id => !explicitIds.Contains(id)) ?? false))
+            if (plan.Operation is not ("search" or "folders" or "metadata" or "templates" or "schema" or "folder_information" or "recent" or "latest_created" or "latest_modified" or "created" or "modified" or "group" or "content" or "clarify") ||
+                plan.Limit is < 1 or > 200 || plan.Page is < 1 or > 1000000 ||
+                plan.Sort is not (null or "creationTime desc" or "creationTime asc" or "lastModifiedTime desc" or "lastModifiedTime asc" or "name asc" or "name desc" or "id asc" or "id desc") ||
+                plan.ContentMode is not ("summary" or "search") || plan.SortDirection is not ("asc" or "desc") || plan.EntryType is not ("document" or "folder" or "all") ||
+                (plan.EntryIds?.Length > 50) || (plan.EntryIds?.Any(id => id <= 0 || !mentionedIds.Contains(id)) ?? false) ||
+                (plan.FolderId is int folder && !mentionedIds.Contains(folder)))
                 throw new ArgumentException("خطة الذكاء الاصطناعي غير صالحة؛ أعد صياغة الطلب.");
+            if (plan.Operation != "group" && (plan.GroupFields?.Length > 0 || plan.Metrics?.Length > 0 || plan.Having != null || plan.Rollup != null) || plan.Content && plan.CountOnly)
+                throw new ArgumentException("خطة الحساب أو المحتوى غير متسقة.");
             if (plan.Operation is "latest_created" or "latest_modified" && plan.Limit != 1)
                 throw new ArgumentException("طلب آخر وثيقة يجب أن يحدد وثيقة واحدة لكل تقرير.");
         }
@@ -56,3 +68,4 @@ internal sealed class QuestionRouter(IHttpClientFactory clients)
     }
 }
 internal sealed record ReportRequest(QueryPlan[] Reports, string? Clarification = null);
+internal sealed record ChatTurn(string Role, string Text);

@@ -68,6 +68,18 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(response.status, 200)
         self.assertEqual(json.loads(response.read()), ReportRequest.model_validate(plans).model_dump(by_alias=True))
 
+    def test_route_http_preserves_conversation_context(self):
+        from test_graph import FakeModel
+        plan = {'reports': [{'operation': 'search', 'title': 'تقرير', 'question': 'رتبها', 'limit': 50, 'sort': 'creationTime asc'}]}
+        model = FakeModel([json.dumps(plan)])
+        self.server.RequestHandlerClass.model = model
+        history = [{'role': 'user', 'text': 'اعرض وثائق المحاسبة'}]
+        self.client.request('POST', '/route', json.dumps({'question': 'رتبها بالأقدم', 'history': history}).encode())
+        response = self.client.getresponse()
+        self.assertEqual(response.status, 200)
+        response.read()
+        self.assertEqual(json.loads(model.calls[0][1].content)['history'], history)
+
     def test_health_checks_the_actual_local_model_registry(self):
         from unittest.mock import patch
         handler = self.server.RequestHandlerClass
@@ -79,7 +91,7 @@ class HttpTests(unittest.TestCase):
                 response = self.client.getresponse()
                 payload = json.loads(response.read())
                 self.assertEqual(response.status, 503 if code else 200)
-                self.assertEqual(payload.get('error') if code else payload['routingVersion'], code or 'ai-multi-report-v3')
+                self.assertEqual(payload.get('error') if code else payload['routingVersion'], code or 'schema-agent-v4')
 
     def test_model_timeout_is_not_mislabeled_as_connection_failure(self):
         from httpx import ReadTimeout

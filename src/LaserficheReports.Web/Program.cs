@@ -285,7 +285,7 @@ app.MapPost("/api/reports/chat", async (ChatQuestion request, ReportsChatService
     if (await sessions.TryGetAsync(cancellationToken) is null) return Results.Unauthorized();
     try
     {
-        return Results.Ok(await chat.AskAsync(request.Question, cancellationToken));
+        return Results.Ok(await chat.AskAsync(request.Question, cancellationToken, request.History));
     }
     catch (GraphServiceException exception)
     {
@@ -572,5 +572,5 @@ app.MapHealthChecks("/health");
 
 app.Run();
 
-internal sealed record ChatQuestion(string Question);
+internal sealed record ChatQuestion(string Question, ChatTurn[]? History = null);
 internal sealed record LoginRequest(string Username, string Password, string? RepositoryId = null);

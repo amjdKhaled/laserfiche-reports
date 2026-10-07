@@ -40,12 +40,12 @@ internal sealed class LaserficheSearchService : ILaserficheSearchService
 
     public Task<PagedResult<LFSearchResult>> QueryAsync(string expression, int page, int pageSize,
         string sort = "creationTime desc", string? field = null, bool readAll = false,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default, IReadOnlyList<string>? projectedFields = null)
     {
-        if (sort is not ("creationTime desc" or "lastModifiedTime desc" or "id asc"))
+        if (sort is not ("creationTime desc" or "creationTime asc" or "lastModifiedTime desc" or "lastModifiedTime asc" or "name asc" or "name desc" or "id asc" or "id desc"))
             throw new ArgumentException("ترتيب البحث غير مدعوم.");
         return ExecuteSearchAsync("structured-query", SearchType.Advanced, expression,
-            page, pageSize, cancellationToken, sort, field, readAll);
+            page, pageSize, cancellationToken, sort, field, readAll, projectedFields);
     }
 
     public Task<PagedResult<LFSearchResult>> SimpleSearchAsync(
@@ -108,7 +108,7 @@ internal sealed class LaserficheSearchService : ILaserficheSearchService
         int page,
         int pageSize,
         CancellationToken cancellationToken, string sort = "creationTime desc",
-        string? field = null, bool readAll = false)
+        string? field = null, bool readAll = false, IReadOnlyList<string>? projectedFields = null)
     {
         using var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         budget.CancelAfter(TimeSpan.FromSeconds(600));
@@ -196,7 +196,7 @@ internal sealed class LaserficheSearchService : ILaserficheSearchService
                 token,
                 page,
                 pageSize,
-                cancellationToken, sort, field, readAll)
+                cancellationToken, sort, field, readAll, projectedFields)
             .ConfigureAwait(false);
     }
 
@@ -252,10 +252,10 @@ internal sealed class LaserficheSearchService : ILaserficheSearchService
         string operationToken,
         int page,
         int pageSize,
-        CancellationToken cancellationToken, string sort, string? field, bool readAll)
+        CancellationToken cancellationToken, string sort, string? field, bool readAll, IReadOnlyList<string>? projectedFields)
     {
         var firstUrl = AddPagingQuery(
-            _adapter.BuildSearchResultsUrl(repositoryId, operationToken), page, pageSize, sort, field, readAll);
+            _adapter.BuildSearchResultsUrl(repositoryId, operationToken), page, pageSize, sort, field, readAll, projectedFields);
         client.DefaultRequestHeaders.Remove("Prefer");
         client.DefaultRequestHeaders.TryAddWithoutValidation("Prefer", $"odata.maxpagesize={pageSize}");
         return await ReadRequestedPageAsync(client, null, firstUrl, 1, pageSize, cancellationToken, (page - 1) * pageSize, readAll)
@@ -423,13 +423,15 @@ internal sealed class LaserficheSearchService : ILaserficheSearchService
             throw new ArgumentOutOfRangeException(nameof(pageSize), "Page size must be at least 1.");
     }
 
-    private static string AddPagingQuery(string url, int page, int pageSize, string sort, string? field, bool readAll)
+    private static string AddPagingQuery(string url, int page, int pageSize, string sort, string? field, bool readAll, IReadOnlyList<string>? projectedFields)
     {
+        var projections = (projectedFields ?? []).Concat(field is null ? [] : new[] { field }).Distinct().ToArray();
+        if (projections.Length > 10) throw new ArgumentException("Search supports up to ten projected fields.");
         var skip = checked((page - 1) * pageSize);
         var separator = url.Contains('?', StringComparison.Ordinal) ? '&' : '?';
         return $"{url}{separator}$skip={skip}&$count=true&$orderby={Uri.EscapeDataString(sort)}" +
             (readAll ? "" : $"&$top={pageSize}") +
-            (field is null ? "" : $"&fields={Uri.EscapeDataString(field)}");
+            string.Concat(projections.Select(name => "&fields=" + Uri.EscapeDataString(name)));
     }
 
     private static string EscapeSearchTerm(string term) =>

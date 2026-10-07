@@ -77,7 +77,7 @@ internal sealed class ReportsChatService(
             chunks.GetValueOrDefault(item.EntryId), null)).ToArray(), page, live.HasNextPage);
     }
 
-    public async Task<ChatResult> AskAsync(string question, CancellationToken cancellationToken)
+    public async Task<ChatResult> AskAsync(string question, CancellationToken cancellationToken, ChatTurn[]? history = null)
     {
         if (string.IsNullOrWhiteSpace(question) || question.Length > 2000)
             throw new ArgumentException("Question must contain 1 to 2000 characters.", nameof(question));
@@ -86,9 +86,11 @@ internal sealed class ReportsChatService(
         using var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         budget.CancelAfter(TimeSpan.FromSeconds(Math.Clamp(configuration.GetValue<int?>("Reports:RequestTimeoutSeconds") ?? 3600, 300, 14400)));
         cancellationToken = budget.Token;
+        if (history is { Length: > 8 } || (history?.Any(t => t is null || t.Role is not ("user" or "assistant") || t.Text is null || t.Text.Length > 3000) ?? false))
+            throw new ArgumentException("سياق المحادثة أكبر من الحد المسموح.");
         var catalog = await liveReports.CatalogAsync(cancellationToken);
         var watch = System.Diagnostics.Stopwatch.StartNew();
-        var request = await router.RouteAsync(question, catalog, cancellationToken);
+        var request = await router.RouteAsync(question, catalog, cancellationToken, history);
         logger.LogInformation("Stage=AI_PLAN ReportCount={Count} DurationMs={DurationMs}", request.Reports.Length, watch.ElapsedMilliseconds);
         if (request.Reports.All(p => p.Operation == "clarify"))
             return new ChatResult(request.Clarification ?? "وضح المعلومة المطلوبة أو معيار التقرير.", []);
@@ -108,36 +110,7 @@ internal sealed class ReportsChatService(
             sections.Add(new ReportSection(plan.Title ?? "تقرير", result.Answer, result.Sources, result.Scope,
                 result.RelatedEntryIds, result.Quality));
         }
-        // The backend has already rendered complete live tables and computed their counts.
-        // Do not ask the model to paraphrase/review those same facts a second time.
-        var metadata = request.Reports.Select((p, i) => (p, i)).Where(x => !x.p.Content && x.p.Operation != "clarify" && sections[x.i].Scope != null && !sections[x.i].Answer.Contains("| --- |", StringComparison.Ordinal)).ToArray();
-        if (metadata.Length > 0)
-        {
-            try
-            {
-                using var response = await clients.CreateClient("ReportsGraph").PostAsJsonAsync("present", new
-                {
-                    question,
-                    reports = metadata.Select(x => new { index = x.i, title = sections[x.i].Title,
-                        facts = sections[x.i].Answer[..Math.Min(sections[x.i].Answer.Length, 3000 / metadata.Length)] })
-                }, cancellationToken);
-                response.EnsureSuccessStatusCode();
-                var presentation = await response.Content.ReadFromJsonAsync<GraphPresentation>(cancellationToken)
-                    ?? throw new InvalidOperationException("لم يرجع الذكاء الاصطناعي صياغة التقرير.");
-                foreach (var item in presentation.Reports ?? [])
-                    if (metadata.Any(x => x.i == item.Index) && !string.IsNullOrWhiteSpace(item.Summary))
-                        sections[item.Index] = sections[item.Index] with { Answer = item.Summary + "\n\n" + sections[item.Index].Answer,
-                            Quality = new ReportQuality("answered", true, "completed", "live-reports-v3", 3) };
-            }
-            catch (Exception error) when (!cancellationToken.IsCancellationRequested &&
-                error is HttpRequestException or JsonException or InvalidOperationException or OperationCanceledException)
-            {
-                logger.LogWarning("AI presentation unavailable ErrorType={ErrorType}", error.GetType().Name);
-                foreach (var item in metadata)
-                    sections[item.i] = sections[item.i] with { Answer = "تعذرت صياغة ملخص AI؛ البيانات التالية مسترجعة من المستودع مباشرة.\n\n" + sections[item.i].Answer,
-                        Quality = new ReportQuality("unverified", false, "unavailable", "live-reports-v3", 1) };
-            }
-        }
+        // Structured facts, counts and tables need no second model call.
         var allSources = new List<Evidence>();
         var combined = new List<string>();
         foreach (var section in sections)
@@ -160,14 +133,24 @@ internal sealed class ReportsChatService(
         var watch = System.Diagnostics.Stopwatch.StartNew();
         if (plan.Operation == "clarify")
             return new ChatResult("حدد اسم الحقل وقيمته كما تظهر في Laserfiche، أو رقم الوثيقة المطلوب تحليلها.", []);
-        if (plan.Operation is not ("search" or "folders" or "metadata" or "templates" or "recent" or "latest_created" or "latest_modified" or "created" or "modified" or "group" or "content"))
+        if (plan.Operation is not ("search" or "folders" or "metadata" or "templates" or "schema" or "folder_information" or "recent" or "latest_created" or "latest_modified" or "created" or "modified" or "group" or "content"))
             throw new ArgumentException("لم أتعرف على الطلب. حدد الحقل وقيمته أو رقم الوثيقة والمعلومة المطلوبة.");
+        if (plan.Name != null && (plan.Operation == "metadata" || plan.RequireUnique || plan.Content))
+        {
+            var lookup = await liveReports.SelectAsync(plan with { Operation = "search", Content = false, Limit = 50, CountOnly = false }, requestedEntries, false, cancellationToken);
+            if (!lookup.IsTotalCountExact || lookup.TotalCount != 1)
+                return new ChatResult("لم أحدد وثيقة واحدة بالاسم؛ اختر رقم الوثيقة من النتائج أو وضح الاسم.\n\n" + string.Join("\n", lookup.Items.Select(i => $"- {i.EntryId}: {ReportSupport.Cell(i.Name)}")), []);
+            requestedEntries = [lookup.Items[0].EntryId];
+            plan = plan with { Name = null };
+        }
         if (!plan.Content)
             return await liveReports.CreateAsync(repository.RepositoryId, plan, requestedEntries, cancellationToken);
+        var liveSelected = new Dictionary<int, LFEntry>();
         if (plan.Kind == QueryKind.HYBRID_QUERY)
         {
             var selected = await liveReports.SelectAsync(plan, requestedEntries, true, cancellationToken);
             if (selected.HasNextPage) throw new ArgumentException("حدد نطاقًا أضيق لتحليل محتوى الوثائق.");
+            foreach (var item in selected.Items.Where(i => i.EntryType == LFEntryType.Document)) liveSelected[item.EntryId] = new LFEntry { Id = item.EntryId, Name = item.Name, FullPath = item.FullPath, EntryType = item.EntryType };
             requestedEntries = selected.Items.Select(i => i.EntryId).Distinct().ToArray();
             if (requestedEntries.Length == 0)
                 return new ChatResult("لم يتم العثور على نتائج مطابقة.", []);
@@ -178,7 +161,8 @@ internal sealed class ReportsChatService(
         var prefix = configuration["LocalAI:QueryEmbeddingPrefix"] ?? "search_query: ";
         string? literal = null;
         watch.Restart();
-        if (!hasEntryFilter) try
+        var rankedContent = !hasEntryFilter || plan.ContentMode == "search";
+        if (rankedContent) try
         {
             using var embeddingBudget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             embeddingBudget.CancelAfter(TimeSpan.FromSeconds(120));
@@ -200,7 +184,7 @@ internal sealed class ReportsChatService(
         await using (var connection = new NpgsqlConnection(OcrConnectionString()))
         {
             await connection.OpenAsync(cancellationToken);
-            await using var command = new NpgsqlCommand(hasEntryFilter ? DirectOcrSql : HybridRetrieval.Sql, connection);
+            await using var command = new NpgsqlCommand(rankedContent ? HybridRetrieval.Sql : DirectOcrSql, connection);
             command.CommandTimeout = Math.Clamp(configuration.GetValue<int?>("Reports:SearchTimeoutSeconds") ?? 20, 5, 30);
             command.Parameters.Add(new NpgsqlParameter("embedding", NpgsqlTypes.NpgsqlDbType.Text)
                 { Value = (object?)literal ?? DBNull.Value });
@@ -230,33 +214,24 @@ internal sealed class ReportsChatService(
         }
 
         logger.LogInformation("Stage=SUPABASE Tool=GetOcrContent DurationMs={DurationMs} Passages={Passages}", watch.ElapsedMilliseconds, candidates.Count);
-        var authorized = new Dictionary<int, LFEntry>();
-        var denied = new HashSet<int>();
-        var allowedCandidates = new List<Evidence>();
-        foreach (var candidate in candidates)
+        var authorized = liveSelected;
+        var candidateIds = candidates.Select(c => c.EntryId).Distinct().Where(id => !authorized.ContainsKey(id)).Take(evidenceLimit).ToArray();
+        var currentEntries = new LFEntry?[candidateIds.Length];
+        await Parallel.ForEachAsync(Enumerable.Range(0, candidateIds.Length), new ParallelOptions { MaxDegreeOfParallelism = 4, CancellationToken = cancellationToken }, async (index, token) =>
         {
-            if (!authorized.ContainsKey(candidate.EntryId) && !denied.Contains(candidate.EntryId))
-            {
-                if (authorized.Count >= evidenceLimit) continue;
-                try
-                {
-                    var current = await entries.GetEntryAsync(candidate.EntryId, cancellationToken);
-                    if (current.EntryType == LFEntryType.Document) authorized.Add(candidate.EntryId, current);
-                    else denied.Add(candidate.EntryId);
-                }
-                catch (LaserficheException error) when (error.StatusCode is 403 or 404)
-                { denied.Add(candidate.EntryId); }
-            }
-            if (authorized.TryGetValue(candidate.EntryId, out var currentEntry))
-                allowedCandidates.Add(candidate with { DocumentName = currentEntry.Name, Path = currentEntry.FullPath });
-        }
+            try { currentEntries[index] = await entries.GetEntryAsync(candidateIds[index], token); }
+            catch (LaserficheException error) when (error.StatusCode is 403 or 404) { }
+        });
+        foreach (var current in currentEntries.OfType<LFEntry>().Where(e => e.EntryType == LFEntryType.Document)) authorized[current.Id] = current;
+        var allowedCandidates = candidates.Where(c => authorized.ContainsKey(c.EntryId))
+            .Select(c => c with { DocumentName = authorized[c.EntryId].Name, Path = authorized[c.EntryId].FullPath }).ToList();
         var evidence = ReportSupport.SelectEvidence(allowedCandidates, evidenceLimit);
         var scope = new AnswerScope(hasEntryFilter ? "selected-documents" : "repository",
             repository.RepositoryId, evidence.Select(x => x.EntryId).Distinct().Count(), evidence.Count, false,
             hasEntryFilter ? "التحليل مقيد بالوثائق التي حددتها؛ يعتمد على المقاطع المفهرسة المتاحة منها."
                 : "البحث شمل فهرس المستودع المتاح؛ المقاطع المختارة أدلة للإجابة وليست حصرًا لجميع الوثائق.",
             plan.Kind == QueryKind.HYBRID_QUERY ? [] : requestedEntries);
-        if (literal is null && !hasEntryFilter)
+        if (literal is null && rankedContent)
             scope = scope with { Detail = scope.Detail + " البحث بالكلمات فقط؛ تعذر استخدام نموذج البحث الدلالي المحلي." };
         if (evidence.Count == 0)
             return new ChatResult("# تقرير البحث\n\nمحتوى الوثيقة غير متاح حاليًا، أو لا توجد مقاطع نصية كافية للإجابة.\n\n" + scope.Detail, evidence, scope);
@@ -300,7 +275,5 @@ internal sealed class ReportsChatService(
         limit @candidateLimit
         """;
 
-    private sealed record PresentedReport(int Index, string Summary);
-    private sealed record GraphPresentation(PresentedReport[]? Reports);
     private sealed record GraphAnswer(string Answer, ReportQuality? Quality, int[]? RelatedEntryIds);
 }

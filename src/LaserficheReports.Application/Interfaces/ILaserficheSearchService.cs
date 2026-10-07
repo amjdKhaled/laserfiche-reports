@@ -15,7 +15,7 @@ public interface ILaserficheSearchService
 {
     Task<PagedResult<LFSearchResult>> QueryAsync(string expression, int page, int pageSize,
         string sort = "creationTime desc", string? field = null, bool readAll = false,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default, IReadOnlyList<string>? projectedFields = null);
 
     /// <summary>
     /// Performs a simple keyword search using the Laserfiche SimpleSearches API.
