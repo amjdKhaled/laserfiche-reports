@@ -16,9 +16,11 @@ internal sealed record ChatResult(string Answer, IReadOnlyList<Evidence> Sources
     public ReportQuality? Quality { get; init; }
     public int[] RelatedEntryIds { get; init; } = [];
     public IReadOnlyList<ReportSection> Reports { get; init; } = [];
+    public bool IsClarification { get; init; }
+    public string? ClarificationQuestion { get; init; }
 }
 internal sealed record ReportSection(string Title, string Answer, IReadOnlyList<Evidence> Sources, AnswerScope? Scope,
-    int[] RelatedEntryIds, ReportQuality? Quality);
+    int[] RelatedEntryIds, ReportQuality? Quality, bool IsClarification = false, string? ClarificationQuestion = null);
 internal sealed record ReportQuality(string Status, bool QuoteVerification, string SemanticReview,
     string PromptVersion, int ModelCalls);
 internal sealed record IndexedDocument(int EntryId, string Name, string Path, string Status,
@@ -87,7 +89,8 @@ internal sealed class ReportsChatService(
         var requestTimeout = configuration.GetValue<int?>("Reports:RequestTimeoutSeconds") ?? 0;
         if (requestTimeout > 0) budget.CancelAfter(TimeSpan.FromSeconds(requestTimeout));
         cancellationToken = budget.Token;
-        if (history is { Length: > 8 } || (history?.Any(t => t is null || t.Role is not ("user" or "assistant") || t.Text is null || t.Text.Length > 3000) ?? false))
+        if (history is { Length: > 8 } || (history?.Any(t => t is null || t.Role is not ("user" or "assistant") || t.Text is null || t.Text.Length > 3000 ||
+            t.Kind is not (null or "answer" or "clarification" or "error") || t.ClarificationQuestion?.Length > 2000) ?? false))
             throw new ArgumentException("سياق المحادثة أكبر من الحد المسموح.");
         var schemaWatch = System.Diagnostics.Stopwatch.StartNew();
         var catalog = await liveReports.CatalogAsync(cancellationToken);
@@ -96,17 +99,19 @@ internal sealed class ReportsChatService(
         var request = await router.RouteAsync(question, catalog, cancellationToken, history);
         logger.LogInformation("Stage=AI_PLAN ReportCount={Count} DurationMs={DurationMs}", request.Reports.Length, watch.ElapsedMilliseconds);
         if (request.Reports.All(p => p.Operation == "clarify"))
-            return new ChatResult(request.Clarification ?? "وضح المعلومة المطلوبة أو معيار التقرير.", []);
+            return new ChatResult(request.Clarification ?? "وضح المعلومة المطلوبة أو معيار التقرير.", [])
+            { IsClarification = true, ClarificationQuestion = request.ClarificationQuestion ?? question };
         var sections = new List<ReportSection>();
         foreach (var plan in request.Reports)
         {
             ChatResult result;
             try { result = plan.Operation == "clarify"
                 ? new ChatResult(request.Clarification ?? "وضح معيار هذا التقرير.", [])
+                  { IsClarification = true, ClarificationQuestion = request.ClarificationQuestion ?? question }
                 : await ExecutePlanAsync(repository, plan, plan.Question ?? question, cancellationToken); }
             catch (RepositoryScopeClarificationException clarification)
             {
-                result = new ChatResult(clarification.Message, []);
+                result = new ChatResult(clarification.Message, []) { IsClarification = true, ClarificationQuestion = question };
             }
             catch (Exception error) when (request.Reports.Length > 1 && !cancellationToken.IsCancellationRequested &&
                 error is LaserficheException or NpgsqlException or HttpRequestException or InvalidOperationException or ArgumentException)
@@ -116,7 +121,7 @@ internal sealed class ReportsChatService(
                 result = new ChatResult(error is ArgumentException ? error.Message : "تعذر إكمال هذا التقرير؛ لم تُعرض نتائج أو أعداد غير مؤكدة.", []);
             }
             sections.Add(new ReportSection(plan.Title ?? "تقرير", result.Answer, result.Sources, result.Scope,
-                result.RelatedEntryIds, result.Quality));
+                result.RelatedEntryIds, result.Quality, result.IsClarification, result.ClarificationQuestion));
         }
         // Structured facts, counts and tables need no second model call.
         var allSources = new List<Evidence>();
@@ -131,7 +136,9 @@ internal sealed class ReportsChatService(
             allSources.AddRange(section.Sources);
         }
         return new ChatResult(string.Join("\n\n", combined), allSources, sections.Count == 1 ? sections[0].Scope : null)
-        { Reports = sections, RelatedEntryIds = sections.SelectMany(s => s.RelatedEntryIds).Distinct().ToArray() };
+        { Reports = sections, RelatedEntryIds = sections.SelectMany(s => s.RelatedEntryIds).Distinct().ToArray(),
+          IsClarification = sections.Count == 1 && sections[0].IsClarification,
+          ClarificationQuestion = sections.Count == 1 ? sections[0].ClarificationQuestion : null };
     }
 
     private async Task<ChatResult> ExecutePlanAsync(RepositoryDescriptor repository, QueryPlan plan, string question,

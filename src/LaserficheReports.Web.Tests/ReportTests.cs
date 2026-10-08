@@ -454,6 +454,30 @@ public class ReportTests
         Assert.DoesNotContain("present", graph.Paths);
     }
 
+    [Fact]
+    public async Task ClarificationCarriesItsOriginalQuestionAndReplyMetadata()
+    {
+        const string original = "كم وثيقة تنتهي قبل السنة المطلوبة؟";
+        var graph = new GraphClient("""
+            {"reports":[{"resultType":"clarification","requiresFilter":false,"operation":"clarify","limit":50}],
+             "clarification":"هل تقصد التقويم الميلادي أم الهجري؟",
+             "clarificationQuestion":"كم وثيقة تنتهي قبل السنة المطلوبة؟"}
+            """);
+        var searches = new Searches();
+        var entries = new Entries(73);
+        var chat = new ReportsChatService(new ConfigurationBuilder().Build(), new NoEmbeddings(), new Repository(), entries,
+            graph, Create(entries, searches), new QuestionRouter(graph), searches,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<ReportsChatService>.Instance);
+        var result = await chat.AskAsync("أقصد تاريخ السريان", default,
+            [new("user", original), new("assistant", "حدد التقويم", "clarification", original)]);
+        Assert.True(result.IsClarification);
+        Assert.Equal(original, result.ClarificationQuestion);
+        Assert.Empty(result.RelatedEntryIds);
+        var previous = System.Text.Json.JsonDocument.Parse(graph.RouteBody).RootElement.GetProperty("history")[1];
+        Assert.Equal("clarification", previous.GetProperty("kind").GetString());
+        Assert.Equal(original, previous.GetProperty("clarificationQuestion").GetString());
+    }
+
     private sealed class GraphClient(string route, bool failPresentation = false) : HttpMessageHandler, IHttpClientFactory
     {
         public List<string> Paths { get; } = [];

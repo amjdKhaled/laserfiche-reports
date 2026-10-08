@@ -87,5 +87,5 @@ internal sealed class QuestionRouter(IHttpClientFactory clients)
         return request;
     }
 }
-internal sealed record ReportRequest(QueryPlan[] Reports, string? Clarification = null);
-internal sealed record ChatTurn(string Role, string Text);
+internal sealed record ReportRequest(QueryPlan[] Reports, string? Clarification = null, string? ClarificationQuestion = null);
+internal sealed record ChatTurn(string Role, string Text, string? Kind = null, string? ClarificationQuestion = null);

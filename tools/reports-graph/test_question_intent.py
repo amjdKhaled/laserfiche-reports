@@ -198,3 +198,54 @@ class GroundedInterpretationRegressionTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
             thread.join()
+
+
+class ClarificationFollowupTests(unittest.TestCase):
+    def history(self):
+        return [{'role': 'user', 'text': 'كم سجل ينتهي قبل 2041؟'},
+                {'role': 'assistant', 'kind': 'clarification', 'clarificationQuestion': 'كم سجل ينتهي قبل 2041؟',
+                 'text': 'هل تقصد موعد انتهاء السريان الميلادي أم الهجري؟'}]
+
+    def test_selected_field_reply_keeps_original_count_and_bound(self):
+        reading = intent()
+        reading['contextMode'] = 'clarification_reply'
+        reading['outputs'][0]['upperBoundText'] = 'قبل 2041'
+        model = FakeModel([json.dumps(reading), json.dumps(indexed(query())), json.dumps(review())])
+        result = plan_reports(model, {'question': 'أقصد الميلادي', 'history': self.history(), 'catalog': CATALOG},
+                              interpret_intent=True, review_intent=True)
+        self.assertEqual(result['reports'][0]['resultType'], 'count')
+        self.assertEqual(result['reports'][0]['filters']['operator'], 'less_than')
+        self.assertEqual(json.loads(model.calls[0][1].content)['clarificationContext']['question'], self.history()[0]['text'])
+        self.assertEqual(json.loads(model.calls[2][1].content)['questionIntent']['contextMode'], 'clarification_reply')
+
+    def test_failed_answer_is_removed_and_pending_question_survives_retry(self):
+        history = [*self.history(), {'role': 'user', 'text': 'أقصد الميلادي'},
+                   {'role': 'assistant', 'kind': 'error', 'text': 'تعذر إكمال السؤال: فشل النموذج'}]
+        self.assertEqual(planning_history(history, 'أقصد الميلادي'), self.history())
+        reading = intent(); reading['contextMode'] = 'clarification_reply'
+        model = FakeModel([json.dumps(reading), json.dumps(indexed(query())), json.dumps(review())])
+        result = plan_reports(model, {'question': 'أقصد الميلادي', 'history': history, 'catalog': CATALOG},
+                              interpret_intent=True, review_intent=True)
+        self.assertEqual(result['reports'][0]['resultType'], 'count')
+        self.assertNotIn('فشل النموذج', model.calls[0][1].content)
+
+    def test_new_independent_question_cannot_quote_pending_original_request(self):
+        reading = QuestionIntent.model_validate(intent())
+        with self.assertRaises(ValueError):
+            grounded_intent(reading, 'اعرض القوالب', self.history(), {'question': self.history()[0]['text'], 'prompt': 'توضيح'})
+        with self.assertRaises(ValueError):
+            grounded_intent(QuestionIntent.model_validate({**intent(), 'contextMode': 'clarification_reply'}), 'اختيار')
+
+    def test_genuine_followup_can_quote_original_request_without_a_clarification_marker(self):
+        reading = QuestionIntent.model_validate({**intent(), 'contextMode': 'followup'})
+        self.assertIs(grounded_intent(reading, 'طيب العدد فقط', [{'role': 'user', 'text': 'كم سجل قبل 2041؟'}]), reading)
+
+    def test_another_clarification_preserves_original_request_not_short_reply(self):
+        reading = {**intent(), 'contextMode': 'clarification_reply'}
+        clarification = {'reports': [{'operation': 'clarify', 'title': 'توضيح المعيار', 'selection': {'requiresFilter': False}}],
+                         'clarification': 'حدد التقويم المقصود.'}
+        model = FakeModel([json.dumps(reading), json.dumps(clarification), json.dumps(review())])
+        result = plan_reports(model, {'question': 'أقصد تاريخ السريان', 'history': self.history(), 'catalog': CATALOG},
+                              interpret_intent=True, review_intent=True)
+        self.assertEqual(result['clarificationQuestion'], self.history()[0]['text'])
+        self.assertEqual(result['reports'][0]['operation'], 'clarify')

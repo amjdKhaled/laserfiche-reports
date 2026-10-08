@@ -314,3 +314,62 @@ test('a paragraph before a horizontal rule is not mistaken for a one-column tabl
   const node=window.ReportsMarkdown.render('نص التقرير\n---');
   assert.equal(node.querySelector('.report-table'),null);
 });
+
+test('failed clarification reply can retry in the same session with its original context', async () => {
+  const window = setup();
+  window.document.write(readFileSync(root + 'index.html', 'utf8').replace(/<script[^>]*>[\s\S]*?<\/script>/g, ''));
+  const original = 'كم وثيقة قبل السنة المطلوبة؟';
+  const requests = [];
+  let attempt = 0;
+  window.fetch = async (url, options) => {
+    if (url === '/api/session/status') return { ok: true, status: 200, json: async () => ({ authenticated: true, username: 'tester', repository: 'RepoA' }) };
+    if (url === '/api/reports/chat') {
+      requests.push(JSON.parse(options.body)); attempt++;
+      if (attempt === 1) return { ok: true, status: 200, json: async () => ({ answer: 'هل تقصد الميلادي أم الهجري؟', isClarification: true, clarificationQuestion: original, sources: [] }) };
+      if (attempt === 2) return { ok: false, status: 503, json: async () => ({ error: 'local_model_invalid_output', message: 'تعذر التخطيط' }) };
+      return { ok: true, status: 200, json: async () => ({ answer: message.text, sources: message.sources }) };
+    }
+    return { ok: true, status: 200, json: async () => ({}) };
+  };
+  window.eval(readFileSync(root + 'app.js', 'utf8'));
+  await new Promise(resolve => setTimeout(resolve, 20));
+  async function ask(question) {
+    window.document.getElementById('question').value = question;
+    window.document.getElementById('ask-form').dispatchEvent(new window.Event('submit', { cancelable: true }));
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+  await ask(original);
+  await ask('أقصد الميلادي');
+  assert.equal(window.document.getElementById('send').disabled, false);
+  assert(window.document.getElementById('login-layer').classList.contains('hidden'));
+  await ask('أقصد الميلادي');
+  assert.equal(requests.length, 3);
+  assert.equal(requests[2].history.length, 2);
+  assert.equal(requests[2].history[0].text, original);
+  assert.equal(requests[2].history[1].kind, 'clarification');
+  assert.equal(requests[2].history[1].clarificationQuestion, original);
+  assert(!requests[2].history.some(turn => turn.text.includes('تعذر التخطيط')));
+  assert.equal(window.document.getElementById('send').disabled, false);
+  assert.equal(window.document.querySelectorAll('#messages table tbody tr').length, 1);
+  await window.happyDOM.abort();
+});
+
+test('session busy is retryable without showing login but changed repository requires login', async () => {
+  const window = setup();
+  window.document.write(readFileSync(root + 'index.html', 'utf8').replace(/<script[^>]*>[\s\S]*?<\/script>/g, ''));
+  let code = 'session_busy';
+  window.fetch = async url => url === '/api/session/status'
+    ? { ok: true, status: 200, json: async () => ({ authenticated: true, username: 'tester', repository: 'RepoA' }) }
+    : { ok: false, status: 409, json: async () => ({ error: code, message: 'رسالة الجلسة' }) };
+  window.eval(readFileSync(root + 'app.js', 'utf8'));
+  await new Promise(resolve => setTimeout(resolve, 20));
+  for (const value of ['session_busy', 'session_scope_changed']) {
+    code = value;
+    window.document.getElementById('question').value = 'سؤال';
+    window.document.getElementById('ask-form').dispatchEvent(new window.Event('submit', { cancelable: true }));
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(window.document.getElementById('login-layer').classList.contains('hidden'), value === 'session_busy');
+    assert.equal(window.document.getElementById('send').disabled, false);
+  }
+  await window.happyDOM.abort();
+});

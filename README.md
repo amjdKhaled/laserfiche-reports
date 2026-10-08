@@ -601,7 +601,7 @@ Arabic questions. Unsupported calculations/calendars/criteria must be clarified,
 not silently approximated. A general question uses the entire selected repository
 unless explicitly restricted; content evidence still has retrieval coverage limits.
 
-Confirm `planner=intent-v6.4; planIntentReview=True` on restart, and
+Confirm `planner=intent-v6.5; planIntentReview=True` on restart, and
 `planIntentReview: true` in `/health`. `PLAN_INTENT_REVIEW` logs the checks. The
 additional audit normally adds one model call, and failed plans can require
 two additional calls. On slow CPU-only installations this increases latency.
@@ -688,3 +688,27 @@ Laserfiche credentials. `--stage RepositoryPlannerSchema` replays planning calls
 The trace allows diagnosing the actual model rather than inferring its reasoning
 from operation summaries. Tests still use scripted replies and cannot establish
 live model accuracy or repository totals. Table UI/formatting remain unchanged.
+
+Planner v6.5 fixes clarification replies being validated as independent questions.
+The web response marks a clarification and carries its original user question;
+the browser preserves that metadata in repository-scoped conversation history.
+The interpreter chooses current, followup or clarification_reply context. Evidence
+for a clarification reply can quote the original request and current answer, so a
+field/calendar choice need not repeat the count and year. An independent new
+question still grounds evidence in its own text. Legacy unmarked history can use
+followup context. Subsequent clarifications retain the original request.
+
+Failed exchanges are kept visible but excluded from planning history. Retrying
+an answer therefore preserves the earlier clarification rather than incorporating
+failure messages. The send control is restored when outstanding operations finish.
+HTTP 409 session_busy remains retryable in the current login; session_scope_changed
+and HTTP 401 require authentication. No table, stylesheet, export or document-link
+layout changes are made, and model/planner deadlines remain unlimited by default.
+
+This update includes C# and browser changes: stop both processes, pull the branch,
+restart the graph (confirm intent-v6.5), run the web project with a build, and refresh
+the browser with Ctrl+F5. Do not use --no-build until the new web assembly is built.
+The opt-in planner trace still records the original inputs and individual calls.
+Regression tests cover clarification replies, retry after failure in the same
+conversation/session, metadata round trips and repository-change authentication.
+They simulate model replies and do not certify the installed Qwen's semantics.

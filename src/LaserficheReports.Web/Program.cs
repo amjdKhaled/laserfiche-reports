@@ -153,7 +153,7 @@ app.Use(async (context, next) =>
     if (!await gate.WaitAsync(TimeSpan.FromSeconds(5), context.RequestAborted))
     {
         context.Response.StatusCode = 409;
-        await context.Response.WriteAsJsonAsync(new { error = "الجلسة مشغولة حاليًا. أعد المحاولة بعد قليل." });
+        await context.Response.WriteAsJsonAsync(new { error = "session_busy", message = "الجلسة مشغولة حاليًا. أعد المحاولة بعد قليل." });
         return;
     }
     acquired = true;
@@ -171,7 +171,7 @@ app.Use(async (context, next) =>
              (!string.IsNullOrEmpty(generation) && generation != context.Session.GetString("ReportsGeneration"))))
         {
             context.Response.StatusCode = 409;
-            await context.Response.WriteAsJsonAsync(new { error = "تغيّر المستودع في جلسة أخرى. أعد تسجيل الدخول إلى المستودع المطلوب." });
+            await context.Response.WriteAsJsonAsync(new { error = "session_scope_changed", message = "تغيّر المستودع في جلسة أخرى. أعد تسجيل الدخول إلى المستودع المطلوب." });
             return;
         }
         if (!context.Request.Path.StartsWithSegments("/api/session"))
