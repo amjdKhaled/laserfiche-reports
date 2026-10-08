@@ -601,7 +601,7 @@ Arabic questions. Unsupported calculations/calendars/criteria must be clarified,
 not silently approximated. A general question uses the entire selected repository
 unless explicitly restricted; content evidence still has retrieval coverage limits.
 
-Confirm `planner=intent-v6.3; planIntentReview=True` on restart, and
+Confirm `planner=intent-v6.4; planIntentReview=True` on restart, and
 `planIntentReview: true` in `/health`. `PLAN_INTENT_REVIEW` logs the checks. The
 additional audit normally adds one model call, and failed plans can require
 two additional calls. On slow CPU-only installations this increases latency.
@@ -658,3 +658,33 @@ adds one small interpretation call; it does not make the local model infallible.
 `evaluate_planner.py` exercises the same interpretation and review path as HTTP.
 The tests use scripted model responses and do not validate the user's live
 Qwen model or repository totals. The document-table UI is unchanged.
+
+Planner v6.4 corrects two shortcomings of v6.3: an interpretation could invent
+multiple outputs from one current request, and the multi-output grammar pooled
+comparison choices while the validator enforced them by report position.
+The interpreter now quotes distinct request evidence and explicit bound evidence
+from the current question. Invented, overlapping range bounds and duplicated
+requests are rejected and reinterpreted before catalog-backed planning. Exact
+repeated attempts and their responses are removed from planning history; other
+follow-up context remains. This is evidence validation, not a question-keyword
+router. Arabic instructions cover intent decomposition without repository field
+names, example years or question-specific handlers.
+
+Each output has its own indexed object/selection/filter schema, so the second
+output cannot decode the first output's comparison constraints. The transport
+normalizes indexed outputs into the unchanged backend reports array. If semantic
+review rejects the result, the interpreter can reconsider its initial reading
+instead of requiring the planner to preserve an incorrect intent forever.
+
+Timeout defaults remain zero/unlimited, including CPU-only use. To capture a
+real Qwen failure locally, add `-PlannerTracePath .\logs\planner-trace.jsonl`
+to `tools/reports-graph/start.ps1`. The opt-in file contains the original
+question/history/catalog, exact prompt messages, decoding schemas and model
+replies; no authentication headers or OCR are captured. Keep it local and review
+its metadata values before sharing. It resides under the ignored logs directory.
+`tools/reports-graph/replay_planner.py --trace logs/planner-trace.jsonl` can
+replay captured interpretation calls locally with no response timeout and no
+Laserfiche credentials. `--stage RepositoryPlannerSchema` replays planning calls.
+The trace allows diagnosing the actual model rather than inferring its reasoning
+from operation summaries. Tests still use scripted replies and cannot establish
+live model accuracy or repository totals. Table UI/formatting remain unchanged.
