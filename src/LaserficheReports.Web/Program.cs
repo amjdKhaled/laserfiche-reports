@@ -181,6 +181,11 @@ app.Use(async (context, next) =>
         }
         await next();
     }
+    catch (UnauthorizedAccessException) when (!context.Response.HasStarted)
+    {
+        context.Response.StatusCode = 401;
+        await context.Response.WriteAsJsonAsync(new { error = "session_expired", message = "تعذر تجديد جلسة Laserfiche. سجّل الدخول مرة أخرى." });
+    }
     catch (LaserficheException error) when (!context.Response.HasStarted)
     {
         context.Response.StatusCode = error.StatusCode is 401 or 403 or 404 ? error.StatusCode : 502;
@@ -300,6 +305,10 @@ app.MapPost("/api/reports/chat", async (ChatQuestion request, ReportsChatService
     {
         return Results.Ok(await chat.AskAsync(request.Question, cancellationToken, request.History));
     }
+    catch (UnauthorizedAccessException)
+    {
+        return Results.Json(new { error = "session_expired", message = "تعذر تجديد جلسة Laserfiche. سجّل الدخول مرة أخرى." }, statusCode: 401);
+    }
     catch (GraphServiceException exception)
     {
         app.Logger.LogWarning(exception, "AI dependency failed Stage={Stage} Code={Code}", exception.Stage, exception.Code);
@@ -312,9 +321,9 @@ app.MapPost("/api/reports/chat", async (ChatQuestion request, ReportsChatService
     catch (LaserficheException exception)
     {
         app.Logger.LogWarning(exception, "Laserfiche read failed Status={Status} Code={Code} RequestId={RequestId}", exception.StatusCode, exception.LFErrorCode, System.Diagnostics.Activity.Current?.Id);
-        return Results.Json(new { error = "laserfiche_unavailable",
+        return Results.Json(new { error = exception.StatusCode == 401 ? "session_expired" : "laserfiche_unavailable",
             message = RepositoryReadError.Message(exception), upstreamStatus = exception.StatusCode, diagnosticId = exception.DiagnosticId },
-            statusCode: StatusCodes.Status503ServiceUnavailable);
+            statusCode: exception.StatusCode == 401 ? StatusCodes.Status401Unauthorized : StatusCodes.Status503ServiceUnavailable);
     }
     catch (PostgresException exception)
     {
