@@ -2,7 +2,7 @@
 import json
 import unittest
 from jsonschema import Draft202012Validator, ValidationError
-from server import direct_planner_schema, planner_schema_for_catalog, plan_reports
+from server import direct_planner_schema, planner_schema_for_catalog, plan_reports, planner_request, validate_plan_schema
 from test_graph import FakeModel
 from test_plan_intent_review import review
 
@@ -14,7 +14,7 @@ class LivePlannerTests(unittest.TestCase):
         schema = direct_planner_schema(CATALOG).model_json_schema()
         Draft202012Validator.check_schema(schema)
         validator = Draft202012Validator(schema)
-        plan = {'reports': [{'operation': 'search', 'title': 'العدد', 'countOnly': True,
+        plan = {'contextMode': 'current', 'reports': [{'operation': 'search', 'title': 'العدد', 'countOnly': True,
                 'selection': {'requiresFilter': True, 'filters': {
                     'field': 'انتهاء صلاحية السجل', 'operator': 'less_than', 'value': '2042-01-01'}}}]}
         validator.validate(plan)
@@ -53,3 +53,62 @@ class LivePlannerTests(unittest.TestCase):
         self.assertEqual(len(model.calls), 2)
         self.assertEqual(result['reports'][0]['resultType'], 'count')
         self.assertEqual(result['reports'][0]['filters']['value'], '2042-01-01')
+
+
+class LiveTagTests(unittest.TestCase):
+    def test_tag_namespace_is_dynamic_and_distinct_from_metadata(self):
+        catalog = {**CATALOG, 'tags': [{'name': 'بحاجة لمراجعة'}, {'name': 'تم اعتماده'}], 'tagStatus': 'complete'}
+        schema = direct_planner_schema(catalog).model_json_schema()
+        validator = Draft202012Validator(schema)
+        draft = {'contextMode': 'current', 'reports': [{'operation': 'search', 'title': 'النتائج',
+            'countOnly': True, 'selection': {'requiresFilter': True, 'filters': {'logic': 'and', 'conditions': [
+                {'tag': 'بحاجة لمراجعة', 'operator': 'has_tag'},
+                {'tag': 'تم اعتماده', 'operator': 'not_tag'},
+                {'field': 'انتهاء صلاحية السجل', 'operator': 'less_than', 'value': '2042-01-01'}]}}}]}
+        validator.validate(draft)
+        parsed = planner_request(json.dumps(draft), 'عدد المطابقة')
+        validate_plan_schema(parsed, catalog)
+        self.assertEqual(parsed.reports[0].filters.conditions[0].tag, 'بحاجة لمراجعة')
+        unknown = json.loads(json.dumps(draft))
+        unknown['reports'][0]['selection']['filters']['conditions'][0]['tag'] = 'غير معرف'
+        with self.assertRaises(ValidationError): validator.validate(unknown)
+        with self.assertRaises(ValueError): validate_plan_schema(planner_request(json.dumps(unknown), 'عدد المطابقة'), catalog)
+        metadata = json.loads(json.dumps(draft))
+        metadata['reports'][0]['selection']['filters']['conditions'][0] = {
+            'field': 'بحاجة لمراجعة', 'operator': 'equals', 'value': 'نعم'}
+        with self.assertRaises(ValidationError): validator.validate(metadata)
+        with self.assertRaises(ValueError): validate_plan_schema(planner_request(json.dumps(metadata), 'عدد المطابقة'), catalog)
+        without_tags = direct_planner_schema(CATALOG).model_json_schema()
+        with self.assertRaises(ValidationError): Draft202012Validator(without_tags).validate(draft)
+
+    def test_catalog_and_predicate_reach_reviewer_without_fixed_tag_names(self):
+        catalog = {'fields': [], 'tags': [{'name': 'قيد الفحص', 'description': 'وسم عمل محلي'}], 'tagStatus': 'complete'}
+        draft = {'contextMode': 'current', 'reports': [{'operation': 'search', 'title': 'العدد', 'countOnly': True,
+            'selection': {'requiresFilter': True, 'filters': {'tag': 'قيد الفحص', 'operator': 'has_tag'}}}]}
+        model = FakeModel([json.dumps(draft), json.dumps(review())])
+        result = plan_reports(model, {'question': 'كم منها قيد الفحص؟', 'catalog': catalog}, review_intent=True)
+        self.assertEqual(result['reports'][0]['filters']['tag'], 'قيد الفحص')
+        for call in model.calls:
+            sent = json.loads(call[1].content)
+            self.assertEqual(sent['catalog']['tagStatus'], 'complete')
+            self.assertEqual(sent['catalog']['tags'], catalog['tags'])
+        reviewed = json.loads(model.calls[1][1].content)
+        self.assertEqual(reviewed['contextMode'], 'current')
+        self.assertEqual(reviewed['proposedPlan']['reports'][0]['filters']['tag'], 'قيد الفحص')
+
+    def test_invalid_mixed_tag_and_field_predicate_never_executes(self):
+        draft = {'reports': [{'operation': 'search', 'title': 'العدد', 'selection': {'requiresFilter': True,
+            'filters': {'tag': 'وسم', 'field': 'التكلفة', 'operator': 'has_tag', 'value': '1'}}}]}
+        with self.assertRaises(ValueError):
+            validate_plan_schema(planner_request(json.dumps(draft), 'طلب'), {**CATALOG, 'tags': [{'name': 'وسم'}]})
+
+    def test_new_question_does_not_inherit_pending_clarification_root(self):
+        previous = 'كم وثيقة قبل السنة المحددة؟'
+        history = [{'role': 'user', 'text': previous}, {'role': 'assistant', 'kind': 'clarification',
+            'text': 'أي سنة؟', 'clarificationQuestion': previous}]
+        for mode, expected in [('current', 'أعطني تقريرًا آخر'), ('clarification_reply', previous)]:
+            draft = {'contextMode': mode, 'reports': [{'operation': 'clarify', 'title': 'توضيح',
+                'selection': {'requiresFilter': False}}], 'clarification': 'أي تاريخ تريد؟'}
+            result = plan_reports(FakeModel([json.dumps(draft)]), {'question': 'أعطني تقريرًا آخر',
+                'history': history, 'catalog': CATALOG}, review_intent=True)
+            self.assertEqual(result['clarificationQuestion'], expected)

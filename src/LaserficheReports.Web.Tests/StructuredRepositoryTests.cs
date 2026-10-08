@@ -8,6 +8,24 @@ namespace LaserficheReports.Web.Tests;
 public class StructuredRepositoryTests
 {
     [Fact]
+    public void TagsCompileFromLiveDefinitionsWithAndOrAndExclusion()
+    {
+        string[] tags = ["قيد الفحص", "معتمد"];
+        var filter = new RepositoryFilter(Logic: "and", Conditions: [
+            new(Tag: "قيد الفحص", Operator: "has_tag"),
+            new(Tag: "معتمد", Operator: "not_tag"),
+            new("موعد الإنجاز", "less_than", "2042-01-01")]);
+        Assert.Equal("({LF:Tags=\"قيد الفحص\"} & ({LF:Name=\"*\", Type=DF} - {LF:Tags=\"معتمد\"}) & {[]:[موعد الإنجاز]<\"2042-01-01\"})",
+            StructuredRepositoryQuery.Compile(filter, Schema, Today, tags: tags));
+        Assert.Throws<ArgumentException>(() => StructuredRepositoryQuery.Compile(filter, Schema, Today));
+        Assert.Throws<ArgumentException>(() => StructuredRepositoryQuery.Compile(new(Tag: "غير معرف", Operator: "has_tag"), Schema, Today, tags: tags));
+        Assert.Throws<ArgumentException>(() => StructuredRepositoryQuery.Compile(new(Field: "القسم", Tag: "قيد الفحص", Operator: "has_tag"), Schema, Today, tags: tags));
+        Assert.Throws<ArgumentException>(() => StructuredRepositoryQuery.Compile(new(Tag: "قيد الفحص", Operator: "equals", Value: "نعم"), Schema, Today, tags: tags));
+        Assert.Equal("({LF:Tags=\"قيد الفحص\"} | {LF:Tags=\"معتمد\"})", StructuredRepositoryQuery.Compile(
+            new(Logic: "or", Conditions: [new(Tag: "قيد الفحص", Operator: "has_tag"), new(Tag: "معتمد", Operator: "has_tag")]), Schema, Today, tags: tags));
+    }
+
+    [Fact]
     public void DocumentIntentRejectsAggregationAndMissingSelectionBeforeLiveExecution()
     {
         Assert.Throws<ArgumentException>(() => new QueryPlan("group", ResultType: "documents").ValidateIntent());

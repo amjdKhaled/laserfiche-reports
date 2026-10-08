@@ -98,6 +98,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ITextEmbeddingService, OllamaTextEmbeddingService>();
         services.AddScoped<ILaserficheDocumentIngestionService, LaserficheDocumentIngestionService>();
         services.AddScoped<ILaserficheTemplateService, LaserficheTemplateService>();
+        services.AddScoped<ILaserficheTagDefinitionService, LaserficheTagDefinitionService>();
         services.AddScoped<LaserficheAnalyticsService>();
         services.AddScoped<ILaserficheAnalyticsService, CachedLaserficheAnalyticsService>();
 

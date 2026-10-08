@@ -248,6 +248,16 @@ app.MapGet("/api/embeddings/status", async (ITextEmbeddingService embeddings,
     }
 });
 
+// Read-only diagnostics use the same selected repository and active session as chat.
+app.MapGet("/api/reports/planning-catalog", async (LiveRepositoryReportService reports,
+    IRepositoryContext repositories, ISessionCredentialStore sessions, CancellationToken cancellationToken) =>
+{
+    if (await sessions.TryGetAsync(cancellationToken) is null) return Results.Unauthorized();
+    var repository = await repositories.GetActiveRepositoryAsync(cancellationToken);
+    return Results.Ok(new { repositoryId = repository.RepositoryId, generatedAt = DateTimeOffset.UtcNow,
+        catalog = await reports.CatalogAsync(cancellationToken) });
+});
+
 app.MapGet("/api/reports/documents", async (int? page, string? search, ReportsChatService chat,
     ISessionCredentialStore sessions, CancellationToken cancellationToken) =>
 {

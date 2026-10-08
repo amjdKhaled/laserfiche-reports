@@ -6,7 +6,7 @@ namespace LaserficheReports.Web;
 internal sealed record RelativeDate(string Anchor = "today", string Unit = "day", int Offset = 0, string Boundary = "start");
 internal sealed record RepositoryFilter(string? Field = null, string? Operator = null, string? Value = null,
     string? Upper = null, RelativeDate? Relative = null, RelativeDate? UpperRelative = null,
-    string? Logic = null, RepositoryFilter[]? Conditions = null);
+    string? Logic = null, RepositoryFilter[]? Conditions = null, string? Tag = null);
 internal sealed record GroupDimension(string Field, string? Bucket = null);
 internal sealed record AggregateMetric(string Function, string? Field = null);
 internal sealed record AggregateHaving(int Metric, string Operator, decimal Value);
@@ -58,15 +58,25 @@ internal static class StructuredRepositoryQuery
     internal static bool IsDate(string type) => type.Equals("Date", StringComparison.OrdinalIgnoreCase) || type.Equals("DateTime", StringComparison.OrdinalIgnoreCase);
     internal static bool IsNumber(string type) => new[] { "Integer", "LongInteger", "Number", "Decimal", "Double", "ShortInteger", "Long", "Short" }.Contains(type, StringComparer.OrdinalIgnoreCase);
 
-    internal static string Compile(RepositoryFilter filter, IEnumerable<LFFieldDefinition> schema, DateOnly today, int depth = 0)
+    internal static string Compile(RepositoryFilter filter, IEnumerable<LFFieldDefinition> schema, DateOnly today, int depth = 0, IEnumerable<string>? tags = null)
     {
         if (depth > 5) throw new ArgumentException("الفلاتر متداخلة أكثر من الحد المسموح.");
         if (filter.Conditions is { } conditions)
         {
             if (filter.Logic is not ("and" or "or") || conditions.Length is < 1 or > 20 || filter.Field != null || filter.Operator != null ||
-                filter.Value != null || filter.Upper != null || filter.Relative != null || filter.UpperRelative != null)
+                filter.Value != null || filter.Upper != null || filter.Relative != null || filter.UpperRelative != null || filter.Tag != null)
                 throw new ArgumentException("مجموعة شروط غير صالحة.");
-            return "(" + string.Join(filter.Logic == "and" ? " & " : " | ", conditions.Select(c => Compile(c, schema, today, depth + 1))) + ")";
+            return "(" + string.Join(filter.Logic == "and" ? " & " : " | ", conditions.Select(c => Compile(c, schema, today, depth + 1, tags))) + ")";
+        }
+        if (filter.Tag is not null)
+        {
+            if (filter.Operator is not ("has_tag" or "not_tag") || filter.Field != null || filter.Logic != null ||
+                filter.Value != null || filter.Upper != null || filter.Relative != null || filter.UpperRelative != null)
+                throw new ArgumentException("شرط الوسم غير صالح.");
+            if (tags is null || !tags.Contains(filter.Tag, StringComparer.Ordinal))
+                throw new ArgumentException("الوسم غير موجود في تعريفات المستودع الحالية: " + filter.Tag);
+            var clause = $"{{LF:Tags=\"{LiveRepositoryReportService.Term(filter.Tag)}\"}}";
+            return filter.Operator == "has_tag" ? clause : $"({{LF:Name=\"*\", Type=DF}} - {clause})";
         }
         if (filter.Field is null || filter.Logic != null) throw new ArgumentException("حدد حقل الشرط.");
         var field = filter.Field;

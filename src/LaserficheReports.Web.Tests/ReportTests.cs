@@ -12,6 +12,35 @@ namespace LaserficheReports.Web.Tests;
 public class ReportTests
 {
     [Fact]
+    public async Task LiveTagSelectionKeepsOriginalTableAndUsesCurrentCatalog()
+    {
+        var queries = new Searches();
+        var tags = new Tags();
+        var service = new LiveRepositoryReportService(new Entries(73), queries, new Definitions(), new Templates(),
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<LiveRepositoryReportService>.Instance, tags);
+        var catalog = System.Text.Json.JsonSerializer.SerializeToElement(await service.CatalogAsync(default));
+        Assert.Equal("complete", catalog.GetProperty("tagStatus").GetString());
+        Assert.Equal("قيد الفحص", catalog.GetProperty("tags")[0].GetProperty("Name").GetString());
+        var answer = await service.CreateAsync("repo", new QueryPlan("search", AllResults: true,
+            Filters: new(Tag: "قيد الفحص", Operator: "has_tag"), RequiresFilter: true, ResultType: "documents"), [], default);
+        Assert.Equal("{LF:Name=\"*\", Type=D} & {LF:Tags=\"قيد الفحص\"}", queries.Expression);
+        Assert.True(queries.ReadAll);
+        Assert.Equal(73, answer.RelatedEntryIds.Length);
+        Assert.Contains("| رقم الوثيقة | اسم الوثيقة | تاريخ الإنشاء | آخر تعديل | عدد الصفحات | المرجع |", answer.Answer);
+        Assert.Contains("الوسم: قيد الفحص", answer.Answer);
+        Assert.Equal(1, tags.Calls);
+        await Assert.ThrowsAsync<ArgumentException>(() => service.CreateAsync("repo", new QueryPlan("search",
+            Filters: new(Tag: "غير معرف", Operator: "has_tag"), CountOnly: true), [], default));
+    }
+
+    private sealed class Tags : ILaserficheTagDefinitionService
+    {
+        public int Calls { get; private set; }
+        public Task<IReadOnlyList<LFTagDefinition>> GetTagDefinitionsAsync(CancellationToken ct = default)
+        { Calls++; return Task.FromResult<IReadOnlyList<LFTagDefinition>>([new(1, "قيد الفحص")]); }
+    }
+
+    [Fact]
     public async Task ContentRefreshCompletesBeforeRetrievalAndPropagatesFailure()
     {
         var ingestion = new RefreshIngestion();

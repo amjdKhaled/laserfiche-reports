@@ -601,7 +601,7 @@ Arabic questions. Unsupported calculations/calendars/criteria must be clarified,
 not silently approximated. A general question uses the entire selected repository
 unless explicitly restricted; content evidence still has retrieval coverage limits.
 
-Confirm `planner=live-plan-v7.0; planIntentReview=True` on restart, and
+Confirm `planner=live-plan-v7.1; planIntentReview=True` on restart, and
 `planIntentReview: true` in `/health`. `PLAN_INTENT_REVIEW` logs the checks. The
 additional audit normally adds one model call, and failed plans can require
 two additional calls. On slow CPU-only installations this increases latency.
@@ -737,7 +737,7 @@ means waiting for extraction/embedding, not instantaneous OCR. Results are not a
 transactional snapshot during concurrent repository edits. This does not make sampled
 content retrieval an exact repository-wide count.
 
-Restart both services after pulling and confirm `planner=live-plan-v7.0`. Run the web
+Restart both services after pulling and confirm `planner=live-plan-v7.1`. Run the web
 project with a build (do not use `--no-build`). Keep `-PlannerTracePath` enabled for
 acceptance with the real model. `replay_planner.py` now defaults to `LivePlannerSchema`
 and preserves schema embedding when replaying new traces; old stages can be selected
@@ -746,3 +746,41 @@ The automated tests exercise contracts, mock model failures and refresh ordering
 they do not prove semantic correctness of Qwen or actual repository counts. Validate
 natural-language questions against known live entries and expected counts, and test
 adding/modifying a document then repeating the same report.
+
+### Live planner v7.1: current tag definitions and clarification ownership
+
+The catalog now reads every page of the active repository's `TagDefinitions`
+on each request, alongside live fields and templates. The typed filter grammar
+supports `has_tag` and `not_tag`, including AND/OR combinations with field filters.
+Tag names are validated against current definitions and compiled by the backend;
+the model cannot submit raw search syntax. No tag, field or question is mapped in
+code. A denied or unsupported tag-definition endpoint is marked `unavailable`,
+not represented as a complete empty catalog. Authentication failures still fail.
+
+The same planning call identifies whether the current message starts a question,
+continues a report or answers a pending clarification. A new question's clarification
+no longer inherits an unrelated old question. This does not add another model call.
+Table rendering and default unlimited AI deadlines are unchanged.
+
+Laserfiche's search UI includes capabilities not yet represented by these tools,
+including version-specific conditions, records-management disposition, digital
+signatures and business-process predicates. The planner is instructed to explain
+missing capabilities instead of substituting an unrelated metadata condition.
+Supporting tags does not establish correctness of date-field interpretation by
+the real model; automated tests use controlled catalogs and model responses.
+
+To capture a real failed request, restart **both** the web application (with a build)
+and the graph, reproduce the question, and collect the local planning diagnostic:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\reports-graph\start.ps1 -Model qwen2.5:7b -TimeoutSeconds 0 -PlannerTimeoutSeconds 0 -PlannerTracePath .\logs\planner-trace.jsonl
+# After reproducing the question, run in another terminal at the repository root:
+powershell -ExecutionPolicy Bypass -File .\tools\reports-graph\diagnose.ps1
+```
+
+`logs/planner-diagnostics.json` contains the latest request's question, conversation,
+live catalog, individual model calls and graph version. It does not collect API
+credentials, cookies or OCR. Its repository metadata and question text may be
+sensitive; share only with the person diagnosing the report. The authenticated
+read-only `/api/reports/planning-catalog` endpoint also exposes the current catalog
+from the same selected repository and session as chat.

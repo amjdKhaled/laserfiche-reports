@@ -9,7 +9,7 @@ namespace LaserficheReports.Web;
 /// <summary>Validated, live tools. Search executes on the repository, never by walking its folders.</summary>
 internal sealed class LiveRepositoryReportService(ILaserficheEntryService entries,
     ILaserficheSearchService searches, ILaserficheFieldDefinitionService fields,
-    ILaserficheTemplateService templates, ILogger<LiveRepositoryReportService> logger)
+    ILaserficheTemplateService templates, ILogger<LiveRepositoryReportService> logger, ILaserficheTagDefinitionService? tagDefinitions = null)
 {
     internal const string Documents = "{LF:Name=\"*\", Type=D}";
     internal static string Term(string value, bool field = false)
@@ -23,6 +23,16 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
 
     private IReadOnlyDictionary<int, LFFieldDefinition>? schema;
     private IReadOnlyList<LFTemplateDefinition>? templateSchema;
+    private IReadOnlyList<LFTagDefinition>? tagSchema;
+    private Task<IReadOnlyList<LFTagDefinition>> TagsAsync(CancellationToken ct) => tagSchema is not null
+        ? Task.FromResult(tagSchema) : LoadTagsAsync(ct);
+    private async Task<IReadOnlyList<LFTagDefinition>> LoadTagsAsync(CancellationToken ct) => tagSchema =
+        tagDefinitions is null ? throw new InvalidOperationException("Tag definitions are unavailable.")
+        : await tagDefinitions.GetTagDefinitionsAsync(ct);
+    private static bool UsesTags(RepositoryFilter filter) => filter.Tag != null || (filter.Conditions?.Any(UsesTags) ?? false);
+    private async Task<string[]?> FilterTagsAsync(RepositoryFilter filter, CancellationToken ct) =>
+        UsesTags(filter) ? (await TagsAsync(ct)).Select(t => t.Name).ToArray() : null;
+
     private async Task<IReadOnlyList<LFTemplateDefinition>> TemplatesAsync(CancellationToken ct) => templateSchema ??= await templates.GetTemplateDefinitionsAsync(ct);
     private Task<IReadOnlyDictionary<int, LFFieldDefinition>> SchemaAsync(CancellationToken ct) => schema is null ? LoadSchemaAsync(ct) : Task.FromResult(schema);
     private async Task<IReadOnlyDictionary<int, LFFieldDefinition>> LoadSchemaAsync(CancellationToken ct) => schema = await fields.GetFieldDefinitionsAsync(ct);
@@ -68,7 +78,7 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
             throw new ArgumentException("نطاق الطلب غير صالح. حدد حتى 50 وثيقة وحجم نتائج بين 1 و200.");
         var expression = plan.Operation == "folders" || plan.EntryType == "folder" ? "{LF:Name=\"*\", Type=F}" :
             plan.EntryType == "all" ? "{LF:Name=\"*\", Type=DF}" : Documents;
-        if (plan.Filters != null) expression += " & " + StructuredRepositoryQuery.Compile(plan.Filters, (await SchemaAsync(ct)).Values, RepositoryDates.Today());
+        if (plan.Filters != null) expression += " & " + StructuredRepositoryQuery.Compile(plan.Filters, (await SchemaAsync(ct)).Values, RepositoryDates.Today(), tags: await FilterTagsAsync(plan.Filters, ct));
         if (ids.Count > 0) expression += " & (" + string.Join(" | ", ids.Select(id => $"{{LF:ID={id}}}")) + ")";
         string? requestedField = null;
         string? filterClause = null;
@@ -148,11 +158,11 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
         if (plan.Filters is not null && result.IsTotalCountExact && result.TotalCount == 0)
         {
             var definitions = (await SchemaAsync(ct)).Values;
-            var original = StructuredRepositoryQuery.Compile(plan.Filters, definitions, RepositoryDates.Today());
+            var original = StructuredRepositoryQuery.Compile(plan.Filters, definitions, RepositoryDates.Today(), tags: await FilterTagsAsync(plan.Filters, ct));
             using var recoveryBudget = CancellationTokenSource.CreateLinkedTokenSource(ct);
             recoveryBudget.CancelAfter(TimeSpan.FromSeconds(300));
             var recovered = await RecoverTextValuesAsync(plan.Filters, expression, original, recoveryBudget.Token);
-            var replacement = StructuredRepositoryQuery.Compile(recovered, definitions, RepositoryDates.Today());
+            var replacement = StructuredRepositoryQuery.Compile(recovered, definitions, RepositoryDates.Today(), tags: await FilterTagsAsync(recovered, ct));
             if (replacement != original)
                 result = await searches.QueryAsync(expression.Replace(" & " + original, " & " + replacement, StringComparison.Ordinal),
                     readAll ? 1 : plan.Page, plan.Limit, Sort(plan), requestedField, readAll, ct, projection);
@@ -300,6 +310,7 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
         {
             if (node.Conditions is { } children)
                 return "(" + string.Join(node.Logic == "or" ? " أو " : " و ", children.Select(Filter)) + ")";
+            if (node.Tag != null) return (node.Operator == "not_tag" ? "بدون الوسم: " : "الوسم: ") + node.Tag;
             var comparison = node.Operator switch
             {
                 "equals" => "يساوي", "not_equals" => "لا يساوي", "less_than" or "date_before" => "قبل / أقل من",
@@ -324,9 +335,20 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
 
     internal async Task<object> CatalogAsync(CancellationToken ct)
     {
+        IReadOnlyList<LFTagDefinition> currentTags = [];
+        var tagStatus = "unavailable";
+        async Task ReadTagsAsync()
+        {
+            if (tagDefinitions is null) return;
+            try { currentTags = await TagsAsync(ct); tagStatus = "complete"; }
+            catch (Exception error) when (!ct.IsCancellationRequested && error is
+                LaserficheReports.Domain.Exceptions.LaserficheException { StatusCode: 403 or 404 or 405 } or HttpRequestException)
+            { logger.LogWarning("Stage=TAG_CATALOG Status=unavailable ErrorType={ErrorType}", error.GetType().Name); }
+        }
+        var tagTask = ReadTagsAsync();
         var schemaTask = SchemaAsync(ct);
         var templatesTask = TemplatesAsync(ct);
-        await Task.WhenAll(schemaTask, templatesTask);
+        await Task.WhenAll(schemaTask, templatesTask, tagTask);
         var definitions = await schemaTask;
         var templateDefinitions = await templatesTask;
         // Values disambiguate similarly named fields and calendar variants. This
@@ -356,7 +378,7 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
             logger.LogWarning("Stage=FIELD_SAMPLE Status=unavailable ErrorType={ErrorType}", error.GetType().Name);
         }
         return new { tool = "GetRepositorySchema", fields = definitions.Values.Select(f => new { f.Name, f.FieldType, f.IsMultiValue, f.IsRequired, description = string.IsNullOrWhiteSpace(f.Description) ? null : f.Description[..Math.Min(f.Description.Length, 160)] }).Distinct().ToArray(),
-            fieldSamples = samples, sampleStatus,
+            fieldSamples = samples, sampleStatus, tags = currentTags.Select(t => new { t.Name, t.Description }).ToArray(), tagStatus,
             templates = templateDefinitions.Select(t => t.Name).ToArray(), entryProperties = StructuredRepositoryQuery.Builtins,
             tools = new[] { "SearchEntries", "AggregateEntries", "GetEntry", "GetEntryMetadata", "GetFolderContents", "GetTemplates", "GetRepositorySchema", "GetFolderInformation", "GetOcrContent" } };
     }
