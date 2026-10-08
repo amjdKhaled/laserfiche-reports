@@ -762,6 +762,53 @@ def planner_schema_for_catalog(catalog, intent=None):
     return RepositoryPlannerSchema
 
 
+
+def direct_planner_schema(catalog):
+    """One live planning contract; no fallible intent output controls its grammar."""
+    class LivePlannerSchema:
+        @staticmethod
+        def model_json_schema():
+            contract = planner_schema_for_catalog(catalog).model_json_schema()
+            # Selection variants used to duplicate all properties five times.
+            # Share them, retaining the requirement for a real selector.
+            choices = contract["$defs"]["Selection"]["anyOf"]
+            restricted = choices[1:]
+            if restricted:
+                contract["$defs"]["Selection"] = {"anyOf": [choices[0], {
+                    "type": "object", "properties": restricted[0]["properties"],
+                    "required": ["requiresFilter"], "additionalProperties": False,
+                    "anyOf": [{"required": [v["required"][1]]} for v in restricted]}]}
+            # Only definitions reachable from the public contract belong in the
+            # prompt/grammar. Legacy RoutePlan and backend DTOs are not tools.
+            definitions = contract["$defs"]
+            used = set()
+            def visit(node):
+                if isinstance(node, dict):
+                    ref = node.get("$ref", "")
+                    if ref.startswith("#/$defs/"):
+                        name = ref.split("/")[-1]
+                        if name not in used:
+                            used.add(name)
+                            visit(definitions[name])
+                    for key, value in node.items():
+                        if key != "$defs": visit(value)
+                elif isinstance(node, list):
+                    for value in node: visit(value)
+            visit(contract)
+            contract["$defs"] = {key: value for key, value in definitions.items() if key in used}
+            return contract
+    return LivePlannerSchema
+
+
+DIRECT_PLAN_SYSTEM = ROUTE_SYSTEM.replace(
+    "use the current question as its answer only when questionIntent.contextMode=clarification_reply",
+    "use the current question as its answer when it answers that pending clarification").replace(
+    "When questionIntent is supplied, return outputs={output0:{operation,title,selection,...},output1:...} in the SAME order, one object per requested output. Otherwise return reports=[{operation,title,selection,...}].",
+    "Return reports=[{operation,title,selection,...}], one per independently requested output.").replace(
+    "questionIntent is an independent reading of the requested outputs and bounds; preserve it while mapping to LIVE fields. ", "") + """
+خطط مباشرة من سؤال المستخدم وكتالوج المستودع. استخلص المطلوب والشروط معًا، ولا تفصل شرطًا عن نتيجته في تقرير مستقل. الوصف المختصر أو الخطأ الإملائي لا يستلزم كتابة اسم الحقل حرفيًا؛ طابق معناه بالاسم الكامل والنوع والوصف في الكتالوج. استخدم تقويم السؤال أو اختيار المستخدم في المحادثة. عند وجود clarificationContext، افهم هل الرسالة الحالية تجيب عنه أم تطلب تقريرًا جديدًا، واحتفظ بطلبه الأصلي فقط إذا كانت جوابًا عنه. اطلب توضيحًا فقط عند وجود بدائل حقيقية تؤثر في النتائج، واذكر البدائل المحددة. لا تطلب من المستخدم إعادة صياغة تاريخ مفهوم بتنسيق تقني. عقد JSON المرفق يحدد الأدوات الفعلية المتاحة وليس حقول المستودع المطلوبة في السؤال.
+"""
+
 def planner_request(content, question=None):
     raw = json.loads(content)
     if isinstance(raw, dict) and "outputs" in raw:
@@ -920,11 +967,11 @@ def plan_reports(model, payload, *, budget_seconds=None, max_tokens=1536, review
     # Opt-in local diagnostics contain only planning data, never API headers,
     # credentials or OCR. Preserve inputs to reproduce the real model failure.
     write_planner_trace(trace_path, {"stage": "route_input", "payload": payload,
-        "model": getattr(model, "model", type(model).__name__), "plannerVersion": "intent-v6.5"})
+        "model": getattr(model, "model", type(model).__name__), "plannerVersion": "live-plan-v7.0"})
     # Plan against every authoritative field/template name, without long descriptions.
     # Never shortlist names by keywords: that could hide a field needed by the AI.
     payload = dict(payload)
-    if interpret_intent:
+    if interpret_intent or payload.get("history"):
         payload["history"] = planning_history(payload.get("history"), payload["question"])
     catalog = payload.get("catalog") or {}
     payload["catalog"] = {
@@ -948,11 +995,14 @@ def plan_reports(model, payload, *, budget_seconds=None, max_tokens=1536, review
     clarification_context = pending_clarification(payload.get("history", []))
     if clarification_context:
         model_payload["clarificationContext"] = clarification_context
-    messages = [SystemMessage(content=ROUTE_SYSTEM),
+    messages = [SystemMessage(content=ROUTE_SYSTEM if interpret_intent else DIRECT_PLAN_SYSTEM),
                 HumanMessage(content=json.dumps(model_payload, ensure_ascii=False, separators=(",", ":")))]
     def invoke_plan(call_messages, schema, tokens, diagnostics=False):
         input_bytes = sum(len(str(m.content).encode("utf-8")) for m in call_messages)
-        context_size = 8192 if input_bytes < 16000 else 16384
+        embed_contract = not interpret_intent
+        if embed_contract:
+            input_bytes += len(json.dumps(compact_schema(schema.model_json_schema()), ensure_ascii=False).encode("utf-8"))
+        context_size = max(8192, ((input_bytes // 2 + tokens + 2047) // 2048) * 2048) if embed_contract else (8192 if input_bytes < 16000 else 16384)
         remaining = None if budget_seconds is None else budget_seconds - (time.monotonic() - started)
         if remaining is not None and remaining <= 0:
             raise TimeoutError("Planning deadline exhausted")
@@ -965,12 +1015,12 @@ def plan_reports(model, payload, *, budget_seconds=None, max_tokens=1536, review
                                 keep_alive=model.keep_alive,
                                 client_kwargs={"trust_env": False, "timeout": Timeout(remaining, connect=5 if remaining is None else min(5, remaining))})
         trace = ({"stage": schema.__name__, "messages": [{"role": message.type, "content": message.content} for message in call_messages],
-                 "schema": compact_schema(schema.model_json_schema()), "options": {"num_ctx": context_size, "num_predict": tokens, "temperature": 0}}
+                 "schema": compact_schema(schema.model_json_schema()), "embedSchema": embed_contract, "options": {"num_ctx": context_size, "num_predict": tokens, "temperature": 0}}
                  if trace_path else None)
         call_started = time.monotonic() if trace_path else None
         try:
             result = invoke_structured(target, call_messages, schema, max_tokens=tokens, compact=True,
-                                     num_ctx=context_size, diagnostics=diagnostics, embed_schema=False, stream=False)
+                                     num_ctx=context_size, diagnostics=diagnostics, embed_schema=embed_contract, stream=False)
             if trace_path:
                 write_planner_trace(trace_path, {**trace, "response": result, "durationMs": int((time.monotonic() - call_started) * 1000)})
             return result
@@ -1008,14 +1058,14 @@ def plan_reports(model, payload, *, budget_seconds=None, max_tokens=1536, review
     def response_with_context(request):
         if all(plan.operation == "clarify" for plan in request.reports):
             previous = next((turn["text"] for turn in reversed(payload.get("history", [])) if turn.get("role") == "user"), None)
-            request.clarificationQuestion = (clarification_context["question"] if intent is not None and intent.contextMode == "clarification_reply"
+            request.clarificationQuestion = (clarification_context["question"] if clarification_context and (intent is None or intent.contextMode == "clarification_reply")
                 else previous if intent is not None and intent.contextMode == "followup" and previous else payload["question"])
         return request.model_dump(by_alias=True)
     if interpret_intent:
         intent = interpret_question()
         set_intent(intent)
     for attempt in range(2):
-        content = invoke_plan(messages, planner_schema_for_catalog(payload["catalog"], intent), max_tokens, True)
+        content = invoke_plan(messages, planner_schema_for_catalog(payload["catalog"], intent) if interpret_intent else direct_planner_schema(payload["catalog"]), max_tokens, True)
         validation_started = time.monotonic()
         semantic_rejection = False
         try:
@@ -1029,7 +1079,7 @@ def plan_reports(model, payload, *, budget_seconds=None, max_tokens=1536, review
             validate_plan_schema(request, payload["catalog"])
             if intent is not None:
                 validate_question_intent(request, intent)
-            if review_intent:
+            if review_intent and not (not interpret_intent and all(p.operation == "clarify" for p in request.reports)):
                 reviewed_plan = request.model_dump(by_alias=True, exclude_none=True, exclude_defaults=True)
                 # Preserve explicit date anchors/boundaries for the reviewer;
                 # removing nested defaults can turn today's bound into {}.
@@ -1058,7 +1108,7 @@ def plan_reports(model, payload, *, budget_seconds=None, max_tokens=1536, review
                         return response_with_context(safe)
                     raise ValueError("Intent review rejected plan: " + json.dumps(
                         {"checks": checks, "issues": review.issues, "clarification": review.clarification}, ensure_ascii=False))
-            print("Stage=PLANNER_VALIDATED RequestId=" + REQUEST_ID.get() + " Version=intent-v6.5 Attempt=" + str(attempt + 1) + " Plans=" + json.dumps([
+            print("Stage=PLANNER_VALIDATED RequestId=" + REQUEST_ID.get() + " Version=live-plan-v7.0 Attempt=" + str(attempt + 1) + " Plans=" + json.dumps([
                 {"resultType": p.resultType, "operation": p.operation, "requiresFilter": p.requiresFilter,
                  "hasFilter": bool(p.filters or p.field or p.template or p.folderId or p.folderName or p.name or p.entryIds or p.from_),
                  "allResults": p.allResults, "countOnly": p.countOnly,
@@ -1309,7 +1359,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(HTTPStatus.SERVICE_UNAVAILABLE, {"status": "unavailable", "error": error})
         return self.send_json(HTTPStatus.OK, {"status": "ready", "model": self.model_name,
             "modelTimeoutSeconds": self.model_timeout_seconds, "plannerTimeoutSeconds": self.planner_timeout_seconds, "engine": "LangGraph",
-            "routingVersion": "schema-agent-v5", "plannerVersion": "intent-v6.5", "planIntentReview": self.review_plans,
+            "routingVersion": "schema-agent-v5", "plannerVersion": "live-plan-v7.0", "planIntentReview": self.review_plans,
             "promptVersion": PROMPT_VERSION, "capabilities": ["schema-output", "structured-filters", "backend-dates", "aggregation", "follow-up", "focused-context", "plan-intent-review", "optional-semantic-review"]})
 
     def do_POST(self):
@@ -1353,7 +1403,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if self.path == "/route":
                 result = plan_reports(self.model, payload, budget_seconds=self.planner_timeout_seconds or None,
-                                      max_tokens=self.planner_output_tokens, review_intent=self.review_plans, interpret_intent=True, trace_path=self.planner_trace_path)
+                                      max_tokens=self.planner_output_tokens, review_intent=self.review_plans, interpret_intent=False, trace_path=self.planner_trace_path)
                 return self.send_json(HTTPStatus.OK, result)
             if self.path == "/present":
                 return self.send_json(HTTPStatus.OK, present_reports(self.model, payload))
@@ -1418,7 +1468,7 @@ def main():
     Handler.review_plans = not args.skip_plan_review
     Handler.model = model
     Handler.graph = build_graph(model, fast=True, review_content=args.review_content)
-    print(f"LangGraph ready on http://127.0.0.1:{args.port}; model={args.model}; planner=intent-v6.5; planIntentReview={Handler.review_plans}; modelTimeoutSeconds={args.model_timeout_seconds}; plannerTimeoutSeconds={args.planner_timeout_seconds}; plannerOutputTokens={args.planner_output_tokens}", flush=True)
+    print(f"LangGraph ready on http://127.0.0.1:{args.port}; model={args.model}; planner=live-plan-v7.0; planIntentReview={Handler.review_plans}; modelTimeoutSeconds={args.model_timeout_seconds}; plannerTimeoutSeconds={args.planner_timeout_seconds}; plannerOutputTokens={args.planner_output_tokens}", flush=True)
     ThreadingHTTPServer(("127.0.0.1", args.port), Handler).serve_forever()
 
 

@@ -18,7 +18,7 @@ from report_reasoning import invoke_structured
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--trace', required=True)
-    parser.add_argument('--stage', default='QuestionIntent')
+    parser.add_argument('--stage', default='LivePlannerSchema')
     parser.add_argument('--model', default='qwen2.5:7b')
     parser.add_argument('--ollama-url', default='http://127.0.0.1:11434')
     parser.add_argument('--output', default='logs/planner-replay.jsonl')
@@ -44,7 +44,7 @@ def main():
         options = call['options']
         try:
             response = invoke_structured(model, messages, CapturedSchema, max_tokens=options['num_predict'],
-                                         num_ctx=options['num_ctx'], embed_schema=False, stream=False)
+                                         num_ctx=options['num_ctx'], embed_schema=call.get("embedSchema", False), stream=False)
             result = {'requestId': call.get('requestId'), 'stage': args.stage, 'model': args.model,
                       'originalResponse': call.get('response'), 'replayedResponse': response}
         except Exception as error:

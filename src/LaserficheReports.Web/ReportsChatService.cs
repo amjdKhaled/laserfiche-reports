@@ -35,8 +35,19 @@ internal sealed class ReportsChatService(
     ILaserficheEntryService entries,
     IHttpClientFactory clients,
     LiveRepositoryReportService liveReports,
-    QuestionRouter router, ILaserficheSearchService searches, ILogger<ReportsChatService> logger)
+    QuestionRouter router, ILaserficheSearchService searches, ILogger<ReportsChatService> logger,
+    ILaserficheDocumentIngestionService? ingestion = null)
 {
+    internal static async Task RefreshContentAsync(ILaserficheDocumentIngestionService ingestion,
+        IEnumerable<int> entryIds, CancellationToken cancellationToken)
+    {
+        foreach (var entryId in entryIds.Distinct())
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            await ingestion.IngestMetadataAsync(entryId, cancellationToken);
+        }
+    }
+
     private string ConnectionString => configuration["Supabase:PostgresConnectionString"]
         ?? throw new InvalidOperationException("Supabase:PostgresConnectionString is missing.");
 
@@ -152,7 +163,7 @@ internal sealed class ReportsChatService(
             throw new ArgumentException("لم أتعرف على الطلب. حدد الحقل وقيمته أو رقم الوثيقة والمعلومة المطلوبة.");
         if (plan.Name != null && (plan.Operation == "metadata" || plan.RequireUnique || plan.Content))
         {
-            var lookup = await liveReports.SelectAsync(plan with { Operation = "search", Content = false, Limit = 50, CountOnly = false }, requestedEntries, false, cancellationToken);
+            var lookup = await liveReports.SelectAsync(plan with { Operation = "search", Content = false, ResultType = "documents", Limit = 50, CountOnly = false }, requestedEntries, false, cancellationToken);
             if (!lookup.IsTotalCountExact || lookup.TotalCount != 1)
                 return new ChatResult("لم أحدد وثيقة واحدة بالاسم؛ اختر رقم الوثيقة من النتائج أو وضح الاسم.\n\n" + string.Join("\n", lookup.Items.Select(i => $"- {i.EntryId}: {ReportSupport.Cell(i.Name)}")), []);
             requestedEntries = [lookup.Items[0].EntryId];
@@ -170,13 +181,33 @@ internal sealed class ReportsChatService(
             if (requestedEntries.Length == 0)
                 return new ChatResult("لم يتم العثور على نتائج مطابقة.", []);
         }
+        var contentScopeRestricted = requestedEntries.Length > 0;
+        // Discover from Laserfiche before consulting the content index: a new
+        // document cannot be discovered by querying an old vector index.
+        if (ingestion is null) throw new InvalidOperationException("Live content refresh is unavailable.");
+        if (requestedEntries.Length == 0)
+        {
+            var current = await liveReports.SelectAsync(plan with { Operation = "search", Content = false, ResultType = "documents", CountOnly = false,
+                AllResults = true, Page = 1, Limit = 200 }, [], true, cancellationToken);
+            if (current.HasNextPage || !current.IsTotalCountExact || current.TotalCount != current.Items.Count)
+                throw new ArgumentException("تعذر قراءة نطاق المحتوى كاملًا من المستودع؛ حدد نطاقًا أضيق.");
+            foreach (var item in current.Items.Where(i => i.EntryType == LFEntryType.Document))
+                liveSelected[item.EntryId] = new LFEntry { Id = item.EntryId, Name = item.Name,
+                    FullPath = item.FullPath, EntryType = item.EntryType };
+            requestedEntries = liveSelected.Keys.ToArray();
+            if (requestedEntries.Length == 0) return new ChatResult("لم يتم العثور على نتائج مطابقة.", []);
+        }
+        // Refresh before retrieval, not in the background after returning an old
+        // answer. Ingestion checks live access and writes document chunks atomically.
+        await RefreshContentAsync(ingestion, requestedEntries, cancellationToken);
+        logger.LogInformation("Stage=LIVE_CONTENT_REFRESH Documents={Documents}", requestedEntries.Length);
         var hasEntryFilter = requestedEntries.Length > 0;
         var candidateLimit = Math.Clamp(configuration.GetValue<int?>("Reports:CandidateLimit") ?? 240, 24, 1000);
         var evidenceLimit = Math.Clamp(configuration.GetValue<int?>("Reports:EvidenceLimit") ?? 24, 8, 32);
         var prefix = configuration["LocalAI:QueryEmbeddingPrefix"] ?? "search_query: ";
         string? literal = null;
         watch.Restart();
-        var rankedContent = !hasEntryFilter || plan.ContentMode == "search";
+        var rankedContent = !contentScopeRestricted || plan.ContentMode == "search";
         if (rankedContent) try
         {
             using var embeddingBudget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -241,11 +272,11 @@ internal sealed class ReportsChatService(
         var allowedCandidates = candidates.Where(c => authorized.ContainsKey(c.EntryId))
             .Select(c => c with { DocumentName = authorized[c.EntryId].Name, Path = authorized[c.EntryId].FullPath }).ToList();
         var evidence = ReportSupport.SelectEvidence(allowedCandidates, evidenceLimit);
-        var scope = new AnswerScope(hasEntryFilter ? "selected-documents" : "repository",
+        var scope = new AnswerScope(contentScopeRestricted ? "selected-documents" : "repository",
             repository.RepositoryId, evidence.Select(x => x.EntryId).Distinct().Count(), evidence.Count, false,
-            hasEntryFilter ? "التحليل مقيد بالوثائق التي حددتها؛ يعتمد على المقاطع المفهرسة المتاحة منها."
+            contentScopeRestricted ? "التحليل مقيد بالوثائق التي حددتها؛ يعتمد على المقاطع المفهرسة المتاحة منها."
                 : "البحث شمل فهرس المستودع المتاح؛ المقاطع المختارة أدلة للإجابة وليست حصرًا لجميع الوثائق.",
-            plan.Kind == QueryKind.HYBRID_QUERY ? [] : requestedEntries);
+            !contentScopeRestricted || plan.Kind == QueryKind.HYBRID_QUERY ? [] : requestedEntries);
         if (literal is null && rankedContent)
             scope = scope with { Detail = scope.Detail + " البحث بالكلمات فقط؛ تعذر استخدام نموذج البحث الدلالي المحلي." };
         if (evidence.Count == 0)

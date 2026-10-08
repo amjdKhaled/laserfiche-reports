@@ -12,6 +12,39 @@ namespace LaserficheReports.Web.Tests;
 public class ReportTests
 {
     [Fact]
+    public async Task ContentRefreshCompletesBeforeRetrievalAndPropagatesFailure()
+    {
+        var ingestion = new RefreshIngestion();
+        await ReportsChatService.RefreshContentAsync(ingestion, [9, 11, 9], default);
+        Assert.Equal(new[] { 9, 11 }, ingestion.Calls);
+        ingestion = new RefreshIngestion { FailureId = 11 };
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            ReportsChatService.RefreshContentAsync(ingestion, [9, 11, 12], default));
+        Assert.Equal(new[] { 9, 11 }, ingestion.Calls);
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+        ingestion = new RefreshIngestion();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            ReportsChatService.RefreshContentAsync(ingestion, [9], cancelled.Token));
+        Assert.Empty(ingestion.Calls);
+    }
+
+    private sealed class RefreshIngestion : ILaserficheDocumentIngestionService
+    {
+        public List<int> Calls { get; } = [];
+        public int? FailureId { get; init; }
+        public async Task<DocumentIngestionResult> IngestMetadataAsync(int entryId,
+            CancellationToken cancellationToken = default)
+        {
+            await Task.Yield();
+            Calls.Add(entryId);
+            if (FailureId == entryId) throw new InvalidOperationException("refresh failed");
+            return new DocumentIngestionResult(1, entryId, "repo", "document", 0, true,
+                "ready", 1, "local", 1, 0, 0, 0, 0, null, null);
+        }
+    }
+
+    [Fact]
     public async Task CompleteDocumentReportKeepsOriginalColumnsAndEveryLiveRow()
     {
         var query = new Searches();

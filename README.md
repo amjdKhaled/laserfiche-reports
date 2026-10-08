@@ -601,7 +601,7 @@ Arabic questions. Unsupported calculations/calendars/criteria must be clarified,
 not silently approximated. A general question uses the entire selected repository
 unless explicitly restricted; content evidence still has retrieval coverage limits.
 
-Confirm `planner=intent-v6.5; planIntentReview=True` on restart, and
+Confirm `planner=live-plan-v7.0; planIntentReview=True` on restart, and
 `planIntentReview: true` in `/health`. `PLAN_INTENT_REVIEW` logs the checks. The
 additional audit normally adds one model call, and failed plans can require
 two additional calls. On slow CPU-only installations this increases latency.
@@ -712,3 +712,37 @@ The opt-in planner trace still records the original inputs and individual calls.
 Regression tests cover clarification replies, retry after failure in the same
 conversation/session, metadata round trips and repository-change authentication.
 They simulate model replies and do not certify the installed Qwen's semantics.
+
+
+### Live planner v7.0
+
+The HTTP route now plans directly from the current question, conversation and live
+catalog. The older independent intent experiment remains available to unit tests
+but no longer fixes report count/bound grammar before the planner has seen fields.
+This removes the exact-quotation extraction gate that produced the reported 503s.
+A valid clarification is delivered directly; it is not audited as a query missing
+filters. Executable plans still undergo live-name/type/date validation and semantic
+review; rejected queries are never executed. No repository field or year is mapped
+in code. The reduced, reachable tool schema is supplied both to Ollama's `format`
+and in the system prompt, with a context window sized for both plus output space.
+Model/planner response timeouts remain zero/unlimited by default. Tables are unchanged.
+
+Metadata/count reports already search the live repository on each request. Content
+reports now discover their current document scope from Laserfiche and await ingestion
+before index retrieval, including new documents. A refresh failure aborts retrieval;
+it does not return old indexed passages. Unrestricted content requests refresh every
+accessible document returned by the full live search; an incomplete search requires a
+narrower scope. This can be expensive, especially with local OCR enabled: freshness
+means waiting for extraction/embedding, not instantaneous OCR. Results are not a
+transactional snapshot during concurrent repository edits. This does not make sampled
+content retrieval an exact repository-wide count.
+
+Restart both services after pulling and confirm `planner=live-plan-v7.0`. Run the web
+project with a build (do not use `--no-build`). Keep `-PlannerTracePath` enabled for
+acceptance with the real model. `replay_planner.py` now defaults to `LivePlannerSchema`
+and preserves schema embedding when replaying new traces; old stages can be selected
+with `--stage QuestionIntent` or `--stage RepositoryPlannerSchema`.
+The automated tests exercise contracts, mock model failures and refresh ordering;
+they do not prove semantic correctness of Qwen or actual repository counts. Validate
+natural-language questions against known live entries and expected counts, and test
+adding/modifying a document then repeating the same report.

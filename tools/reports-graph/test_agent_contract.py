@@ -167,7 +167,7 @@ class AgentContractTests(unittest.TestCase):
             self.assertEqual(requests[0]['options']['num_predict'], 1536)
             self.assertFalse(requests[0]['stream'])
             self.assertEqual(json.loads(requests[0]['messages'][1]['content'])['catalog']['fields'], [['حقل فعلي', 'Date', False]])
-            self.assertNotIn('JSON Schema:', requests[0]['messages'][0]['content'])
+            self.assertIn('JSON Schema:', requests[0]['messages'][0]['content'])
         finally:
             server.shutdown(); server.server_close(); thread.join()
 
@@ -224,8 +224,8 @@ class AgentContractTests(unittest.TestCase):
         model = BoundModel([json.dumps({'reports': [plan]})])
         plan_reports(model, {'question': 'كشف', 'catalog': {'fields': []}})
         self.assertEqual(model.options['options']['num_predict'], 1536)
-        self.assertEqual(model.options['options']['num_ctx'], 8192)
-        self.assertNotIn('JSON Schema:', model.calls[0][0].content)
+        self.assertGreaterEqual(model.options['options']['num_ctx'], 8192)
+        self.assertIn('JSON Schema:', model.calls[0][0].content)
         self.assertEqual(len(model.calls), 1)
 
     def test_listing_defaults_to_all_rows_but_explicit_limit_can_be_preserved(self):
