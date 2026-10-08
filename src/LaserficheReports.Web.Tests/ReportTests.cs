@@ -165,6 +165,37 @@ public class ReportTests
     };
 
     [Fact]
+    public async Task StructuredEqualityRecoversLiveSpellingWithoutDroppingOtherConditions()
+    {
+        var query = new Searches { Response = (expression, field, _) =>
+            field != null ? FieldRows(field, "تحت الإجراء", "ليس تحت الإجراء") :
+            expression.Contains("تحت الإجراء") ? FieldRows("إجراء الوثيقة", "تحت الإجراء") : PagedResult<LFSearchResult>.Empty };
+        var filters = new RepositoryFilter(Logic: "and", Conditions: [
+            new("إجراء الوثيقة", "equals", "تحت الاجراء"), new("created", "less_than", "2036-01-01")]);
+        var result = await Create(new Entries(73), query).SelectAsync(
+            new QueryPlan("search", Filters: filters), [1], false, default);
+        Assert.Equal(1, result.TotalCount);
+        Assert.Contains("{LF:Created<\"2036-01-01\"}", query.Expression);
+        Assert.Contains("{LF:ID=1}", query.Expression);
+        Assert.Contains("تحت الاجراء", query.Expression);
+        Assert.Contains("تحت الإجراء", query.Expression);
+        Assert.DoesNotContain("ليس تحت", query.Expression);
+    }
+
+    [Fact]
+    public async Task NormalizedValueRecoveryRespectsRequestedPage()
+    {
+        var query = new Searches { Response = (expression, field, _) => expression.Contains("=\"*\"}")
+            ? FieldRows(field!, "تحت الإجراء", "تحت الاجراء", "تحت  الاجراء") : PagedResult<LFSearchResult>.Empty };
+        var result = await Create(new Entries(73), query).SelectAsync(
+            new QueryPlan("search", "إجراء الوثيقة", "تحت الاجراء", Page: 2, Limit: 1), [], false, default);
+        Assert.Equal(2, Assert.Single(result.Items).EntryId);
+        Assert.Equal(2, result.PageNumber);
+        Assert.Equal(3, result.TotalCount);
+        Assert.True(result.HasNextPage);
+    }
+
+    [Fact]
     public async Task ZeroLiteralResultsCheckLiveValuesWithoutMatchingNegativeOrLongerValues()
     {
         var entries = new Entries(73);

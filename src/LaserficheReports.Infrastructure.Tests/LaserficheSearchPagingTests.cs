@@ -14,6 +14,27 @@ namespace LaserficheReports.Infrastructure.Tests;
 public sealed class LaserficheSearchPagingTests
 {
     [Fact]
+    public async Task TaskFailureReadsStructuredApiErrors()
+    {
+        var http = new Responses("{\"taskId\":\"task\"}",
+            "{\"value\":[{\"id\":\"task\",\"status\":\"Failed\",\"errors\":[{\"title\":\"Invalid search\",\"detail\":\"Invalid field\",\"errorCode\":9010}]}]}");
+        var error = await Assert.ThrowsAsync<LaserficheReports.Domain.Exceptions.LaserficheException>(
+            () => Create(http).QueryAsync("trusted", 1, 20));
+        Assert.Contains("Invalid field", error.Message);
+        Assert.Contains("9010", error.Message);
+    }
+
+    [Theory]
+    [InlineData("{}")]
+    [InlineData("{\"value\":null}")]
+    [InlineData("{\"count\":0}")]
+    public async Task MalformedResultsAreNotReportedAsZeroMatches(string body)
+    {
+        var http = new Responses("{\"taskId\":\"task\",\"status\":\"Completed\"}", body);
+        await Assert.ThrowsAsync<JsonException>(() => Create(http).QueryAsync("trusted", 1, 20));
+    }
+
+    [Fact]
     public async Task FieldSyntaxIsWellFormedAndCountIsServerTotal()
     {
         var http = new Responses("{\"taskId\":\"task\",\"status\":\"Completed\"}",

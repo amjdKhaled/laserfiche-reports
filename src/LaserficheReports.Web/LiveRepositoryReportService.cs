@@ -142,14 +142,69 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
         var projection = (plan.GroupFields ?? []).Select(g => g.Field).Concat((plan.Metrics ?? []).Select(m => m.Field).OfType<string>())
             .Concat(plan.SortField is null ? [] : new[] { plan.SortField }).Where(f => !StructuredRepositoryQuery.Builtins.Contains(f))
             .Select(f => StructuredRepositoryQuery.ResolveField(f, (schema ?? throw new InvalidOperationException("Schema not loaded.")).Values).Name).Distinct().ToArray();
+        logger.LogDebug("Stage=COMPILED_SEARCH Expression={Expression}", expression);
         var result = await searches.QueryAsync(expression, readAll ? 1 : plan.Page, plan.CountOnly ? 1 : plan.Limit,
             Sort(plan), requestedField, readAll, ct, projection);
+        if (plan.Filters is not null && result.IsTotalCountExact && result.TotalCount == 0)
+        {
+            var definitions = (await SchemaAsync(ct)).Values;
+            var original = StructuredRepositoryQuery.Compile(plan.Filters, definitions, RepositoryDates.Today());
+            using var recoveryBudget = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            recoveryBudget.CancelAfter(TimeSpan.FromSeconds(300));
+            var recovered = await RecoverTextValuesAsync(plan.Filters, expression, original, recoveryBudget.Token);
+            var replacement = StructuredRepositoryQuery.Compile(recovered, definitions, RepositoryDates.Today());
+            if (replacement != original)
+                result = await searches.QueryAsync(expression.Replace(" & " + original, " & " + replacement, StringComparison.Ordinal),
+                    readAll ? 1 : plan.Page, plan.CountOnly ? 1 : plan.Limit, Sort(plan), requestedField, readAll, ct, projection);
+        }
         if (filterClause is not null && result.IsTotalCountExact && result.TotalCount == 0)
             result = await ReadNormalizedMatchesAsync(expression, filterClause, equivalentFields, plan, readAll,
                 plan.GroupBy is not null && plan.GroupBy != "template" ? requestedField : null, ct);
         logger.LogInformation("Stage=LASERFICHE Tool={Tool} DurationMs={DurationMs} TotalCount={TotalCount} Exact={Exact}",
             plan.Operation, watch.ElapsedMilliseconds, result.TotalCount, result.IsTotalCountExact);
         return result;
+    }
+
+    // Recover spelling variants from live field values, then let Laserfiche evaluate
+    // the complete boolean tree. Never remove a condition to manufacture results.
+    private async Task<RepositoryFilter> RecoverTextValuesAsync(RepositoryFilter filter,
+        string expression, string original, CancellationToken ct)
+    {
+        if (filter.Conditions is { } children)
+        {
+            var recovered = new List<RepositoryFilter>();
+            foreach (var child in children)
+                recovered.Add(await RecoverTextValuesAsync(child, expression, original, ct));
+            return filter with { Conditions = recovered.ToArray() };
+        }
+        if (filter.Operator != "equals" || filter.Field is null || filter.Value is null ||
+            StructuredRepositoryQuery.Builtins.Contains(filter.Field)) return filter;
+        var definition = StructuredRepositoryQuery.ResolveField(filter.Field, (await SchemaAsync(ct)).Values);
+        if (StructuredRepositoryQuery.IsDate(definition.FieldType) || StructuredRepositoryQuery.IsNumber(definition.FieldType)) return filter;
+        var presence = $"{{[]:[{Term(definition.Name, true)}]=\"*\"}}";
+        var candidates = await searches.QueryAsync(expression.Replace(" & " + original, " & " + presence, StringComparison.Ordinal),
+            1, 200, "id asc", definition.Name, true, ct);
+        if (!candidates.IsTotalCountExact || candidates.HasNextPage || candidates.TotalCount != candidates.Items.Count)
+            throw new ArgumentException("تعذر التحقق من كامل قيم الحقل؛ لم أعتبر النتائج صفرًا. حدد نطاقًا أضيق.");
+        var variants = new HashSet<string>(StringComparer.Ordinal) { filter.Value };
+        foreach (var item in candidates.Items)
+        {
+            var projected = item.Fields.Where(f => f.Name == definition.Name).ToArray();
+            IEnumerable<string> values;
+            if (projected.Length == 0 || projected.Any(f => f.HasMoreValues))
+            {
+                var full = (await EntryFieldsAsync(item.EntryId, ct)).Where(f => f.FieldName == definition.Name).ToArray();
+                if (full.Length == 0) throw new ArgumentException("تعذر قراءة قيم الحقل للتحقق من النتائج.");
+                values = full.SelectMany(f => f.Value is null ? Array.Empty<string>() : f.IsMultiValue ? f.Value.Split(", ") : new[] { f.Value });
+            }
+            else values = projected.SelectMany(f => f.Values);
+            foreach (var value in values.Where(v => ReportSupport.MatchesValue(v, filter.Value)))
+                variants.Add(value);
+        }
+        if (variants.Count == 1) return filter;
+        if (variants.Count > 20) throw new ArgumentException("توجد صيغ كثيرة لقيمة الحقل؛ حدد القيمة كما تظهر في المستودع.");
+        logger.LogInformation("Stage=FILTER_VALUE_RECOVERY VariantCount={VariantCount}", variants.Count);
+        return new RepositoryFilter(Logic: "or", Conditions: variants.Select(v => filter with { Value = v }).ToArray());
     }
 
     private async Task<PagedResult<LFSearchResult>> ReadNormalizedMatchesAsync(string expression, string filterClause,
@@ -199,9 +254,9 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
             fieldNames.Length, matches.Count);
         return new PagedResult<LFSearchResult>
         {
-            Items = (readAll ? matches.Values.AsEnumerable() : matches.Values.Take(plan.Limit)).ToArray(),
-            TotalCount = matches.Count, IsTotalCountExact = true, PageNumber = 1, PageSize = plan.Limit,
-            HasMore = !readAll && matches.Count > plan.Limit
+            Items = (readAll ? matches.Values.AsEnumerable() : matches.Values.Skip((plan.Page - 1) * plan.Limit).Take(plan.Limit)).ToArray(),
+            TotalCount = matches.Count, IsTotalCountExact = true, PageNumber = plan.Page, PageSize = plan.Limit,
+            HasMore = !readAll && matches.Count > plan.Page * plan.Limit
         };
     }
 
