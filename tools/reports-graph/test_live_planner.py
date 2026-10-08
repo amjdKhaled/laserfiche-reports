@@ -10,6 +10,54 @@ CATALOG = {'fields': [{'name': 'انتهاء صلاحية السجل', 'fieldTyp
                       {'name': 'التكلفة', 'fieldType': 'Number'}]}
 
 class LivePlannerTests(unittest.TestCase):
+    def test_direct_repair_does_not_replay_an_invalid_assistant_draft(self):
+        invalid = {'reports': [{'operation': 'search', 'title': 'خطة مرفوضة',
+            'selection': {'requiresFilter': True, 'filters': {'field': 'حقل مخترع', 'operator': 'equals', 'value': 'خطأ'}}}]}
+        corrected = {'reports': [{'operation': 'search', 'title': 'الوثائق',
+            'selection': {'requiresFilter': True, 'filters': {'field': 'created', 'operator': 'in_period', 'period': {'year': 2026}}}}]}
+        model = FakeModel([json.dumps(invalid), json.dumps(corrected), json.dumps(review())])
+        result = plan_reports(model, {'question': 'وثائق أنشئت خلال 2026', 'catalog': {'fields': [], 'entryProperties': ['created']}}, review_intent=True)
+        self.assertEqual(result['reports'][0]['filters']['operator'], 'in_period')
+        self.assertFalse(any(message.type == 'ai' for message in model.calls[1]))
+        self.assertEqual(json.loads(model.calls[1][1].content)['question'], 'وثائق أنشئت خلال 2026')
+        self.assertIn('Unknown repository field', model.calls[1][-1].content)
+
+    def test_year_period_is_a_live_date_tool_without_model_invented_endpoints(self):
+        catalog = {**CATALOG, 'entryProperties': ['created', 'modified', 'name']}
+        draft = {'contextMode': 'current', 'reports': [{'operation': 'search', 'title': 'الوثائق',
+            'selection': {'requiresFilter': True, 'filters': {
+                'field': 'created', 'operator': 'in_period', 'period': {'year': 2026}}}}]}
+        validator = Draft202012Validator(direct_planner_schema(catalog).model_json_schema())
+        validator.validate(draft)
+        result = plan_reports(FakeModel([json.dumps(draft), json.dumps(review())]),
+            {'question': 'ماهي الوثائق التي انشأت بتاريخ 2026', 'catalog': catalog}, review_intent=True)
+        self.assertEqual(result['reports'][0]['resultType'], 'documents')
+        self.assertEqual(result['reports'][0]['filters']['period']['year'], 2026)
+        self.assertIsNone(result['reports'][0]['filters']['value'])
+        for field, period in [('name', {'year': 2026}), ('التكلفة', {'year': 2026}), ('created', {'year': 2023, 'month': 2, 'day': 29}),
+                              ('created', {'year': 2026, 'day': 1}), ('created', {'year': True})]:
+            invalid = json.loads(json.dumps(draft))
+            invalid['reports'][0]['selection']['filters'].update(field=field, period=period)
+            with self.assertRaises(ValueError): validate_plan_schema(planner_request(json.dumps(invalid), 'سؤال'), catalog)
+        invalid = json.loads(json.dumps(draft))
+        invalid['reports'][0]['selection']['filters']['value'] = '2026-01-01'
+        with self.assertRaises(ValidationError): validator.validate(invalid)
+        with self.assertRaises(ValueError): validate_plan_schema(planner_request(json.dumps(invalid), 'سؤال'), catalog)
+
+    def test_calendar_period_can_combine_with_tag_and_numeric_conditions_for_one_count(self):
+        catalog = {**CATALOG, 'tags': [{'name': 'قيد المتابعة'}], 'tagStatus': 'complete'}
+        draft = {'contextMode': 'current', 'reports': [{'operation': 'search', 'title': 'العدد', 'countOnly': True,
+            'selection': {'requiresFilter': True, 'filters': {'logic': 'and', 'conditions': [
+                {'field': 'انتهاء صلاحية السجل', 'operator': 'through_period', 'period': {'year': 2042}},
+                {'tag': 'قيد المتابعة', 'operator': 'has_tag'},
+                {'field': 'التكلفة', 'operator': 'less_or_equal', 'value': '500'}]}}}]}
+        Draft202012Validator(direct_planner_schema(catalog).model_json_schema()).validate(draft)
+        result = plan_reports(FakeModel([json.dumps(draft), json.dumps(review())]),
+            {'question': 'كم سجل ينتهي حتى 2042 وعليه وسم قيد المتابعة وتكلفته 500 أو أقل؟', 'catalog': catalog}, review_intent=True)
+        self.assertEqual(len(result['reports']), 1)
+        self.assertEqual(result['reports'][0]['resultType'], 'count')
+        self.assertEqual(len(result['reports'][0]['filters']['conditions']), 3)
+
     def test_shared_contract_preserves_live_types_and_required_selection(self):
         schema = direct_planner_schema(CATALOG).model_json_schema()
         Draft202012Validator.check_schema(schema)

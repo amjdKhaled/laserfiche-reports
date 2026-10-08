@@ -96,6 +96,25 @@ class HttpTests(unittest.TestCase):
                 payload = json.loads(response.read())
                 self.assertEqual(response.status, 503 if code else 200)
                 self.assertEqual(payload.get('error') if code else payload['routingVersion'], code or 'schema-agent-v5')
+                if not code:
+                    self.assertEqual(payload['planningProtocol'], 'live-periods-v1')
+
+    def test_year_question_over_http_returns_one_live_document_selection(self):
+        from test_graph import FakeModel
+        from test_plan_intent_review import review
+        draft = {'contextMode': 'current', 'reports': [{'operation': 'search', 'title': 'الوثائق',
+            'selection': {'requiresFilter': True, 'filters': {'field': 'created',
+                'operator': 'in_period', 'period': {'year': 2026}}}}]}
+        self.server.RequestHandlerClass.model = FakeModel([json.dumps(draft), json.dumps(review())])
+        self.client.request('POST', '/route', json.dumps({'question': 'ماهي الوثائق التي انشأت بتاريخ 2026',
+            'catalog': {'fields': [], 'entryProperties': ['created', 'modified', 'name']}}).encode())
+        response = self.client.getresponse()
+        self.assertEqual(response.status, 200)
+        reports = json.loads(response.read())['reports']
+        self.assertEqual(len(reports), 1)
+        self.assertEqual(reports[0]['resultType'], 'documents')
+        self.assertEqual(reports[0]['filters']['period']['year'], 2026)
+        self.assertEqual(reports[0]['filters']['field'], 'created')
 
     def test_model_timeout_is_not_mislabeled_as_connection_failure(self):
         from httpx import ReadTimeout

@@ -180,7 +180,7 @@ class AgentContractTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             ReportRequest.model_validate({'reports': [{**plan, 'filters': {'field': 'اسم', 'operator': 'equals', 'value': 'أ'}}]})
 
-    def test_repair_keeps_draft_and_precise_error_instead_of_truncated_exception(self):
+    def test_repair_keeps_precise_error_and_original_request_without_rejected_draft(self):
         import io
         from contextlib import redirect_stdout
         good = {'resultType': 'documents', 'requiresFilter': False, 'operation': 'search', 'title': 'وثائق', 'question': 'وثائق', 'limit': 50}
@@ -190,7 +190,8 @@ class AgentContractTests(unittest.TestCase):
         with redirect_stdout(stream):
             plan_reports(model, {'question': 'وثائق', 'catalog': {'fields': []}})
         self.assertIn('reports.0.limit', stream.getvalue())
-        self.assertIn('300', model.calls[1][-2].content)
+        self.assertFalse(any(message.type == 'ai' for message in model.calls[1]))
+        self.assertEqual(json.loads(model.calls[1][1].content)['question'], 'وثائق')
         self.assertIn('reports.0.limit', model.calls[1][-1].content)
 
     def test_document_intent_cannot_execute_group_or_unfiltered_fallback(self):

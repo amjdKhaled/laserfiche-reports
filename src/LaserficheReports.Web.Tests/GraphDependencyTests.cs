@@ -30,7 +30,7 @@ public sealed class GraphDependencyTests
     {
         var factory = new Factory(request => new HttpResponseMessage(HttpStatusCode.OK)
         { Content = new StringContent(request.RequestUri!.AbsolutePath == "/health"
-            ? "{\"routingVersion\":\"schema-agent-v5\",\"modelTimeoutSeconds\":0}"
+            ? "{\"routingVersion\":\"schema-agent-v5\",\"planningProtocol\":\"live-periods-v1\",\"modelTimeoutSeconds\":0}"
             : "{\"reports\":[{\"operation\":\"search\",\"resultType\":\"documents\",\"requiresFilter\":false}]}", Encoding.UTF8, "application/json") });
         var result = await new QuestionRouter(factory).RouteAsync("اعرض الوثائق", new { }, default);
         Assert.Single(result.Reports);
@@ -45,7 +45,7 @@ public sealed class GraphDependencyTests
     public async Task PlanningPreservesDependencyCauseWithoutAFixedAnswerFallback(string code)
     {
         var factory = new Factory(request => request.RequestUri!.AbsolutePath == "/health"
-            ? new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("{\"routingVersion\":\"schema-agent-v5\",\"modelTimeoutSeconds\":600}", Encoding.UTF8, "application/json") }
+            ? new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("{\"routingVersion\":\"schema-agent-v5\",\"planningProtocol\":\"live-periods-v1\",\"modelTimeoutSeconds\":600}", Encoding.UTF8, "application/json") }
             : new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
         { Content = new StringContent("{\"error\":\"" + code + "\"}", Encoding.UTF8, "application/json") });
         var error = await Assert.ThrowsAsync<GraphServiceException>(() => new QuestionRouter(factory)
@@ -57,9 +57,11 @@ public sealed class GraphDependencyTests
 
     [Theory]
     [InlineData("{\"status\":\"ready\"}")]
+    [InlineData("{\"routingVersion\":\"schema-agent-v5\",\"modelTimeoutSeconds\":0,\"plannerVersion\":\"intent-v6.5\"}")]
+    [InlineData("{\"routingVersion\":\"schema-agent-v5\",\"modelTimeoutSeconds\":0,\"planningProtocol\":\"old\"}")]
     [InlineData("{\"routingVersion\":\"schema-agent-v4\",\"modelTimeoutSeconds\":600}")]
     [InlineData("{\"routingVersion\":\"schema-agent-v5\"}")]
-    [InlineData("{\"routingVersion\":\"schema-agent-v5\",\"modelTimeoutSeconds\":40}")]
+    [InlineData("{\"routingVersion\":\"schema-agent-v5\",\"planningProtocol\":\"live-periods-v1\",\"modelTimeoutSeconds\":40}")]
     public async Task OldRunningGraphIsDetectedBeforePostingAnIncompatiblePlan(string health)
     {
         var factory = new Factory(_ => new HttpResponseMessage(HttpStatusCode.OK)

@@ -12,6 +12,26 @@ namespace LaserficheReports.Web.Tests;
 public class ReportTests
 {
     [Fact]
+    public async Task YearQuestionExecutesCurrentRepositorySearchAndKeepsTheDocumentTable()
+    {
+        var graph = new GraphClient("""
+            {"reports":[{"operation":"search","resultType":"documents","requiresFilter":true,
+            "filters":{"field":"created","operator":"in_period","period":{"year":2026}},"allResults":true}]}
+            """);
+        var searches = new Searches();
+        var entries = new Entries(73);
+        var chat = new ReportsChatService(new ConfigurationBuilder().Build(), new NoEmbeddings(), new Repository(), entries,
+            graph, Create(entries, searches), new QuestionRouter(graph), searches,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<ReportsChatService>.Instance);
+        var result = await chat.AskAsync("ماهي الوثائق التي انشأت بتاريخ 2026", default);
+        Assert.Equal(LiveRepositoryReportService.Documents + " & ({LF:Created>=\"2026-01-01\"} & {LF:Created<\"2027-01-01\"})", searches.Expression);
+        Assert.True(searches.ReadAll);
+        Assert.Equal(73, result.Sources.Count);
+        Assert.Contains("|", result.Answer);
+        Assert.DoesNotContain("تعذر", result.Answer);
+        Assert.Equal(new[] { "health", "route" }, graph.Paths);
+    }
+    [Fact]
     public async Task LiveTagSelectionKeepsOriginalTableAndUsesCurrentCatalog()
     {
         var queries = new Searches();
@@ -549,7 +569,7 @@ public class ReportTests
         {
             var path = request.RequestUri!.AbsolutePath.Trim('/'); Paths.Add(path);
             if (path == "health") return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
-            { Content = new StringContent("{\"routingVersion\":\"schema-agent-v5\",\"modelTimeoutSeconds\":600}", System.Text.Encoding.UTF8, "application/json") };
+            { Content = new StringContent("{\"routingVersion\":\"schema-agent-v5\",\"planningProtocol\":\"live-periods-v1\",\"modelTimeoutSeconds\":600}", System.Text.Encoding.UTF8, "application/json") };
             var body = await request.Content!.ReadAsStringAsync(ct);
             string response;
             if (path == "route") { RouteBody = body; response = route; }

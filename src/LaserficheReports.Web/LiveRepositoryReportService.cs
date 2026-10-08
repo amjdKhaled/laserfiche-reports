@@ -311,6 +311,13 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
             if (node.Conditions is { } children)
                 return "(" + string.Join(node.Logic == "or" ? " أو " : " و ", children.Select(Filter)) + ")";
             if (node.Tag != null) return (node.Operator == "not_tag" ? "بدون الوسم: " : "الوسم: ") + node.Tag;
+            if (node.Period != null)
+            {
+                var (start, end) = node.Period.Bounds();
+                var comparisonPeriod = node.Operator switch { "in_period" => "خلال", "before_period" => "قبل",
+                    "through_period" => "حتى نهاية", "from_period" => "من بداية", _ => "بعد نهاية" };
+                return $"{node.Field} {comparisonPeriod} الفترة {start:yyyy-MM-dd} إلى {end.AddDays(-1):yyyy-MM-dd}";
+            }
             var comparison = node.Operator switch
             {
                 "equals" => "يساوي", "not_equals" => "لا يساوي", "less_than" or "date_before" => "قبل / أقل من",

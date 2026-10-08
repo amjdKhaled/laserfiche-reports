@@ -601,7 +601,7 @@ Arabic questions. Unsupported calculations/calendars/criteria must be clarified,
 not silently approximated. A general question uses the entire selected repository
 unless explicitly restricted; content evidence still has retrieval coverage limits.
 
-Confirm `planner=live-plan-v7.1; planIntentReview=True` on restart, and
+Confirm `planner=live-plan-v7.2; planIntentReview=True` on restart, and
 `planIntentReview: true` in `/health`. `PLAN_INTENT_REVIEW` logs the checks. The
 additional audit normally adds one model call, and failed plans can require
 two additional calls. On slow CPU-only installations this increases latency.
@@ -737,7 +737,7 @@ means waiting for extraction/embedding, not instantaneous OCR. Results are not a
 transactional snapshot during concurrent repository edits. This does not make sampled
 content retrieval an exact repository-wide count.
 
-Restart both services after pulling and confirm `planner=live-plan-v7.1`. Run the web
+Restart both services after pulling and confirm `planner=live-plan-v7.2`. Run the web
 project with a build (do not use `--no-build`). Keep `-PlannerTracePath` enabled for
 acceptance with the real model. `replay_planner.py` now defaults to `LivePlannerSchema`
 and preserves schema embedding when replaying new traces; old stages can be selected
@@ -807,3 +807,33 @@ which opens the existing login dialog instead of an opaque `chat_failed` error.
 This restores sessions during long planning requests without keeping a live
 Laserfiche search running throughout model generation. It does not fix a rejected
 AI plan: planning and repository authentication are separate stages.
+
+### Live planner v7.2: backend calendar periods and compatible-service handshake
+
+Gregorian Date/DateTime predicates can use `period={year:Y, month:M?, day:D?}`.
+`in_period` compiles to `>=start AND <next-period-start`; `through_period` to
+`<next-period-start`; `before_period` to `<start`; `from_period` to `>=start`;
+`after_period` to `>=next-period-start`. The backend handles year/month rollover
+and leap days. Invalid calendar dates, numeric/text fields and mixed period/literal
+bounds are rejected. These work within the same AND/OR tree as other conditions.
+The model selects the requested period; it no longer needs to invent both dates
+for a year-only question. Numeric years remain numeric comparisons, and Hijri
+interpretation/conversion is not silently added. No repository field or year is
+configured in code. Existing literal and relative date filters remain supported.
+
+The planner instructions explain the built-in entry properties, so repository
+creation dates do not depend on a custom field literally named like the question.
+The authenticated web client now requires `/health` to advertise
+`planningProtocol=live-periods-v1`. Earlier intent-v6 servers used the same routing
+version and could pass the old handshake after a source pull. They are now rejected
+before sending the question, with an instruction to restart the graph. Restart
+**both services** and verify `planner=live-plan-v7.2` before testing this release.
+
+Regression tests cover the screenshot's year-only question through the graph HTTP
+contract, C# routing and live-search compilation to the existing document table,
+using controlled model/API responses. They cover compound period/tag/number counts,
+period boundaries and stale-service detection. They do not measure the installed
+Qwen model's interpretation or establish actual repository totals. Capture a
+failed real question with `-PlannerTracePath`, then run `diagnose.ps1` for acceptance.
+Direct-plan repairs also restart from the original question/catalog plus validation
+feedback, without replaying the invalid assistant draft as conversation history.

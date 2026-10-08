@@ -4,9 +4,23 @@ using LaserficheReports.Domain.Entities;
 namespace LaserficheReports.Web;
 
 internal sealed record RelativeDate(string Anchor = "today", string Unit = "day", int Offset = 0, string Boundary = "start");
+internal sealed record CalendarPeriod(int Year, int? Month = null, int? Day = null)
+{
+    internal (DateOnly Start, DateOnly End) Bounds()
+    {
+        if (Year is < 1 or > 9998 || Month is < 1 or > 12 || Day is < 1 or > 31 || Day != null && Month == null)
+            throw new ArgumentException("فترة تقويمية غير صالحة.");
+        try
+        {
+            var start = new DateOnly(Year, Month ?? 1, Day ?? 1);
+            return (start, Day != null ? start.AddDays(1) : Month != null ? start.AddMonths(1) : start.AddYears(1));
+        }
+        catch (ArgumentOutOfRangeException) { throw new ArgumentException("فترة تقويمية غير صالحة."); }
+    }
+}
 internal sealed record RepositoryFilter(string? Field = null, string? Operator = null, string? Value = null,
     string? Upper = null, RelativeDate? Relative = null, RelativeDate? UpperRelative = null,
-    string? Logic = null, RepositoryFilter[]? Conditions = null, string? Tag = null);
+    string? Logic = null, RepositoryFilter[]? Conditions = null, string? Tag = null, CalendarPeriod? Period = null);
 internal sealed record GroupDimension(string Field, string? Bucket = null);
 internal sealed record AggregateMetric(string Function, string? Field = null);
 internal sealed record AggregateHaving(int Metric, string Operator, decimal Value);
@@ -64,14 +78,14 @@ internal static class StructuredRepositoryQuery
         if (filter.Conditions is { } conditions)
         {
             if (filter.Logic is not ("and" or "or") || conditions.Length is < 1 or > 20 || filter.Field != null || filter.Operator != null ||
-                filter.Value != null || filter.Upper != null || filter.Relative != null || filter.UpperRelative != null || filter.Tag != null)
+                filter.Value != null || filter.Upper != null || filter.Relative != null || filter.UpperRelative != null || filter.Tag != null || filter.Period != null)
                 throw new ArgumentException("مجموعة شروط غير صالحة.");
             return "(" + string.Join(filter.Logic == "and" ? " & " : " | ", conditions.Select(c => Compile(c, schema, today, depth + 1, tags))) + ")";
         }
         if (filter.Tag is not null)
         {
             if (filter.Operator is not ("has_tag" or "not_tag") || filter.Field != null || filter.Logic != null ||
-                filter.Value != null || filter.Upper != null || filter.Relative != null || filter.UpperRelative != null)
+                filter.Value != null || filter.Upper != null || filter.Relative != null || filter.UpperRelative != null || filter.Period != null)
                 throw new ArgumentException("شرط الوسم غير صالح.");
             if (tags is null || !tags.Contains(filter.Tag, StringComparer.Ordinal))
                 throw new ArgumentException("الوسم غير موجود في تعريفات المستودع الحالية: " + filter.Tag);
@@ -86,6 +100,21 @@ internal static class StructuredRepositoryQuery
         string Clause(string op, string value) => key is null
             ? $"{{[]:[{LiveRepositoryReportService.Term(name, true)}]{op}\"{value}\"}}"
             : $"{{LF:{key}{op}{(field is "entryId" or "pageCount" ? value : "\"" + value + "\"")}}}";
+        if (filter.Period != null || filter.Operator is "in_period" or "before_period" or "through_period" or "from_period" or "after_period")
+        {
+            if (!IsDate(type) || filter.Period == null || filter.Value != null || filter.Upper != null || filter.Relative != null || filter.UpperRelative != null)
+                throw new ArgumentException("الفترة التقويمية تتطلب حقل تاريخ دون حدود إضافية.");
+            var (start, end) = filter.Period.Bounds();
+            var periodStart = start.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+            var periodEnd = end.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+            return filter.Operator switch
+            {
+                "in_period" => "(" + Clause(">=", periodStart) + " & " + Clause("<", periodEnd) + ")",
+                "before_period" => Clause("<", periodStart), "through_period" => Clause("<", periodEnd),
+                "from_period" => Clause(">=", periodStart), "after_period" => Clause(">=", periodEnd),
+                _ => throw new ArgumentException("معامل الفترة غير صالح.")
+            };
+        }
         string Value(string? literal, RelativeDate? relative)
         {
             if (literal != null && relative != null) throw new ArgumentException("لا تجمع تاريخًا صريحًا ونسبيًا في نفس القيمة.");
