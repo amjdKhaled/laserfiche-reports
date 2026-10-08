@@ -84,7 +84,7 @@ def main():
         item = {"question": case["question"], "expected": case["expect"]}
         try:
             payload = {key: value for key, value in case.items() if key != "expect"}
-            request = plan_reports(model, payload, budget_seconds=args.timeout or None)
+            request = plan_reports(model, payload, budget_seconds=args.timeout or None, interpret_intent=True, review_intent=True)
             item.update(plan=request, passed=any(includes(normalize_plan(plan, case["today"]), normalize_plan(case["expect"], case["today"])) for plan in request["reports"]))
         except Exception as error:
             item.update(passed=False, error=type(error).__name__ + ": " + str(error)[:300])

@@ -62,7 +62,7 @@ class HttpTests(unittest.TestCase):
             {'resultType': 'documents', 'requiresFilter': False, 'operation': 'latest_modified', 'title': 'آخر تعديل', 'question': 'آخر وثيقة معدلة', 'limit': 1},
             {'resultType': 'documents', 'requiresFilter': False, 'operation': 'latest_created', 'title': 'آخر إنشاء', 'question': 'آخر وثيقة منشأة', 'limit': 1}]}
         invalid = json.loads(json.dumps(plans)); invalid['reports'][0]['limit'] = 10
-        self.server.RequestHandlerClass.model = FakeModel([json.dumps(invalid), json.dumps(plans), json.dumps(review())])
+        self.server.RequestHandlerClass.model = FakeModel([json.dumps({'outputs': [{'resultType': 'documents', 'meaning': 'آخر تعديل', 'conditionShape': 'none'}, {'resultType': 'documents', 'meaning': 'آخر إنشاء', 'conditionShape': 'none'}]}), json.dumps(invalid), json.dumps(plans), json.dumps(review())])
         body = json.dumps({'question': 'آخر تعديل وآخر إنشاء', 'catalog': {'fields': [{'name': 'إجراء الوثيقة'}]}}).encode()
         self.client.request('POST', '/route', body)
         response = self.client.getresponse()
@@ -73,7 +73,7 @@ class HttpTests(unittest.TestCase):
         from test_graph import FakeModel
         from test_plan_intent_review import review
         plan = {'reports': [{'resultType': 'documents', 'requiresFilter': False, 'operation': 'search', 'title': 'تقرير', 'question': 'رتبها', 'limit': 50, 'sort': 'creationTime asc'}]}
-        model = FakeModel([json.dumps(plan), json.dumps(review())])
+        model = FakeModel([json.dumps({'outputs': [{'resultType': 'documents', 'meaning': 'رتب وثائق المحاسبة بالأقدم', 'conditionShape': 'other'}]}), json.dumps(plan), json.dumps(review())])
         self.server.RequestHandlerClass.model = model
         history = [{'role': 'user', 'text': 'اعرض وثائق المحاسبة'}]
         self.client.request('POST', '/route', json.dumps({'question': 'رتبها بالأقدم', 'history': history}).encode())
@@ -82,6 +82,7 @@ class HttpTests(unittest.TestCase):
         response.read()
         self.assertEqual(json.loads(model.calls[0][1].content)['history'], history)
         self.assertEqual(json.loads(model.calls[1][1].content)['history'], history)
+        self.assertEqual(json.loads(model.calls[2][1].content)['history'], history)
 
     def test_health_checks_the_actual_local_model_registry(self):
         from unittest.mock import patch

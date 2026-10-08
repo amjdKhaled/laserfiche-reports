@@ -601,7 +601,7 @@ Arabic questions. Unsupported calculations/calendars/criteria must be clarified,
 not silently approximated. A general question uses the entire selected repository
 unless explicitly restricted; content evidence still has retrieval coverage limits.
 
-Confirm `planner=intent-v6.2; planIntentReview=True` on restart, and
+Confirm `planner=intent-v6.3; planIntentReview=True` on restart, and
 `planIntentReview: true` in `/health`. `PLAN_INTENT_REVIEW` logs the checks. The
 additional audit normally adds one model call, and failed plans can require
 two additional calls. On slow CPU-only installations this increases latency.
@@ -641,3 +641,20 @@ contain no repository-specific field mapping. `PLANNER_DRAFT` logs operations
 and filter shapes before validation without field values, document contents or
 raw questions. Repository API v2 metadata `id` is preserved as the definition
 ID, alongside the older `fieldId`/`fieldDefinitionId` shapes.
+
+Planner v6.3 first interprets the requested outputs and condition shape in a
+small independent call, without catalog fields or a proposed plan. It then
+constrains the catalog-backed generation grammar: a simple count cannot become
+grouping, and a single one-sided bound cannot become a two-sided range. The
+same invariants are checked after parsing, even if the model bypasses the
+generation grammar. Explicit grouping, ranges, multiple reports and genuine
+clarifications remain supported. No question-specific field/year mappings
+are used. `QUESTION_INTENT` logs output types and condition shapes.
+
+Retries use the original question, catalog and independent interpretation,
+without replaying the rejected draft. The semantic reviewer still checks the
+actual selected field, calendar and dates against the original request. This
+adds one small interpretation call; it does not make the local model infallible.
+`evaluate_planner.py` exercises the same interpretation and review path as HTTP.
+The tests use scripted model responses and do not validate the user's live
+Qwen model or repository totals. The document-table UI is unchanged.
