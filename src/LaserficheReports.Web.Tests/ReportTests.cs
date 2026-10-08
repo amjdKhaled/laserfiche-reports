@@ -312,7 +312,7 @@ public class ReportTests
         var index = 0;
         var query = new Searches { Response = (_, _, _) => new PagedResult<LFSearchResult>
         {
-            Items = [new LFSearchResult { EntryId = ++index == 1 ? 42 : 619, Name = index == 1 ? "وثيقة معدلة" : "وثيقة جديدة",
+            Items = [new LFSearchResult { EntryId = ++index <= 2 ? 42 : 619, Name = index <= 2 ? "وثيقة معدلة" : "وثيقة جديدة",
                 CreationTime = DateTimeOffset.Parse("2026-10-01T10:00:00+03:00"), LastModifiedTime = DateTimeOffset.Parse("2026-10-06T11:00:00+03:00") }],
             TotalCount = 73, HasMore = true
         } };
@@ -323,8 +323,8 @@ public class ReportTests
         var result = await chat.AskAsync("اعطيني تقرير عن آخر وثيقة تم تعديلها وتقرير آخر عن آخر وثيقة أُنشئت", default);
         Assert.Equal(2, result.Reports.Count);
         Assert.All(result.Reports, report => Assert.DoesNotContain("تعذرت صياغة ملخص AI", report.Answer));
-        Assert.Equal(new[] { "lastModifiedTime desc", "creationTime desc" }, query.Sorts);
-        Assert.Equal(new[] { 1, 1 }, query.Limits);
+        Assert.Equal(new[] { "id desc", "lastModifiedTime desc", "creationTime desc" }, query.Sorts);
+        Assert.Equal(new[] { 8, 1, 1 }, query.Limits);
         Assert.Equal(new[] { 42 }, result.Reports[0].RelatedEntryIds);
         Assert.Equal(new[] { 619 }, result.Reports[1].RelatedEntryIds);
         Assert.All(result.Reports, report =>
@@ -381,9 +381,48 @@ public class ReportTests
             Filters: new RepositoryFilter("الإدارة", "equals", "المحاسبة")), [], default);
         Assert.Contains("**73**", report.Answer);
         Assert.Single(searches.Calls);
-        Assert.Equal(1, searches.Limits[0]);
+        Assert.Equal(50, searches.Limits[0]);
         Assert.Empty(entries.EntryCalls);
         Assert.Contains("[الإدارة]=\"المحاسبة\"", searches.Expression);
+        Assert.Contains("| رقم الوثيقة | اسم الوثيقة | تاريخ الإنشاء | آخر تعديل | عدد الصفحات | المرجع |", report.Answer);
+        Assert.Contains("ليست القائمة الكاملة", report.Answer);
+        Assert.Equal(20, report.RelatedEntryIds.Length);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ZeroAndUnknownCountKeepTheDocumentTable(bool exact)
+    {
+        var searches = new Searches { Response = (_, _, _) => new PagedResult<LFSearchResult>
+            { Items = [], TotalCount = 0, IsTotalCountExact = exact } };
+        var report = await Create(new Entries(0), searches).CreateAsync("repo", new QueryPlan("search", CountOnly: true), [], default);
+        Assert.Contains("| رقم الوثيقة | اسم الوثيقة |", report.Answer);
+        Assert.Contains("لم يتم العثور على نتائج مطابقة", report.Answer);
+        Assert.Equal(exact, report.Answer.Contains("عدد النتائج المطابقة: **0**"));
+    }
+
+    [Fact]
+    public async Task CatalogSamplesActualValuesWithoutTreatingThemAsCompleteInventory()
+    {
+        var searches = new Searches();
+        var entries = new Entries(73);
+        var catalog = System.Text.Json.JsonSerializer.SerializeToElement(await Create(entries, searches).CatalogAsync(default));
+        Assert.Equal("partial", catalog.GetProperty("sampleStatus").GetString());
+        Assert.Equal("الإدارة العامة", catalog.GetProperty("fieldSamples").GetProperty("الإدارة")[0].GetString());
+        Assert.Equal(8, entries.FieldCalls.Count);
+        Assert.Equal(8, Assert.Single(searches.Limits));
+        Assert.DoesNotContain("الوثيقة", catalog.GetProperty("fieldSamples").EnumerateObject().Select(p => p.Name));
+    }
+
+    [Fact]
+    public async Task UnavailableSampleRetainsAuthoritativeDefinitionsWithoutInventingValues()
+    {
+        var searches = new Searches { Response = (_, _, _) => throw new LaserficheException("sample unavailable", 503) };
+        var catalog = System.Text.Json.JsonSerializer.SerializeToElement(await Create(new Entries(0), searches).CatalogAsync(default));
+        Assert.Equal("unavailable", catalog.GetProperty("sampleStatus").GetString());
+        Assert.Empty(catalog.GetProperty("fieldSamples").EnumerateObject());
+        Assert.Equal(2, catalog.GetProperty("fields").GetArrayLength());
     }
 
     [Fact]
@@ -410,8 +449,8 @@ public class ReportTests
             graph, Create(entries, searches), new QuestionRouter(graph), searches, Microsoft.Extensions.Logging.Abstractions.NullLogger<ReportsChatService>.Instance);
         await chat.AskAsync("رتبها بالأقدم", default, [new("user", "اعرض وثائق المحاسبة")]);
         Assert.Contains("اعرض وثائق المحاسبة", System.Text.Json.JsonDocument.Parse(graph.RouteBody).RootElement.GetProperty("history")[0].GetProperty("text").GetString());
-        Assert.Single(searches.Calls);
-        Assert.Equal("creationTime asc", Assert.Single(searches.Sorts));
+        Assert.Equal(2, searches.Calls.Count);
+        Assert.Equal("creationTime asc", searches.Sorts.Last());
         Assert.DoesNotContain("present", graph.Paths);
     }
 
@@ -455,7 +494,7 @@ public class ReportTests
         Assert.Contains("LF:Lookin=", query.Calls[1]);
         Assert.Contains("Subfolders=Y", query.Calls[1]);
         Assert.DoesNotContain("Name=\"مركز الوثائق", query.Calls[1]);
-        Assert.Equal(1, query.Limits[1]);
+        Assert.Equal(50, query.Limits[1]);
     }
 
     [Theory]
@@ -481,7 +520,7 @@ public class ReportTests
         var answer = await chat.AskAsync("كم وثيقة في مجلد الأرشيف؟", default);
         Assert.Contains("وضح اسم المجلد أو رقمه", answer.Answer);
         Assert.DoesNotContain("عدد النتائج المطابقة: **0**", answer.Answer);
-        Assert.Single(queries.Calls);
+        Assert.Equal(2, queries.Calls.Count);
     }
 
     [Fact]

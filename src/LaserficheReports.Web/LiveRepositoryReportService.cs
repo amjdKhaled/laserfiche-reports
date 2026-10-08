@@ -143,7 +143,7 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
             .Concat(plan.SortField is null ? [] : new[] { plan.SortField }).Where(f => !StructuredRepositoryQuery.Builtins.Contains(f))
             .Select(f => StructuredRepositoryQuery.ResolveField(f, (schema ?? throw new InvalidOperationException("Schema not loaded.")).Values).Name).Distinct().ToArray();
         logger.LogDebug("Stage=COMPILED_SEARCH Expression={Expression}", expression);
-        var result = await searches.QueryAsync(expression, readAll ? 1 : plan.Page, plan.CountOnly ? 1 : plan.Limit,
+        var result = await searches.QueryAsync(expression, readAll ? 1 : plan.Page, plan.Limit,
             Sort(plan), requestedField, readAll, ct, projection);
         if (plan.Filters is not null && result.IsTotalCountExact && result.TotalCount == 0)
         {
@@ -155,7 +155,7 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
             var replacement = StructuredRepositoryQuery.Compile(recovered, definitions, RepositoryDates.Today());
             if (replacement != original)
                 result = await searches.QueryAsync(expression.Replace(" & " + original, " & " + replacement, StringComparison.Ordinal),
-                    readAll ? 1 : plan.Page, plan.CountOnly ? 1 : plan.Limit, Sort(plan), requestedField, readAll, ct, projection);
+                    readAll ? 1 : plan.Page, plan.Limit, Sort(plan), requestedField, readAll, ct, projection);
         }
         if (filterClause is not null && result.IsTotalCountExact && result.TotalCount == 0)
             result = await ReadNormalizedMatchesAsync(expression, filterClause, equivalentFields, plan, readAll,
@@ -329,7 +329,34 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
         await Task.WhenAll(schemaTask, templatesTask);
         var definitions = await schemaTask;
         var templateDefinitions = await templatesTask;
+        // Values disambiguate similarly named fields and calendar variants. This
+        // bounded sample is never a count, a field-presence inventory or evidence
+        // that a value absent from the sample is absent from the repository.
+        var samples = new Dictionary<string, string[]>(StringComparer.Ordinal);
+        var sampleStatus = "unavailable";
+        using var sampleBudget = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        sampleBudget.CancelAfter(TimeSpan.FromSeconds(15));
+        try
+        {
+            var recent = await searches.QueryAsync(Documents, 1, 8, "id desc", cancellationToken: sampleBudget.Token);
+            var values = new IReadOnlyList<LFFieldValue>[Math.Min(8, recent.Items.Count)];
+            await Parallel.ForEachAsync(Enumerable.Range(0, values.Length),
+                new ParallelOptions { MaxDegreeOfParallelism = 4, CancellationToken = sampleBudget.Token },
+                async (index, token) => values[index] = await EntryFieldsAsync(recent.Items[index].EntryId, token));
+            var known = definitions.Values.Select(f => f.Name).ToHashSet(StringComparer.Ordinal);
+            samples = values.SelectMany(v => v).Where(v => known.Contains(v.FieldName) && !string.IsNullOrWhiteSpace(v.Value))
+                .GroupBy(v => v.FieldName, StringComparer.Ordinal).ToDictionary(g => g.Key,
+                    g => g.Select(v => v.Value!).Distinct(StringComparer.Ordinal).Take(3)
+                        .Select(v => v[..Math.Min(80, v.Length)]).ToArray(), StringComparer.Ordinal);
+            sampleStatus = "partial";
+        }
+        catch (Exception error) when (!ct.IsCancellationRequested && error is
+            LaserficheReports.Domain.Exceptions.LaserficheException or HttpRequestException or OperationCanceledException)
+        {
+            logger.LogWarning("Stage=FIELD_SAMPLE Status=unavailable ErrorType={ErrorType}", error.GetType().Name);
+        }
         return new { tool = "GetRepositorySchema", fields = definitions.Values.Select(f => new { f.Name, f.FieldType, f.IsMultiValue, f.IsRequired, description = string.IsNullOrWhiteSpace(f.Description) ? null : f.Description[..Math.Min(f.Description.Length, 160)] }).Distinct().ToArray(),
+            fieldSamples = samples, sampleStatus,
             templates = templateDefinitions.Select(t => t.Name).ToArray(), entryProperties = StructuredRepositoryQuery.Builtins,
             tools = new[] { "SearchEntries", "AggregateEntries", "GetEntry", "GetEntryMetadata", "GetFolderContents", "GetTemplates", "GetRepositorySchema", "GetFolderInformation", "GetOcrContent" } };
     }
@@ -380,9 +407,6 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
             throw new ArgumentException("تعذر تحميل جميع الوثائق المطابقة؛ لم أعرض قائمة ناقصة على أنها كاملة.");
         if (plan.RequireUnique && (!result.IsTotalCountExact || result.TotalCount != 1))
             return new ChatResult("حدد رقم الوثيقة؛ الاسم يطابق أكثر من إدخال أو لم يمكن تحديد وثيقة واحدة.\n\n" + string.Join("\n", result.Items.Select(i => $"- {i.EntryId}: {ReportSupport.Cell(i.Name)}")), []);
-        if (plan.CountOnly && plan.Operation != "group")
-            return new ChatResult(result.IsTotalCountExact ? SelectionSummary(plan) + $"عدد النتائج المطابقة: **{result.TotalCount}**." : "العدد الإجمالي غير متاح؛ لم أقدّر العدد من الصفحة المعروضة.", [],
-                new AnswerScope("repository", repositoryId, result.TotalCount, 0, result.IsTotalCountExact, "عدد حي من Laserfiche.", ids));
         if (plan.GroupFields?.Length > 0 || plan.Metrics?.Length > 0 || plan.SortField != null || plan.Having != null || plan.Rollup != null)
             result = await CompleteProjectionAsync(result, plan, ct);
         if (plan.Operation == "group" && (plan.GroupFields?.Length > 0 || plan.Metrics?.Length > 0 || plan.GroupBy == null))
@@ -410,7 +434,7 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
         await Parallel.ForEachAsync(Enumerable.Range(0, result.Items.Count), new ParallelOptions { MaxDegreeOfParallelism = 4, CancellationToken = ct }, async (index, token) =>
         {
             var item = result.Items[index];
-            if (item.PageCount is null && item.EntryType is not (LFEntryType.Folder or LFEntryType.RecordSeries))
+            if (!plan.CountOnly && item.PageCount is null && item.EntryType is not (LFEntryType.Folder or LFEntryType.RecordSeries))
             {
                 try
                 {
@@ -431,7 +455,7 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
         if (!latest && result.HasNextPage) detail += $" عُرضت {result.Items.Count} نتيجة فقط؛ هذه ليست القائمة الكاملة.";
         var tableRows = string.Join("\n", result.Items.Select((i, index) =>
             $"| {i.EntryId} | {ReportSupport.Cell(i.Name)} | {Date(i.CreationTime)} | {Date(i.LastModifiedTime)} | {i.PageCount?.ToString(CultureInfo.InvariantCulture) ?? "—"} | [{index + 1}] |"));
-        return new ChatResult("# " + ReportSupport.Cell(plan.Title ?? "تقرير المستودع") + "\n\n" + detail + "\n\n| رقم الوثيقة | اسم الوثيقة | تاريخ الإنشاء | آخر تعديل | عدد الصفحات | المرجع |\n| --- | --- | --- | --- | --- | --- |\n" +
+        return new ChatResult("# " + ReportSupport.Cell(plan.Title ?? "تقرير المستودع") + "\n\n" + SelectionSummary(plan) + detail + "\n\n| رقم الوثيقة | اسم الوثيقة | تاريخ الإنشاء | آخر تعديل | عدد الصفحات | المرجع |\n| --- | --- | --- | --- | --- | --- |\n" +
             (result.Items.Count == 0 ? "| — | لم يتم العثور على نتائج مطابقة | — | — | — | — |" : tableRows), evidence,
             new AnswerScope(ids.Count > 0 ? "selected-documents" : "repository", repositoryId,
                 result.IsTotalCountExact ? result.TotalCount : result.Items.Count, evidence.Length,

@@ -13,6 +13,18 @@ def review(**changes):
 
 
 class PlanIntentReviewTests(unittest.TestCase):
+    def test_live_field_samples_reach_planner_and_reviewer_without_question_specific_mapping(self):
+        catalog = {**CATALOG, "fieldSamples": {"أجل الحفظ": ["2030-04-20", "2031-05-01"],
+                                                    "unknown": ["must not reach model"]}, "sampleStatus": "partial"}
+        model = FakeModel([json.dumps(plan(countOnly=True)), json.dumps(review())])
+        plan_reports(model, {"question": "كم منها موعدها قبل السنة المقبلة؟", "catalog": catalog}, review_intent=True)
+        for call in model.calls:
+            sent = json.loads(call[1].content)["catalog"]
+            self.assertEqual(sent["sampleStatus"], "partial")
+            self.assertEqual(sent["fieldSamples"], {"أجل الحفظ": ["2030-04-20", "2031-05-01"]})
+            self.assertIn("partial", call[0].content)
+            self.assertNotIn("2036", call[0].content)
+
     def test_schema_valid_semantic_errors_require_repair_and_reaudit(self):
         cases = [
             ("كم وثيقة غير مرفوضة؟", "outputMatches", "A count was replaced by a list."),

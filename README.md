@@ -601,7 +601,7 @@ Arabic questions. Unsupported calculations/calendars/criteria must be clarified,
 not silently approximated. A general question uses the entire selected repository
 unless explicitly restricted; content evidence still has retrieval coverage limits.
 
-Confirm `planner=intent-v6.0; planIntentReview=True` on restart, and
+Confirm `planner=intent-v6.1; planIntentReview=True` on restart, and
 `planIntentReview: true` in `/health`. `PLAN_INTENT_REVIEW` logs the checks. The
 additional audit normally adds one model call, and failed plans can require
 two additional calls. On slow CPU-only installations this increases latency.
@@ -612,3 +612,17 @@ and HTTP tests simulate responses to verify rejection, repair, safe clarificatio
 context preservation and shared deadlines. They do not prove the installed
 model understands every future question or validate counts against a real
 Laserfiche repository. Live acceptance testing remains necessary.
+
+The planner and reviewer also receive a bounded live metadata sample (up to
+eight documents, three distinct values per field, 80 characters per value).
+It helps distinguish full field names, units and calendar variants without
+repository-specific field mappings or canned questions. Missing sample values
+never prove absence. Sampling has a 15-second budget; an unavailable sample
+does not prevent planning against the authoritative field definitions.
+No OCR or document-content samples are added to the catalog.
+
+Count answers retain the document table, source references and live-document
+links, alongside the exact server total when available. The displayed rows are
+bounded by the requested page size and are labelled as partial when more exist;
+the total is never inferred from those rows. No stylesheet or table component
+changes are required.
