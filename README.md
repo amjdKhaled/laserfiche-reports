@@ -601,7 +601,7 @@ Arabic questions. Unsupported calculations/calendars/criteria must be clarified,
 not silently approximated. A general question uses the entire selected repository
 unless explicitly restricted; content evidence still has retrieval coverage limits.
 
-Confirm `planner=intent-v6.1; planIntentReview=True` on restart, and
+Confirm `planner=intent-v6.2; planIntentReview=True` on restart, and
 `planIntentReview: true` in `/health`. `PLAN_INTENT_REVIEW` logs the checks. The
 additional audit normally adds one model call, and failed plans can require
 two additional calls. On slow CPU-only installations this increases latency.
@@ -626,3 +626,18 @@ links, alongside the exact server total when available. The displayed rows are
 bounded by the requested page size and are labelled as partial when more exist;
 the total is never inferred from those rows. No stylesheet or table component
 changes are required.
+
+Planner v6.2 generates an exclusive folder locator (`selection.folder.id` or
+`selection.folder.name`); the Python boundary translates it to the existing
+backend contract. The generation grammar cannot include both. Existing API
+clients with a single flat folder selector remain compatible. A generated
+clarification must contain one non-executable report and a non-empty specific
+question, rather than an incomplete query or a mixed report.
+
+The reviewer receives explicit repository/presentation defaults and complete
+relative date anchors. It must not invent a folder, ordering, grouping or state
+field absent from the original request/catalog. Instructions are shorter and
+contain no repository-specific field mapping. `PLANNER_DRAFT` logs operations
+and filter shapes before validation without field values, document contents or
+raw questions. Repository API v2 metadata `id` is preserved as the definition
+ID, alongside the older `fieldId`/`fieldDefinitionId` shapes.

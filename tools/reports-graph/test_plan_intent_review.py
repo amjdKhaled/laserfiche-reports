@@ -13,6 +13,18 @@ def review(**changes):
 
 
 class PlanIntentReviewTests(unittest.TestCase):
+    def test_relative_date_report_keeps_today_anchor_and_explicit_repository_defaults(self):
+        output = plan({"field": "أجل الحفظ", "operator": "less_than", "relative": {"unit": "day"}})
+        model = FakeModel([json.dumps(output), json.dumps(review())])
+        result = plan_reports(model, {"question": "تقرير عما تجاوز موعده", "catalog": CATALOG,
+                                      "today": "2026-10-08"}, review_intent=True)
+        self.assertEqual(result["reports"][0]["resultType"], "documents")
+        sent = json.loads(model.calls[1][1].content)
+        self.assertEqual(sent["executionDefaults"]["scope"], "entire currently selected repository")
+        self.assertEqual(sent["proposedPlan"]["reports"][0]["filters"]["relative"],
+                         {"anchor": "today", "unit": "day", "offset": 0, "boundary": "start"})
+        self.assertNotIn("folderId", sent["proposedPlan"]["reports"][0])
+
     def test_live_field_samples_reach_planner_and_reviewer_without_question_specific_mapping(self):
         catalog = {**CATALOG, "fieldSamples": {"أجل الحفظ": ["2030-04-20", "2031-05-01"],
                                                     "unknown": ["must not reach model"]}, "sampleStatus": "partial"}

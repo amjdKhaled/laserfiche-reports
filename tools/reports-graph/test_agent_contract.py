@@ -70,7 +70,7 @@ class AgentContractTests(unittest.TestCase):
             with self.subTest(plan=plan):
                 self.assertFalse(validator.is_valid({'reports': [plan]}))
         for selection in [{'requiresFilter': False}, {'requiresFilter': True, 'entryIds': [618]},
-                          {'requiresFilter': True, 'folderId': 10}, {'requiresFilter': True, 'template': 'عقود'},
+                          {'requiresFilter': True, 'folder': {'id': 10}}, {'requiresFilter': True, 'template': 'عقود'},
                           {'requiresFilter': True, 'filters': {'field': 'الموعد', 'operator': 'less_than', 'relative': {'unit': 'day'}}}]:
             self.assertTrue(validator.is_valid({'reports': [{**base, 'selection': selection}]}))
 
@@ -161,8 +161,9 @@ class AgentContractTests(unittest.TestCase):
             result = plan_reports(model, {'question': 'وثائق', 'catalog': {'fields': [{'name': 'حقل فعلي', 'fieldType': 'Date'}]}})
             self.assertEqual(result['reports'][0]['operation'], 'search')
             self.assertEqual(len(requests), 1)
-            self.assertNotIn('resultType', requests[0]['format']['$defs']['RoutePlan']['anyOf'][0]['properties'])
-            self.assertIn('selection', requests[0]['format']['$defs']['RoutePlan']['anyOf'][0]['required'])
+            executable = requests[0]['format']['$defs']['ExecutablePlan']['anyOf'][0]
+            self.assertNotIn('resultType', executable['properties'])
+            self.assertIn('selection', executable['required'])
             self.assertEqual(requests[0]['options']['num_predict'], 1536)
             self.assertFalse(requests[0]['stream'])
             self.assertEqual(json.loads(requests[0]['messages'][1]['content'])['catalog']['fields'], [['حقل فعلي', 'Date', False]])

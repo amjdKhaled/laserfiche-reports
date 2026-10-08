@@ -14,6 +14,34 @@ def plan(filters=None, **options):
         {'requiresFilter': True, 'filters': filters} if filters else {'requiresFilter': False}, **options}]}
 
 class TypedPlannerTests(unittest.TestCase):
+    def test_folder_locator_is_exclusive_in_generation_and_preserves_combined_filters(self):
+        validator = Draft202012Validator(planner_schema_for_catalog(CATALOG).model_json_schema())
+        for folder in [{"id": 42}, {"name": "مجلد محدد"}]:
+            output = plan({"field": "أجل الحفظ", "operator": "less_than", "relative": {"unit": "day"}})
+            output["reports"][0]["selection"]["folder"] = folder
+            self.assertTrue(validator.is_valid(output))
+            actual = planner_request(json.dumps(output), "طلب").reports[0]
+            self.assertEqual(actual.folderId, folder.get("id"))
+            self.assertEqual(actual.folderName, folder.get("name"))
+            self.assertEqual(actual.filters.field, "أجل الحفظ")
+        for selection in [{"requiresFilter": True, "folder": {"id": 42, "name": "مجلد"}},
+                          {"requiresFilter": True, "folderId": 42, "folderName": "مجلد"},
+                          {"requiresFilter": True, "folder": {}},
+                          {"requiresFilter": True, "folder": {"id": 0}}]:
+            output = plan(); output["reports"][0]["selection"] = selection
+            self.assertFalse(validator.is_valid(output))
+
+    def test_clarification_requires_one_specific_question_and_no_executable_sections(self):
+        validator = Draft202012Validator(planner_schema_for_catalog(CATALOG).model_json_schema())
+        output = {"reports": [{"operation": "clarify", "title": "توضيح المعيار",
+                              "selection": {"requiresFilter": False}}]}
+        self.assertFalse(validator.is_valid(output))
+        for text in [None, ""]:
+            self.assertFalse(validator.is_valid({**output, "clarification": text}))
+        valid = {**output, "clarification": "هل تقصد أجل الحفظ أم مدة النشاط؟"}
+        self.assertTrue(validator.is_valid(valid))
+        self.assertFalse(validator.is_valid({**valid, "reports": output["reports"] + plan()["reports"]}))
+
     def test_api_date_alias_is_canonicalized_without_a_second_model_call(self):
         output = plan({'field': 'creationTime', 'operator': 'less_than', 'value': '2037-01-01'}, countOnly=True)
         model = FakeModel([json.dumps(output)])

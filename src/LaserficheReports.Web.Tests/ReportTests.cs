@@ -605,7 +605,7 @@ public class ReportTests
         private static LFEntry Document(int id) => new() { Id = id, Name = $"وثيقة {id}", FullPath = $"\\قسم\\وثيقة {id}", EntryType = LFEntryType.Document };
         public Task<LFEntry> GetEntryAsync(int entryId, CancellationToken cancellationToken = default)
         {
-            EntryCalls.Add(entryId);
+            lock (EntryCalls) EntryCalls.Add(entryId);
             if (entryId == DeniedId) throw new LaserficheException("denied", 403);
             if (entryId == FailureId) throw new LaserficheException("outage", 503);
             return Task.FromResult(Document(entryId) with { PageCount = PageCount,
@@ -613,7 +613,7 @@ public class ReportTests
         }
         public Task<IReadOnlyList<LFFieldValue>> GetEntryFieldsAsync(int entryId, CancellationToken cancellationToken = default)
         {
-            FieldCalls.Add(entryId);
+            lock (FieldCalls) FieldCalls.Add(entryId);
             return Task.FromResult<IReadOnlyList<LFFieldValue>>([
                 new() { FieldName = "الوثيقة", Value = "حقل أقصر" },
                 new() { FieldName = "الإدارة", Value = "الإدارة العامة" },
