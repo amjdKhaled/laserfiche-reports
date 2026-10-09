@@ -601,7 +601,7 @@ Arabic questions. Unsupported calculations/calendars/criteria must be clarified,
 not silently approximated. A general question uses the entire selected repository
 unless explicitly restricted; content evidence still has retrieval coverage limits.
 
-Confirm `planner=live-plan-v7.2; planIntentReview=True` on restart, and
+Confirm `planner=live-plan-v7.3; planIntentReview=True` on restart, and
 `planIntentReview: true` in `/health`. `PLAN_INTENT_REVIEW` logs the checks. The
 additional audit normally adds one model call, and failed plans can require
 two additional calls. On slow CPU-only installations this increases latency.
@@ -737,7 +737,7 @@ means waiting for extraction/embedding, not instantaneous OCR. Results are not a
 transactional snapshot during concurrent repository edits. This does not make sampled
 content retrieval an exact repository-wide count.
 
-Restart both services after pulling and confirm `planner=live-plan-v7.2`. Run the web
+Restart both services after pulling and confirm `planner=live-plan-v7.3`. Run the web
 project with a build (do not use `--no-build`). Keep `-PlannerTracePath` enabled for
 acceptance with the real model. `replay_planner.py` now defaults to `LivePlannerSchema`
 and preserves schema embedding when replaying new traces; old stages can be selected
@@ -827,7 +827,7 @@ The authenticated web client now requires `/health` to advertise
 `planningProtocol=live-periods-v1`. Earlier intent-v6 servers used the same routing
 version and could pass the old handshake after a source pull. They are now rejected
 before sending the question, with an instruction to restart the graph. Restart
-**both services** and verify `planner=live-plan-v7.2` before testing this release.
+**both services** and verify `planner=live-plan-v7.3` before testing this release.
 
 Regression tests cover the screenshot's year-only question through the graph HTTP
 contract, C# routing and live-search compilation to the existing document table,
@@ -837,3 +837,28 @@ Qwen model's interpretation or establish actual repository totals. Capture a
 failed real question with `-PlannerTracePath`, then run `diagnose.ps1` for acceptance.
 Direct-plan repairs also restart from the original question/catalog plus validation
 feedback, without replaying the invalid assistant draft as conversation history.
+
+
+### Native planner grammar compatibility (v7.3)
+
+The uploaded failing traces contained array filters and year-only date values
+outside the declared schema. The direct planner had combined `properties` and
+`anyOf` required-only alternatives in one selection object. llama.cpp does not
+support that intersection. Keep complete object alternatives and share property
+schemas through direct references instead. Numeric patterns now use ordinary
+capture groups, supported by the converter, rather than non-capturing groups.
+These changes do not encode field names, question words or years in production.
+
+Validation: the old captured contract failed llama.cpp's Python converter at
+`required: [filters]`; removing that defect exposed its unsupported numeric
+pattern. The corrected contract compiled using the captured live catalog.
+`test_live_planner.py` guards the schema structure and captured failure shapes.
+For the optional native conversion test, set `LLAMA_SCHEMA_CONVERTER` to
+`examples/json_schema_to_grammar.py` from ggml-org/llama.cpp commit `00681df`, then
+run `python -m unittest discover -s tools/reports-graph -p test_native_grammar.py`.
+The external converter is a test tool only, not a runtime dependency.
+
+This verifies schema compatibility, not Qwen semantic accuracy or the totals in
+an on-prem repository. Semantic review and live backend execution remain in
+place. Opt-in traces now include `plan_rejected` validation diagnostics as well
+as model responses. Restart the graph after pulling and check `live-plan-v7.3`.

@@ -666,7 +666,7 @@ def planner_schema_for_catalog(catalog, intent=None):
                     ("equals", "not_equals", "contains", "starts_with")] if group == "text" else
                     [op for op in ops if op not in ("contains", "starts_with")])
                 if group == "date": leaf["properties"]["value"]["pattern"] = r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                if group == "number": leaf["properties"]["value"]["pattern"] = r"^[+-]?[0-9]+(?:\.[0-9]+)?$"
+                if group == "number": leaf["properties"]["value"]["pattern"] = r"^[+-]?[0-9]+(\.[0-9]+)?$"
                 variants.append(leaf)
                 if group == "date":
                     relative = json.loads(json.dumps(filters[3])); relative["properties"]["field"] = {"enum": names}
@@ -809,15 +809,21 @@ def direct_planner_schema(catalog):
         @staticmethod
         def model_json_schema():
             contract = planner_schema_for_catalog(catalog).model_json_schema()
-            # Selection variants used to duplicate all properties five times.
-            # Share them, retaining the requirement for a real selector.
+            # Keep each selector as a complete object branch. llama.cpp's
+            # schema-to-grammar converter does not intersect sibling properties
+            # and anyOf: required-only branches can discard the filter grammar.
+            # That previously allowed arrays and untyped dates inside selection.
+            # Deduplicate property schemas with refs, not required-only unions.
             choices = contract["$defs"]["Selection"]["anyOf"]
-            restricted = choices[1:]
-            if restricted:
-                contract["$defs"]["Selection"] = {"anyOf": [choices[0], {
-                    "type": "object", "properties": restricted[0]["properties"],
-                    "required": ["requiresFilter"], "additionalProperties": False,
-                    "anyOf": [{"required": [v["required"][1]]} for v in restricted]}]}
+            if len(choices) > 1:
+                shared = choices[1]["properties"]
+                for key, definition in list(shared.items()):
+                    if key == "requiresFilter" or "$ref" in definition:
+                        continue
+                    name = "SelectionProperty_" + key
+                    contract["$defs"][name] = definition
+                    for choice in choices[1:]:
+                        choice["properties"][key] = {"$ref": "#/$defs/" + name}
             for branch in contract["anyOf"]:
                 branch["properties"]["contextMode"] = {"enum": ["current", "followup", "clarification_reply"]}
                 branch["required"].append("contextMode")
@@ -1012,7 +1018,7 @@ def plan_reports(model, payload, *, budget_seconds=None, max_tokens=1536, review
     # Opt-in local diagnostics contain only planning data, never API headers,
     # credentials or OCR. Preserve inputs to reproduce the real model failure.
     write_planner_trace(trace_path, {"stage": "route_input", "payload": payload,
-        "model": getattr(model, "model", type(model).__name__), "plannerVersion": "live-plan-v7.2"})
+        "model": getattr(model, "model", type(model).__name__), "plannerVersion": "live-plan-v7.3"})
     # Plan against every authoritative field/template name, without long descriptions.
     # Never shortlist names by keywords: that could hide a field needed by the AI.
     payload = dict(payload)
@@ -1164,7 +1170,7 @@ def plan_reports(model, payload, *, budget_seconds=None, max_tokens=1536, review
                         return response_with_context(safe)
                     raise ValueError("Intent review rejected plan: " + json.dumps(
                         {"checks": checks, "issues": review.issues, "clarification": review.clarification}, ensure_ascii=False))
-            print("Stage=PLANNER_VALIDATED RequestId=" + REQUEST_ID.get() + " Version=live-plan-v7.2 Attempt=" + str(attempt + 1) + " Plans=" + json.dumps([
+            print("Stage=PLANNER_VALIDATED RequestId=" + REQUEST_ID.get() + " Version=live-plan-v7.3 Attempt=" + str(attempt + 1) + " Plans=" + json.dumps([
                 {"resultType": p.resultType, "operation": p.operation, "requiresFilter": p.requiresFilter,
                  "hasFilter": bool(p.filters or p.field or p.template or p.folderId or p.folderName or p.name or p.entryIds or p.from_),
                  "allResults": p.allResults, "countOnly": p.countOnly,
@@ -1176,6 +1182,8 @@ def plan_reports(model, payload, *, budget_seconds=None, max_tokens=1536, review
                        for item in error.errors(include_input=False, include_context=False)[:8]]
                       if hasattr(error, "errors") else [{"type": type(error).__name__, "message": str(error)[:1200]}])
             print("Stage=PLANNER_REJECTED RequestId=" + REQUEST_ID.get() + " Attempt=" + str(attempt + 1) + " Errors=" + json.dumps(errors, ensure_ascii=False), flush=True)
+            write_planner_trace(trace_path, {"stage": "plan_rejected", "attempt": attempt + 1,
+                "semanticRejection": semantic_rejection, "errors": errors})
             if attempt == 1:
                 raise
             if intent is not None and semantic_rejection:
@@ -1413,7 +1421,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(HTTPStatus.SERVICE_UNAVAILABLE, {"status": "unavailable", "error": error})
         return self.send_json(HTTPStatus.OK, {"status": "ready", "model": self.model_name,
             "modelTimeoutSeconds": self.model_timeout_seconds, "plannerTimeoutSeconds": self.planner_timeout_seconds, "engine": "LangGraph",
-            "routingVersion": "schema-agent-v5", "planningProtocol": "live-periods-v1", "plannerVersion": "live-plan-v7.2", "planIntentReview": self.review_plans,
+            "routingVersion": "schema-agent-v5", "planningProtocol": "live-periods-v1", "plannerVersion": "live-plan-v7.3", "planIntentReview": self.review_plans,
             "promptVersion": PROMPT_VERSION, "capabilities": ["schema-output", "structured-filters", "backend-dates", "aggregation", "follow-up", "focused-context", "plan-intent-review", "optional-semantic-review"]})
 
     def do_POST(self):
@@ -1522,7 +1530,7 @@ def main():
     Handler.review_plans = not args.skip_plan_review
     Handler.model = model
     Handler.graph = build_graph(model, fast=True, review_content=args.review_content)
-    print(f"LangGraph ready on http://127.0.0.1:{args.port}; model={args.model}; planner=live-plan-v7.2; planIntentReview={Handler.review_plans}; modelTimeoutSeconds={args.model_timeout_seconds}; plannerTimeoutSeconds={args.planner_timeout_seconds}; plannerOutputTokens={args.planner_output_tokens}", flush=True)
+    print(f"LangGraph ready on http://127.0.0.1:{args.port}; model={args.model}; planner=live-plan-v7.3; planIntentReview={Handler.review_plans}; modelTimeoutSeconds={args.model_timeout_seconds}; plannerTimeoutSeconds={args.planner_timeout_seconds}; plannerOutputTokens={args.planner_output_tokens}", flush=True)
     ThreadingHTTPServer(("127.0.0.1", args.port), Handler).serve_forever()
 
 

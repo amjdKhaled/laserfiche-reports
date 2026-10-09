@@ -10,6 +10,36 @@ CATALOG = {'fields': [{'name': 'انتهاء صلاحية السجل', 'fieldTyp
                       {'name': 'التكلفة', 'fieldType': 'Number'}]}
 
 class LivePlannerTests(unittest.TestCase):
+    def test_native_grammar_uses_complete_union_branches_and_supported_patterns(self):
+        schema = direct_planner_schema({**CATALOG, 'templates': ['Records']}).model_json_schema()
+        def check(node):
+            if isinstance(node, list):
+                for item in node: check(item)
+            elif isinstance(node, dict):
+                if 'anyOf' in node or 'oneOf' in node:
+                    self.assertNotIn('properties', node)
+                if 'required' in node:
+                    self.assertEqual(node.get('type'), 'object')
+                    self.assertTrue(set(node['required']) <= set(node['properties']))
+                if 'pattern' in node:
+                    self.assertNotIn('(?:', node['pattern'])
+                for key, value in node.items():
+                    if key in ('properties', '$defs'):
+                        for definition in value.values(): check(definition)
+                    else: check(value)
+        check(schema)
+
+    def test_captured_failure_shapes_are_not_valid_generation_choices(self):
+        schema = direct_planner_schema(CATALOG).model_json_schema()
+        validator = Draft202012Validator(schema)
+        for filters in ([{}, 'field:Date', 'operator:equals', 'value:2026-01-01'],
+                        [{}, {'field': 'انتهاء صلاحية السجل', 'operator': 'not_equals', 'value': ''}],
+                        {'field': 'انتهاء صلاحية السجل', 'operator': 'equals', 'value': '2036'}):
+            draft = {'contextMode': 'current', 'reports': [{'operation': 'search', 'title': 'الوثائق',
+                'selection': {'requiresFilter': True, 'filters': filters}}]}
+            with self.subTest(filters=filters), self.assertRaises(ValidationError):
+                validator.validate(draft)
+
     def test_direct_repair_does_not_replay_an_invalid_assistant_draft(self):
         invalid = {'reports': [{'operation': 'search', 'title': 'خطة مرفوضة',
             'selection': {'requiresFilter': True, 'filters': {'field': 'حقل مخترع', 'operator': 'equals', 'value': 'خطأ'}}}]}
