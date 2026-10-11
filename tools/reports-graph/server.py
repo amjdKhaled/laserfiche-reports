@@ -22,7 +22,7 @@ from httpx import TimeoutException
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_ollama import ChatOllama
 from langgraph.graph import END, START, StateGraph
-from clarification_options import clarification as unresolved_clarification
+from clarification_options import clarification as unresolved_clarification, selected_option
 from request_body import RequestBodyError, read_request_body
 from context_windows import focused_window
 from report_reasoning import (PROMPT_VERSION, Extraction, Draft, Review, COMPOSE_SYSTEM,
@@ -328,7 +328,7 @@ class RoutePlan(StrictModel):
     requiresFilter: StrictBool
     operation: Literal["search", "folders", "metadata", "templates", "schema", "folder_information", "recent", "latest_created", "latest_modified", "created", "modified", "group", "content", "clarify"]
     title: str = Field(min_length=2, max_length=120)
-    question: str = Field(min_length=2, max_length=2000)
+    question: str = Field(min_length=1, max_length=2000)
     field: str | None = Field(default=None, max_length=200)
     value: str | None = Field(default=None, max_length=200)
     template: str | None = Field(default=None, max_length=200)
@@ -1047,9 +1047,14 @@ def plan_reports(model, payload, *, budget_seconds=None, max_tokens=1536, review
         "templates": payload["catalog"]["templates"], "entryProperties": payload["catalog"]["entryProperties"],
         "fieldSamples": payload["catalog"]["fieldSamples"], "sampleStatus": payload["catalog"]["sampleStatus"]}}
     clarification_context = pending_clarification(payload.get("history", []))
+    choice = selected_option(payload["question"], clarification_context)
+    if choice is not None:
+        clarification_context = {**clarification_context, "selectedOption": choice}
     if clarification_context:
         model_payload["clarificationContext"] = clarification_context
-    messages = [SystemMessage(content=ROUTE_SYSTEM if interpret_intent else DIRECT_PLAN_SYSTEM),
+    clarification_guidance = """
+If clarificationContext.selectedOption exists, it is the exact numbered option selected by the user: use clarification_reply and resolve it against the live catalog, preserving the original request's operation and conditions. Never interpret the menu number as a field value, document ID or count. An option chooses a field/template only, not an unstated comparison. For a full restatement, use all explicit details in the current question; it can resolve the pending ambiguity. Do not ask the same clarification when the supplied name uniquely matches the live catalog. Ordinal replies such as الثانية mean the corresponding displayed option. If ambiguity remains, ask specifically for the missing condition, not for details already supplied."""
+    messages = [SystemMessage(content=(ROUTE_SYSTEM if interpret_intent else DIRECT_PLAN_SYSTEM) + clarification_guidance),
                 HumanMessage(content=json.dumps(model_payload, ensure_ascii=False, separators=(",", ":")))]
     def invoke_plan(call_messages, schema, tokens, diagnostics=False):
         input_bytes = sum(len(str(m.content).encode("utf-8")) for m in call_messages)
@@ -1091,7 +1096,7 @@ def plan_reports(model, payload, *, budget_seconds=None, max_tokens=1536, review
     intent = None
     context_mode = "current"
     def interpret_question(feedback=None):
-        intent_messages = [SystemMessage(content=INTENT_SYSTEM), HumanMessage(content=json.dumps(
+        intent_messages = [SystemMessage(content=INTENT_SYSTEM + clarification_guidance), HumanMessage(content=json.dumps(
             {**{key: payload[key] for key in ("question", "history", "today") if key in payload}, **({"clarificationContext": clarification_context} if clarification_context else {})},
             ensure_ascii=False, separators=(",", ":")))]
         if feedback:
@@ -1131,6 +1136,8 @@ def plan_reports(model, payload, *, budget_seconds=None, max_tokens=1536, review
                     raise ValueError("Invalid request context mode")
                 if context_mode == "clarification_reply" and clarification_context is None:
                     raise ValueError("No pending clarification exists for this reply")
+                if choice is not None and context_mode != "clarification_reply":
+                    raise ValueError("An explicit menu selection must use clarification_reply and the original request")
                 model_payload["contextMode"] = context_mode
             request = canonicalize_property_names(planner_request(content, payload["question"]), payload["catalog"])
             print("Stage=PLANNER_DRAFT RequestId=" + REQUEST_ID.get() + " Attempt=" + str(attempt + 1) +

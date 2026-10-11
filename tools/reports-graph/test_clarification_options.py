@@ -32,3 +32,17 @@ class ClarificationOptionsTests(unittest.TestCase):
             def invoke(self, *_): raise TimeoutError('offline')
         with self.assertRaises(TimeoutError):
             plan_reports(Offline(), {'question': 'العقد', 'catalog': CATALOG})
+
+    def test_menu_choice_reaches_planner_with_original_request(self):
+        model = FakeModel([json.dumps({'contextMode': 'clarification_reply', 'reports': [
+            {'operation': 'search', 'countOnly': True, 'title': 'عدد الوثائق', 'selection': {'requiresFilter': True,
+             'filters': {'field': 'تاريخ استلام العقد', 'operator': 'through_period', 'period': {'year': 2036}}}}]})])
+        result = plan_reports(model, {'question': '٢', 'catalog': CATALOG, 'history': [
+            {'role': 'user', 'text': 'كم وثيقة حتى 2036؟'},
+            {'role': 'assistant', 'kind': 'clarification', 'clarificationQuestion': 'كم وثيقة حتى 2036؟',
+             'text': '1. تاريخ انتهاء العقد\n2. تاريخ استلام العقد'}]})
+        context = json.loads(model.calls[0][1].content)['clarificationContext']
+        self.assertEqual(context['selectedOption'], 'تاريخ استلام العقد')
+        self.assertEqual(context['question'], 'كم وثيقة حتى 2036؟')
+        self.assertTrue(result['reports'][0]['countOnly'])
+        self.assertEqual(result['reports'][0]['filters']['period']['year'], 2036)

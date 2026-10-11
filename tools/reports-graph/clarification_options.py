@@ -31,5 +31,17 @@ def clarification(question, catalog):
     choices = suggestions(question, catalog)
     if choices:
         options = '\n'.join(f'{i}. {kind} «{label}»' for i, (kind, label) in enumerate(choices, 1))
-        return 'لم أتمكن من تحديد البحث بثقة. هذه أقرب أسماء موجودة في المستودع؛ هل تقصد أحدها؟\n' + options + '\nاذكر الخيار المقصود والشرط المطلوب، وسأبحث بناءً عليه.'
-    return 'لم أتمكن من تحديد البحث بثقة. هل تقصد البحث في اسم الوثيقة، أم قيمة أحد الحقول، أم محتوى الصفحات؟ وضح المعلومة والشرط المطلوبين.'
+        return 'أحتاج توضيح المقصود حتى أبحث بدقة. هذه أقرب أسماء موجودة في المستودع؛ هل تقصد أحدها؟\n' + options + '\nاكتب رقم الخيار أو اسمه، وسأستخدمه مع شروط سؤالك السابق.'
+    return 'أحتاج توضيح المقصود حتى أبحث بدقة. هل تقصد البحث في اسم الوثيقة، أم قيمة أحد الحقول، أم محتوى الصفحات؟ وضح المعلومة والشرط المطلوبين.'
+
+
+def selected_option(reply, context):
+    """Resolve only an explicit menu number, never infer a search predicate."""
+    if not context:
+        return None
+    number = unicodedata.normalize('NFKC', reply).strip()
+    if not number.isdecimal() or len(number) > 3:
+        return None
+    matches = re.findall(r'^\s*([0-9٠-٩۰-۹]+)[.)、-]\s+(.+?)\s*$', context.get('prompt', ''), re.MULTILINE)
+    choices = [label for index, label in matches if int(index) == int(number)]
+    return choices[0] if len(choices) == 1 else None
