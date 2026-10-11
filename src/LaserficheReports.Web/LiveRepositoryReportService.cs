@@ -110,7 +110,7 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
                 1, 20, cancellationToken: ct);
             if (!found.IsTotalCountExact || found.TotalCount != 1 || found.Items.Count != 1)
                 throw new RepositoryScopeClarificationException(found.IsTotalCountExact && found.TotalCount == 0
-                    ? "لم أجد المجلد المطلوب بالاسم؛ وضح اسم المجلد أو رقمه. لم أعتبر ذلك عدد وثائق يساوي صفرًا."
+                    ? RepositorySuggestions.MissingFolder(plan.FolderName, (await SchemaAsync(ct)).Values.Select(f => f.Name))
                     : "اسم المجلد غير محدد بشكل فريد؛ اختر رقم المجلد: " + string.Join("، ", found.Items.Select(i => $"{i.EntryId}: {i.Name}")));
             plan = plan with { FolderId = found.Items[0].EntryId, FolderName = null };
         }
@@ -484,8 +484,18 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
         if (!latest && result.HasNextPage) detail += $" عُرضت {result.Items.Count} نتيجة فقط؛ هذه ليست القائمة الكاملة.";
         var tableRows = string.Join("\n", result.Items.Select((i, index) =>
             $"| {i.EntryId} | {ReportSupport.Cell(i.Name)} | {Date(i.CreationTime)} | {Date(i.LastModifiedTime)} | {i.PageCount?.ToString(CultureInfo.InvariantCulture) ?? "—"} | [{index + 1}] |"));
+        var emptyAdvice = "";
+        if (result.IsTotalCountExact && result.TotalCount == 0 && plan.RequiresFilter)
+        {
+            var candidates = RepositorySuggestions.Closest(plan.Question ?? plan.Field ?? plan.Filters?.Field ?? "",
+                (await SchemaAsync(ct)).Values.Select(f => f.Name));
+            emptyAdvice = "\n\nلم أجد مطابقات للشروط الحالية. " + (candidates.Length > 0
+                ? "هل تقصد أحد هذه الحقول: " + string.Join("، ", candidates.Select(n => "«" + ReportSupport.Cell(n) + "»")) + "، أم تريد تعديل القيمة أو الفترة؟"
+                : "هل تريد تعديل قيمة الحقل، أم الفترة، أم نطاق المجلد؟")
+                + " هذه اقتراحات للتوضيح؛ لم أنفذ بحثًا بشروط بديلة.";
+        }
         return new ChatResult("# " + ReportSupport.Cell(plan.Title ?? "تقرير المستودع") + "\n\n" + SelectionSummary(plan) + detail + "\n\n| رقم الوثيقة | اسم الوثيقة | تاريخ الإنشاء | آخر تعديل | عدد الصفحات | المرجع |\n| --- | --- | --- | --- | --- | --- |\n" +
-            (result.Items.Count == 0 ? "| — | لم يتم العثور على نتائج مطابقة | — | — | — | — |" : tableRows), evidence,
+            (result.Items.Count == 0 ? "| — | لم يتم العثور على نتائج مطابقة | — | — | — | — |" : tableRows) + emptyAdvice, evidence,
             new AnswerScope(ids.Count > 0 ? "selected-documents" : "repository", repositoryId,
                 result.IsTotalCountExact ? result.TotalCount : result.Items.Count, evidence.Length,
                 result.IsTotalCountExact && !result.HasNextPage, detail, ids))

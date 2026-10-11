@@ -86,15 +86,17 @@ class PlanIntentReviewTests(unittest.TestCase):
 
     def test_repeated_error_without_genuine_ambiguity_fails_closed(self):
         model = FakeModel([json.dumps(plan()), json.dumps(review(conditionsMatch=False, issues=["Lost condition"]))] * 2)
-        with self.assertRaises(ValueError):
-            plan_reports(model, {"question": "سؤال", "catalog": CATALOG}, review_intent=True)
+        result = plan_reports(model, {'question': 'سؤال', 'catalog': CATALOG}, review_intent=True)
+        self.assertTrue(all(p['operation'] == 'clarify' and p['filters'] is None for p in result['reports']))
+        self.assertTrue(result['clarification'])
 
     def test_inconsistent_approval_and_malformed_review_are_not_accepted(self):
         for response in [review(issues=["Missing restriction"]), {"outputMatches": True}]:
             with self.subTest(response=response):
                 model = FakeModel([json.dumps(plan()), json.dumps(response)] * 2)
-                with self.assertRaises(ValueError):
-                    plan_reports(model, {"question": "سؤال", "catalog": CATALOG}, review_intent=True)
+                result = plan_reports(model, {'question': 'سؤال', 'catalog': CATALOG}, review_intent=True)
+                self.assertTrue(all(p['operation'] == 'clarify' and p['filters'] is None for p in result['reports']))
+                self.assertTrue(result['clarification'])
 
     def test_reviewer_shares_original_planning_deadline(self):
         model = FakeModel([json.dumps(plan())])

@@ -46,8 +46,9 @@ class PlanningTests(unittest.TestCase):
         self.assertEqual(len(plan_reports(model, payload)['reports']), 2)
         self.assertEqual(len(model.calls), 2)
         self.assertIn('إجراء الوثيقة', model.calls[1][1].content)
-        with self.assertRaises(ValueError):
-            plan_reports(FakeModel(['bad JSON', 'bad JSON']), payload)
+        result = plan_reports(FakeModel(['bad JSON', 'bad JSON']), payload)
+        self.assertTrue(all(p['operation'] == 'clarify' and p['filters'] is None for p in result['reports']))
+        self.assertTrue(result['clarification'])
 
     def test_dependency_failures_remain_distinct(self):
         from server import dependency_error

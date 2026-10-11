@@ -22,6 +22,7 @@ from httpx import TimeoutException
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_ollama import ChatOllama
 from langgraph.graph import END, START, StateGraph
+from clarification_options import clarification as unresolved_clarification
 from request_body import RequestBodyError, read_request_body
 from context_windows import focused_window
 from report_reasoning import (PROMPT_VERSION, Extraction, Draft, Review, COMPOSE_SYSTEM,
@@ -1018,7 +1019,7 @@ def plan_reports(model, payload, *, budget_seconds=None, max_tokens=1536, review
     # Opt-in local diagnostics contain only planning data, never API headers,
     # credentials or OCR. Preserve inputs to reproduce the real model failure.
     write_planner_trace(trace_path, {"stage": "route_input", "payload": payload,
-        "model": getattr(model, "model", type(model).__name__), "plannerVersion": "live-plan-v7.3"})
+        "model": getattr(model, "model", type(model).__name__), "plannerVersion": "live-plan-v7.4"})
     # Plan against every authoritative field/template name, without long descriptions.
     # Never shortlist names by keywords: that could hide a field needed by the AI.
     payload = dict(payload)
@@ -1170,7 +1171,7 @@ def plan_reports(model, payload, *, budget_seconds=None, max_tokens=1536, review
                         return response_with_context(safe)
                     raise ValueError("Intent review rejected plan: " + json.dumps(
                         {"checks": checks, "issues": review.issues, "clarification": review.clarification}, ensure_ascii=False))
-            print("Stage=PLANNER_VALIDATED RequestId=" + REQUEST_ID.get() + " Version=live-plan-v7.3 Attempt=" + str(attempt + 1) + " Plans=" + json.dumps([
+            print("Stage=PLANNER_VALIDATED RequestId=" + REQUEST_ID.get() + " Version=live-plan-v7.4 Attempt=" + str(attempt + 1) + " Plans=" + json.dumps([
                 {"resultType": p.resultType, "operation": p.operation, "requiresFilter": p.requiresFilter,
                  "hasFilter": bool(p.filters or p.field or p.template or p.folderId or p.folderName or p.name or p.entryIds or p.from_),
                  "allResults": p.allResults, "countOnly": p.countOnly,
@@ -1185,6 +1186,13 @@ def plan_reports(model, payload, *, budget_seconds=None, max_tokens=1536, review
             write_planner_trace(trace_path, {"stage": "plan_rejected", "attempt": attempt + 1,
                 "semanticRejection": semantic_rejection, "errors": errors})
             if attempt == 1:
+                if not interpret_intent:
+                    active_question = (clarification_context["question"] + " " + payload["question"]
+                        if clarification_context and context_mode == "clarification_reply" else payload["question"])
+                    safe = planner_request(json.dumps({"reports": [{"operation": "clarify", "title": "تحديد المقصود",
+                        "selection": {"requiresFilter": False}}],
+                        "clarification": unresolved_clarification(active_question, payload["catalog"])}, ensure_ascii=False), payload["question"])
+                    return response_with_context(safe)
                 raise
             if intent is not None and semantic_rejection:
                 intent = interpret_question(json.dumps(errors, ensure_ascii=False))
@@ -1421,7 +1429,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(HTTPStatus.SERVICE_UNAVAILABLE, {"status": "unavailable", "error": error})
         return self.send_json(HTTPStatus.OK, {"status": "ready", "model": self.model_name,
             "modelTimeoutSeconds": self.model_timeout_seconds, "plannerTimeoutSeconds": self.planner_timeout_seconds, "engine": "LangGraph",
-            "routingVersion": "schema-agent-v5", "planningProtocol": "live-periods-v1", "plannerVersion": "live-plan-v7.3", "planIntentReview": self.review_plans,
+            "routingVersion": "schema-agent-v5", "planningProtocol": "live-periods-v1", "plannerVersion": "live-plan-v7.4", "planIntentReview": self.review_plans,
             "promptVersion": PROMPT_VERSION, "capabilities": ["schema-output", "structured-filters", "backend-dates", "aggregation", "follow-up", "focused-context", "plan-intent-review", "optional-semantic-review"]})
 
     def do_POST(self):
@@ -1530,7 +1538,7 @@ def main():
     Handler.review_plans = not args.skip_plan_review
     Handler.model = model
     Handler.graph = build_graph(model, fast=True, review_content=args.review_content)
-    print(f"LangGraph ready on http://127.0.0.1:{args.port}; model={args.model}; planner=live-plan-v7.3; planIntentReview={Handler.review_plans}; modelTimeoutSeconds={args.model_timeout_seconds}; plannerTimeoutSeconds={args.planner_timeout_seconds}; plannerOutputTokens={args.planner_output_tokens}", flush=True)
+    print(f"LangGraph ready on http://127.0.0.1:{args.port}; model={args.model}; planner=live-plan-v7.4; planIntentReview={Handler.review_plans}; modelTimeoutSeconds={args.model_timeout_seconds}; plannerTimeoutSeconds={args.planner_timeout_seconds}; plannerOutputTokens={args.planner_output_tokens}", flush=True)
     ThreadingHTTPServer(("127.0.0.1", args.port), Handler).serve_forever()
 
 

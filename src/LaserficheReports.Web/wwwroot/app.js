@@ -101,6 +101,7 @@ function renderHistory() {
     const button = el('button', chat.id === active ? 'selected' : '', chat.title);
     button.onclick = () => { active = chat.id; renderHistory(); renderMessages(); showTab('chat'); };
     button.classList.add('history-open');
+    button.title = chat.title;
     const row = el('div', chat.id === active ? 'history-row selected' : 'history-row');
     const remove = el('button', 'history-delete', '×');
     remove.type = 'button'; remove.title = 'حذف المحادثة';
@@ -121,7 +122,7 @@ function renderMessages() {
     const welcome = el('div', 'welcome');
     welcome.innerHTML = '<div class="welcome-icon">✦</div><h2>ما التقرير الذي تريد إعداده؟</h2><p>اسأل عن المستودع أو حدد رقم وثيقة. تظهر النتائج كتقرير وجداول مع مصادرها.</p>';
     const suggestions = el('div', 'suggestions');
-    for (const question of ['ماهي الوثائق الموجود فيها إجراء الوثيقة يساوي تحت الاجراء', 'اعرض جميع الوثائق في المستودع', 'لخص أهم النقاط في الوثيقة 618 كتقرير']) {
+    for (const question of ['اعرض الوثائق التي أنشئت هذا الشهر', 'كم عدد الوثائق في المستودع؟', 'ما الحقول والقوالب المتاحة للبحث؟']) {
       const button = el('button', '', question);
       button.onclick = () => { $('question').value = question; $('question').focus(); };
       suggestions.append(button);
@@ -134,7 +135,7 @@ function renderMessages() {
         ? original.reports.map(report => ({...original, ...report, text: report.answer, reports: null})) : [original];
       parts.forEach((message, partIndex) => {
       const item = el('div', `message ${message.role}`);
-      item.append(el('div', 'label', message.role === 'user' ? 'أنت' : (message.title || 'Laserfiche Reports')));
+      item.append(el('div', 'label', message.role === 'user' ? 'أنت' : (message.title || 'تقارير ليزرفيش الذكية')));
       const sourcePrefix = `source-${chat.id}-${messageIndex}-${partIndex}`;
       const bubble = el('div', 'bubble');
       if (message.role === 'assistant') {

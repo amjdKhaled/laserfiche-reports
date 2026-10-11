@@ -447,6 +447,38 @@ internal sealed class LaserficheDocumentService : ILaserficheDocumentService
             pageNumber);
     }
 
+    private static async Task ConvertLocalRasterAsync(byte[] bytes, Stream output)
+    {
+        var python = Environment.GetEnvironmentVariable("REPORTS_IMAGE_PYTHON");
+        var converter = Environment.GetEnvironmentVariable("REPORTS_IMAGE_CONVERTER");
+        if (string.IsNullOrWhiteSpace(python) || string.IsNullOrWhiteSpace(converter))
+            throw new LaserficheException("Local image conversion is not configured for this platform.", 500);
+        var info = new System.Diagnostics.ProcessStartInfo(python)
+        {
+            UseShellExecute = false, RedirectStandardInput = true,
+            RedirectStandardOutput = true, RedirectStandardError = true, CreateNoWindow = true
+        };
+        info.ArgumentList.Add(converter);
+        using var process = System.Diagnostics.Process.Start(info)
+            ?? throw new LaserficheException("Local image converter did not start.", 500);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        try
+        {
+            var read = process.StandardOutput.BaseStream.CopyToAsync(output, timeout.Token);
+            var errors = process.StandardError.ReadToEndAsync(timeout.Token);
+            await process.StandardInput.BaseStream.WriteAsync(bytes, timeout.Token);
+            process.StandardInput.Close();
+            await Task.WhenAll(read, process.WaitForExitAsync(timeout.Token));
+            await errors;
+            if (process.ExitCode != 0 || output.Length == 0)
+                throw new LaserficheException("Local image conversion failed.", 500);
+        }
+        finally
+        {
+            if (!process.HasExited) process.Kill(entireProcessTree: true);
+        }
+    }
+
     private static LaserficheEdocStream CreateBrowserSafePageStream(
         byte[] bytes,
         string upstreamContentType,
@@ -464,13 +496,18 @@ internal sealed class LaserficheDocumentService : ILaserficheDocumentService
         {
             try
             {
-                using var source = new MemoryStream(bytes, writable: false);
-                using var image = System.Drawing.Image.FromStream(
-                    source,
-                    useEmbeddedColorManagement: false,
-                    validateImageData: true);
                 var png = new MemoryStream();
-                image.Save(png, ImageFormat.Png);
+                if (OperatingSystem.IsWindows())
+                {
+                    using var source = new MemoryStream(bytes, writable: false);
+                    using var image = System.Drawing.Image.FromStream(source, false, true);
+                    image.Save(png, ImageFormat.Png);
+                }
+                else
+                {
+                    try { ConvertLocalRasterAsync(bytes, png).GetAwaiter().GetResult(); }
+                    catch { png.Dispose(); throw; }
+                }
                 png.Position = 0;
 
                 return new LaserficheEdocStream(

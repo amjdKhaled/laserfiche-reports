@@ -601,7 +601,7 @@ Arabic questions. Unsupported calculations/calendars/criteria must be clarified,
 not silently approximated. A general question uses the entire selected repository
 unless explicitly restricted; content evidence still has retrieval coverage limits.
 
-Confirm `planner=live-plan-v7.3; planIntentReview=True` on restart, and
+Confirm `planner=live-plan-v7.4; planIntentReview=True` on restart, and
 `planIntentReview: true` in `/health`. `PLAN_INTENT_REVIEW` logs the checks. The
 additional audit normally adds one model call, and failed plans can require
 two additional calls. On slow CPU-only installations this increases latency.
@@ -737,7 +737,7 @@ means waiting for extraction/embedding, not instantaneous OCR. Results are not a
 transactional snapshot during concurrent repository edits. This does not make sampled
 content retrieval an exact repository-wide count.
 
-Restart both services after pulling and confirm `planner=live-plan-v7.3`. Run the web
+Restart both services after pulling and confirm `planner=live-plan-v7.4`. Run the web
 project with a build (do not use `--no-build`). Keep `-PlannerTracePath` enabled for
 acceptance with the real model. `replay_planner.py` now defaults to `LivePlannerSchema`
 and preserves schema embedding when replaying new traces; old stages can be selected
@@ -827,7 +827,7 @@ The authenticated web client now requires `/health` to advertise
 `planningProtocol=live-periods-v1`. Earlier intent-v6 servers used the same routing
 version and could pass the old handshake after a source pull. They are now rejected
 before sending the question, with an instruction to restart the graph. Restart
-**both services** and verify `planner=live-plan-v7.3` before testing this release.
+**both services** and verify `planner=live-plan-v7.4` before testing this release.
 
 Regression tests cover the screenshot's year-only question through the graph HTTP
 contract, C# routing and live-search compilation to the existing document table,
@@ -861,4 +861,10 @@ The external converter is a test tool only, not a runtime dependency.
 This verifies schema compatibility, not Qwen semantic accuracy or the totals in
 an on-prem repository. Semantic review and live backend execution remain in
 place. Opt-in traces now include `plan_rejected` validation diagnostics as well
-as model responses. Restart the graph after pulling and check `live-plan-v7.3`.
+as model responses. Restart the graph after pulling and check `live-plan-v7.4`.
+
+
+### التشغيل المستقل والتغليف المحلي
+
+دليل تثبيت Windows بدون Visual Studio، والبدء التلقائي، والتشغيل والنقل باستخدام Docker:
+[deployment/README.md](deployment/README.md). إصدار المخطط `live-plan-v7.4` يعرض اقتراحات توضيح من الكتالوج عند تعذر التخطيط بعد إعادة المحاولة، دون تنفيذ بديل غير مؤكد.

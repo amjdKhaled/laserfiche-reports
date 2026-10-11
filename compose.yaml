@@ -1,0 +1,33 @@
+name: laserfiche-reports
+services:
+  reports:
+    image: laserfiche-reports:local
+    build:
+      context: .
+      dockerfile: deployment/docker/Dockerfile
+    init: true
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5187:5187"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      REPORTS_CHAT_MODEL: ${REPORTS_CHAT_MODEL:-qwen2.5:7b}
+      LocalAI__EmbeddingModel: ${REPORTS_EMBEDDING_MODEL:-nomic-embed-text-v2-moe}
+    volumes:
+      - type: bind
+        source: ./deployment/docker/appsettings.Local.json
+        target: /app/web/appsettings.Local.json
+        read_only: true
+        bind:
+          create_host_path: false
+      - reports-models:/models
+      - reports-keys:/home/app/.aspnet/DataProtection-Keys
+      - reports-config:/app/web/config
+      - reports-logs:/app/logs
+    stop_grace_period: 40s
+volumes:
+  reports-models:
+  reports-keys:
+  reports-config:
+  reports-logs:

@@ -1,0 +1,66 @@
+/* Reports workspace — all visual rules are scoped away from the login flow. */
+:root{--primary:#1768d5;--ink:#152b46;--canvas:#f3f6fa;--line:#dfe7ef}
+.shell{background:var(--canvas)}
+.shell button,.shell a,.shell textarea,.shell select{transition:background-color .16s,border-color .16s,box-shadow .16s}
+.shell button:focus-visible,.shell a:focus-visible,.shell select:focus-visible{outline:3px solid #64b5ff;outline-offset:3px}
+.shell .sidebar{width:270px;background:#112d49;color:#e9f2fb;border:0;padding:26px 18px 18px;gap:0}
+.shell .brand{gap:12px;margin-bottom:30px;align-items:center}
+.shell .brand-logo{width:62px;height:48px;border-radius:10px;background:white;padding:5px}
+.shell .brand strong{font-size:17px;line-height:1.65;color:#fff}
+.shell .brand small{color:#afc5da;font-size:11px;line-height:1.8}
+.shell .new-chat{padding:13px 16px;background:#287ce3;border:1px solid #5194e8;box-shadow:0 5px 16px #051d3426;text-align:center;font-size:14px;font-weight:bold;border-radius:12px}
+.shell .new-chat:hover{background:#378aee}
+.shell .side-heading{color:#9db8d0;font-size:11px;letter-spacing:.2px;margin:26px 10px 12px}
+.shell .history{min-height:0;scrollbar-width:thin;scrollbar-color:#496782 transparent;padding:0 2px}
+.shell .history-row{display:flex;align-items:center;border:1px solid transparent;border-radius:10px;margin:0 0 6px;min-height:51px;padding:3px 5px;gap:5px}
+.shell .history-row.selected{background:#244967;border-color:#3c607e}
+.shell .history-row:hover{background:#1d3e5d}
+.shell .history .history-open{font-size:12px;color:#cbdcea;line-height:1.8;padding:8px 7px;max-height:none;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;flex:1;min-width:0;background:transparent}
+.shell .history .history-open.selected{color:#fff;background:transparent}
+.shell .history .history-delete{color:#b0c8de;width:27px;height:29px;background:transparent;opacity:.75}
+.shell .history .history-delete:hover{background:#563846;color:#ffd4d4;opacity:1}
+.shell .side-footer{color:#adc3d7;border-color:#35536e;padding-top:15px;margin-top:15px;font-size:11px}
+.shell .topbar{min-height:96px;padding:22px 30px;gap:14px;background:#ffffffeb;box-shadow:0 1px 0 #e2eaf2}
+.shell .topbar h1{font-size:23px;letter-spacing:-.5px;color:#17314c}
+.shell .topbar p{font-size:12px;line-height:1.7;margin-top:6px;color:#73859a}
+.shell .top-actions{gap:9px}
+.shell .tabs{background:#edf2f7;border:1px solid #e2e9f1;padding:4px;border-radius:11px}
+.shell .tabs button{font-size:12px;padding:9px 13px}
+.shell .logout{font-size:12px;border-color:#e0e7ef;color:#657a90;padding:10px 12px}
+.shell .repository-badge{background:#eff8f5;border-color:#cbe7de;color:#26755e;border-radius:10px;padding:9px 12px}
+.shell .messages{padding:30px clamp(20px,4vw,64px);scrollbar-width:thin;scrollbar-color:#c4d0de transparent;scroll-padding-bottom:24px}
+.shell .message{max-width:1080px;margin-bottom:28px}
+.shell .message .label{font-size:11px;margin:0 7px 9px;color:#73859a}
+.shell .message.user{width:fit-content;max-width:min(80%,850px);margin-inline-start:0;margin-inline-end:auto}
+.shell .message.user .bubble{background:#e6effb;border-color:#d4e3f6;border-radius:17px 4px 17px 17px;box-shadow:none;padding:14px 20px;font-size:14px;line-height:1.9}
+.shell .message.assistant .bubble{border:1px solid #dfe7ef;border-radius:15px;padding:25px 28px;box-shadow:0 5px 18px #1c426008;font-size:14px}
+.shell .report-body h2{font-size:21px;margin:10px 0 20px;color:#163a60}
+.shell .report-scope{background:#eff5fc;border:1px solid #dce8f5;border-inline-start:3px solid #5e98dc;padding:10px 14px;border-radius:8px;color:#466582;font-size:12px}
+.shell .report-table-wrap{border-radius:10px;border-color:#d9e4ef;margin:18px 0 12px}
+.shell .report-table th{background:#eaf1f8;color:#244665;padding:13px 12px}
+.shell .report-table td{padding:12px;line-height:1.8}
+.shell .report-table tbody tr:hover{background:#f0f6fd}
+.shell .report-actions{gap:8px;padding-top:16px;margin-top:23px;border-color:#e7edf4}
+.shell .report-actions button,.shell .report-format{font-size:11px;padding:9px 12px;border-radius:8px;min-height:36px}
+.shell .report-actions button:hover:not(:disabled){background:#edf4fe}
+.shell .report-actions button:first-child:hover:not(:disabled){background:#1056b7;color:white}
+.shell .composer{width:calc(100% - 64px);max-width:1080px;border:1px solid #cedded;border-radius:15px;padding:10px 12px;box-shadow:0 6px 30px #2546640b;margin-top:8px;min-height:72px}
+.shell .composer:focus-within{border-color:#4789d8;box-shadow:0 0 0 3px #dceafa}
+.shell .composer textarea{font-size:14px;background:transparent;padding:10px;line-height:1.7}
+.shell .composer button{width:46px;height:46px;padding:0;border-radius:11px;background:#1768d5;font-size:21px}
+.shell .note{color:#8494a6;font-size:10px;margin:10px 12px 17px}
+.shell .welcome{max-width:690px;margin:8vh auto 5vh}
+.shell .welcome-icon{width:70px;height:70px;border-radius:23px;background:#e3edfb;color:#1768d5;border:1px solid #cedff5;font-size:33px}
+.shell .welcome h2{font-size:28px;color:#183956;margin:24px 0 12px;line-height:1.5}
+.shell .welcome p{font-size:13px;line-height:1.9;color:#708298;max-width:540px;margin:auto}
+.shell .suggestions{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:30px}
+.shell .suggestions button{padding:19px 16px;text-align:start;border:1px solid #dde6f1;background:#fff;color:#355371;border-radius:12px;font-size:12px;line-height:1.9;box-shadow:0 3px 9px #1c426006}
+.shell .suggestions button:hover{border-color:#8cb1e1;background:#f8fbff;box-shadow:0 5px 18px #1c426010}
+.shell #docs-view{padding:30px;max-width:1400px;width:100%;margin:auto}
+.shell .status-card,.shell .scan-panel,.shell .doc{border:1px solid #e0e8f1;border-radius:13px;box-shadow:0 3px 12px #1c426006}
+.shell .section-title h2{color:#203f5d;font-size:18px}
+.shell .source{border-radius:9px;background:#f8fafc}
+@media(min-width:761px) and (max-width:1200px){.shell .sidebar{width:225px}.shell .topbar{padding:18px 22px}.shell .top-actions{width:100%}.shell .messages{padding:24px}.shell .suggestions{grid-template-columns:1fr}}
+@media(max-width:760px){.shell .sidebar{width:100%;padding:12px 16px;display:flex;flex-direction:row;align-items:center;justify-content:space-between;gap:12px}.shell .brand{margin:0}.shell .brand-logo{width:42px;height:37px}.shell .brand strong{font-size:13px}.shell .brand small{display:none}.shell .new-chat{width:auto;font-size:11px;padding:10px}.shell .topbar{min-height:0;padding:16px}.shell .topbar h1{font-size:19px}.shell .top-actions{gap:6px}.shell .tabs button{font-size:11px;padding:8px 10px}.shell .logout{font-size:11px;padding:8px}.shell .repository-badge{font-size:11px}.shell .messages{padding:20px 14px}.shell .message.user{max-width:92%}.shell .message.assistant .bubble{padding:16px}.shell .composer{width:calc(100% - 28px);min-height:64px}.shell .welcome{margin:4vh auto}.shell .welcome h2{font-size:23px}.shell .suggestions{grid-template-columns:1fr;margin-top:20px;gap:9px}.shell .suggestions button{padding:12px 16px}.shell #docs-view{padding:17px}}
+@media(prefers-reduced-motion:reduce){.shell *{transition:none!important}}
+@media print{.shell{background:white}.shell .message.assistant .bubble{box-shadow:none;border:0}.shell .report-table th{background:#eef3f7}.shell .report-table tbody tr:hover{background:transparent}}

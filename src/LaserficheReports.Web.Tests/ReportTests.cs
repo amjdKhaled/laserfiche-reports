@@ -12,6 +12,18 @@ namespace LaserficheReports.Web.Tests;
 public class ReportTests
 {
     [Fact]
+    public async Task ConfirmedEmptySelectionKeepsZeroTableAndOffersClarificationWithoutExtraQuery()
+    {
+        var query = new Searches { Response = (_, _, _) => PagedResult<LFSearchResult>.Empty };
+        var result = await Create(new Entries(0), query).CreateAsync("repo",
+            new QueryPlan("search", Name: "missing", RequiresFilter: true, CountOnly: true), [], default);
+        Assert.Contains("عدد النتائج المطابقة: **0**", result.Answer);
+        Assert.Contains("| رقم الوثيقة |", result.Answer);
+        Assert.Contains("اقتراحات للتوضيح", result.Answer);
+        Assert.Single(query.Calls);
+    }
+
+    [Fact]
     public async Task YearQuestionExecutesCurrentRepositorySearchAndKeepsTheDocumentTable()
     {
         var graph = new GraphClient("""
@@ -624,7 +636,7 @@ public class ReportTests
         var chat = new ReportsChatService(new ConfigurationBuilder().Build(), new NoEmbeddings(), new Repository(), entries,
             graph, Create(entries, queries), new QuestionRouter(graph), queries, Microsoft.Extensions.Logging.Abstractions.NullLogger<ReportsChatService>.Instance);
         var answer = await chat.AskAsync("كم وثيقة في مجلد الأرشيف؟", default);
-        Assert.Contains("وضح اسم المجلد أو رقمه", answer.Answer);
+        Assert.Contains("اسم المجلد الصحيح أو رقمه", answer.Answer);
         Assert.DoesNotContain("عدد النتائج المطابقة: **0**", answer.Answer);
         Assert.Equal(2, queries.Calls.Count);
     }

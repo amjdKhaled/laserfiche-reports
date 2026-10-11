@@ -135,8 +135,9 @@ class AgentContractTests(unittest.TestCase):
         base = {'resultType': 'count', 'requiresFilter': True, 'operation': 'search', 'title': 'وثائق', 'question': 'مشروط', 'limit': 50}
         for changes in ({}, {'filters': {'field': 'حقل مخترع', 'operator': 'equals', 'value': 'أ'}}):
             model = FakeModel([json.dumps({'reports': [{**base, **changes}]})] * 2)
-            with self.assertRaises(ValueError):
-                plan_reports(model, {'question': 'طلب مشروط', 'catalog': {'fields': []}})
+            result = plan_reports(model, {'question': 'طلب مشروط', 'catalog': {'fields': []}})
+            self.assertTrue(all(p['operation'] == 'clarify' and p['filters'] is None for p in result['reports']))
+            self.assertTrue(result['clarification'])
 
     def test_real_ollama_client_transmits_schema_and_compact_catalog(self):
         import threading
@@ -206,8 +207,9 @@ class AgentContractTests(unittest.TestCase):
             self.assertEqual(result['reports'][0]['operation'], 'search')
             self.assertIsNotNone(result['reports'][0]['filters'])
             self.assertEqual(len(model.calls), 2)
-            with self.assertRaises(ValueError):
-                plan_reports(FakeModel([json.dumps({'reports': [bad]})] * 2), payload)
+            result = plan_reports(FakeModel([json.dumps({'reports': [bad]})] * 2), payload)
+            self.assertTrue(all(p['operation'] == 'clarify' and p['filters'] is None for p in result['reports']))
+            self.assertTrue(result['clarification'])
 
     def test_compact_contract_preserves_named_properties_and_bound_generation(self):
         from report_reasoning import compact_schema
@@ -266,8 +268,9 @@ class AgentContractTests(unittest.TestCase):
         model = FakeModel([json.dumps(bad), json.dumps(good)])
         self.assertEqual(plan_reports(model, payload)['reports'][0]['filters']['field'], 'أجل الإنجاز')
         self.assertEqual(len(model.calls), 2)
-        with self.assertRaises(ValueError):
-            plan_reports(FakeModel([json.dumps(bad), json.dumps(bad)]), payload)
+        result = plan_reports(FakeModel([json.dumps(bad), json.dumps(bad)]), payload)
+        self.assertTrue(all(p['operation'] == 'clarify' and p['filters'] is None for p in result['reports']))
+        self.assertTrue(result['clarification'])
 
     def test_aggregation_and_sort_fields_are_schema_validated(self):
         for changes in ({'sortField': 'fake'}, {'operation': 'group', 'groupFields': [{'field': 'fake'}]},

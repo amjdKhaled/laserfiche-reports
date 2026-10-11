@@ -16,3 +16,7 @@ appsettings.Local.json
 ocr-evaluation/
 
 **/node_modules/
+
+# Local deployment artifacts and transfer archives
+artifacts/
+*.tar
