@@ -49,7 +49,7 @@ class LanguageOracleTests(unittest.TestCase):
                 data = json.dumps(payload).encode()
                 self.send_response(200); self.send_header('Content-Length', str(len(data)))
                 self.end_headers(); self.wfile.write(data)
-            def do_GET(self): self.send({'status': 'ready', 'model': 'qwen2.5:7b'})
+            def do_GET(self): self.send({'status': 'ready', 'model': 'qwen2.5:14b'})
             def do_POST(self):
                 self.rfile.read(int(self.headers['Content-Length']))
                 index = Fixture.calls; Fixture.calls += 1

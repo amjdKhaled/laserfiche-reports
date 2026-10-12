@@ -63,6 +63,24 @@ class ResolvedClarificationTests(unittest.TestCase):
             self.assertEqual(sent['currentReply'], '١')
             self.assertEqual(sent['clarificationContext']['selection']['name'], FIELD)
 
+    def test_trace_rotation_preserves_previous_file_and_current_record(self):
+        import tempfile
+        from pathlib import Path
+        from server import write_planner_trace
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'planner.jsonl'
+            path.write_text('x' * 10_000_000)
+            write_planner_trace(str(path), {'stage': 'test'})
+            self.assertEqual(json.loads(path.read_text())['stage'], 'test')
+            self.assertEqual(path.with_name(path.name + '.1').stat().st_size, 10_000_000)
+
+    def test_reviewer_and_executor_receive_original_question_not_menu_digit(self):
+        model = FakeModel([json.dumps(plan()), json.dumps(review())])
+        result = plan_reports(model, payload(), review_intent=True)
+        reviewed = json.loads(model.calls[-1][1].content)
+        self.assertEqual(reviewed['proposedPlan']['reports'][0]['question'], QUESTION)
+        self.assertEqual(result['reports'][0]['question'], QUESTION)
+
     def test_exhausted_repair_is_an_error_and_never_an_identical_menu(self):
         with self.assertRaises(ValueError):
             plan_reports(FakeModel([json.dumps(clarify())] * 2), payload(), review_intent=True)

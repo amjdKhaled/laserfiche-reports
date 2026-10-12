@@ -102,3 +102,24 @@ Confirm the installed planner version:
 ```
 
 Expected: `live-plan-v7.5`.
+
+## Follow-up v7.6
+
+Resolved menu replies now retain the original question in the executable plan
+and reviewer payload as well as the planner input. Previously the plan's question
+could still be `1`. A regression checks both payloads. Review instructions now
+explicitly distinguish count from grouping and field-name words from folders.
+These instruction changes have not been benchmarked on the user's actual model.
+
+Installed startup now records local planning traces in logs/planner-trace.jsonl,
+rotating at 10 MB into one previous file. Traces contain questions, schema and
+model replies; they remain local. Collect current health and recent logs with:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\deployment\windows\diagnostics.ps1
+```
+
+The language evaluator accepts any ready, identified local graph model, so 7B
+and 14B can be evaluated with the same corpus. Use distinct output paths per
+model; resume still checks model/runtime identity. The uploaded October 9 v7.3
+logs do not establish the cause of the newer screenshot's failure.

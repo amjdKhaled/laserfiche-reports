@@ -52,7 +52,8 @@ def main():
     if reachable('http://127.0.0.1:8766/health'):
         raise RuntimeError('Port 8766 is already in use. Stop the manually started graph before starting the installed app.')
     commands['graph'] = [sys.executable, str(root / 'graph/server.py'), '--model', args.model,
-                         '--model-timeout-seconds', '0', '--planner-timeout-seconds', '0']
+                         '--model-timeout-seconds', '0', '--planner-timeout-seconds', '0',
+                         '--planner-trace-path', str(logs / 'planner-trace.jsonl')]
     executable = root / 'web' / ('LaserficheReports.Web.exe' if os.name == 'nt' else 'LaserficheReports.Web')
     commands['web'] = [str(executable)] if executable.exists() else ['dotnet', str(root / 'web/LaserficheReports.Web.dll')]
     children = {}
