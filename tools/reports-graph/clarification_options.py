@@ -24,7 +24,17 @@ def suggestions(question, catalog, limit=3):
         if score >= .65:
             ranked.append((score, len(tokens), kind, label))
     ranked.sort(key=lambda x: (-x[0], -x[1], x[3]))
-    return list(dict.fromkeys((kind, label) for _, _, kind, label in ranked))[:limit]
+    # Keep real names, but don't offer an indistinguishable menu consisting
+    # entirely of whitespace/diacritic variants of the same label.
+    result, seen = [], set()
+    for _, _, kind, label in ranked:
+        identity = (kind, ''.join(key(label).split()))
+        if identity not in seen:
+            result.append((kind, label))
+            seen.add(identity)
+        if len(result) == limit:
+            break
+    return result
 
 
 def clarification(question, catalog):

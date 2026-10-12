@@ -26,6 +26,7 @@ from clarification_options import (clarification as unresolved_clarification, se
                                    catalog_selection, repeats_clarification)
 from request_body import RequestBodyError, read_request_body
 from context_windows import focused_window
+from search_reference import SEARCH_REFERENCE, SEMANTIC_FIELDS
 from report_reasoning import (PROMPT_VERSION, Extraction, Draft, Review, COMPOSE_SYSTEM,
                               REVIEW_SYSTEM, invoke_structured, compact_schema, validate_draft, apply_review, StrictModel, Quotation, Finding, REQUEST_ID)
 
@@ -266,7 +267,7 @@ class CombinedDraft(StrictModel):
     findings: list[Finding] = Field(max_length=8)
 
 
-DEFAULT_CHAT_MODEL = os.environ.get("REPORTS_CHAT_MODEL", "qwen2.5:7b")
+DEFAULT_CHAT_MODEL = os.environ.get("REPORTS_CHAT_MODEL", "gpt-oss:20b")
 
 
 class RelativeDate(StrictModel):
@@ -1081,7 +1082,7 @@ def plan_reports(model, payload, *, budget_seconds=None, max_tokens=1536, review
     # Opt-in local diagnostics contain only planning data, never API headers,
     # credentials or OCR. Preserve inputs to reproduce the real model failure.
     write_planner_trace(trace_path, {"stage": "route_input", "payload": payload,
-        "model": getattr(model, "model", type(model).__name__), "plannerVersion": "live-plan-v7.6"})
+        "model": getattr(model, "model", type(model).__name__), "plannerVersion": "live-plan-v7.7"})
     # Plan against every authoritative field/template name, without long descriptions.
     # Never shortlist names by keywords: that could hide a field needed by the AI.
     payload = dict(payload)
@@ -1124,9 +1125,12 @@ def plan_reports(model, payload, *, budget_seconds=None, max_tokens=1536, review
         model_payload["clarificationContext"] = clarification_context
     clarification_guidance = """
 If clarificationContext.selectedOption exists, it is the exact displayed option selected by the user. question contains the original complete request, currentReply contains the verbatim selection. Use clarification_reply. clarificationContext.selection, when present, is the exact live field/template chosen by the user; use its name and type while preserving the original operation and ALL conditions. Never interpret the menu number as a field value, document ID or count. An option chooses a field/template only, not an unstated comparison. Do not re-offer that same field menu. For a full restatement, use all explicit details in the current question; it can resolve the pending ambiguity. Do not ask the same clarification when the supplied name uniquely matches the live catalog. Ordinal replies such as الثانية mean the corresponding displayed option. If ambiguity remains, ask specifically for the missing condition, not for details already supplied."""
-    messages = [SystemMessage(content=(ROUTE_SYSTEM if interpret_intent else DIRECT_PLAN_SYSTEM) + clarification_guidance),
+    messages = [SystemMessage(content=(ROUTE_SYSTEM if interpret_intent else DIRECT_PLAN_SYSTEM) +
+                SEARCH_REFERENCE + SEMANTIC_FIELDS + clarification_guidance),
                 HumanMessage(content=json.dumps(model_payload, ensure_ascii=False, separators=(",", ":")))]
     def invoke_plan(call_messages, schema, tokens, diagnostics=False):
+        if str(getattr(model, "model", "")).split(":")[0].lower() == "gpt-oss":
+            tokens = max(8192, tokens)
         input_bytes = sum(len(str(m.content).encode("utf-8")) for m in call_messages)
         embed_contract = not interpret_intent
         if embed_contract:
@@ -1228,7 +1232,7 @@ If clarificationContext.selectedOption exists, it is the exact displayed option 
                 for actual, reviewed in zip(request.reports, reviewed_plan["reports"]):
                     if actual.filters is not None:
                         reviewed["filters"] = actual.filters.model_dump(exclude_none=True)
-                review_messages = [SystemMessage(content=PLAN_REVIEW_SYSTEM + clarification_guidance), HumanMessage(content=json.dumps(
+                review_messages = [SystemMessage(content=PLAN_REVIEW_SYSTEM + SEARCH_REFERENCE + SEMANTIC_FIELDS + clarification_guidance), HumanMessage(content=json.dumps(
                     {**model_payload, "executionDefaults": {"scope": "entire currently selected repository",
                         "displayLimit": 50, "ordering": "backend default; not a selection condition"},
                         "proposedPlan": reviewed_plan},
@@ -1252,7 +1256,7 @@ If clarificationContext.selectedOption exists, it is the exact displayed option 
                         return response_with_context(safe)
                     raise ValueError("Intent review rejected plan: " + json.dumps(
                         {"checks": checks, "issues": review.issues, "clarification": review.clarification}, ensure_ascii=False))
-            print("Stage=PLANNER_VALIDATED RequestId=" + REQUEST_ID.get() + " Version=live-plan-v7.6 Attempt=" + str(attempt + 1) + " Plans=" + json.dumps([
+            print("Stage=PLANNER_VALIDATED RequestId=" + REQUEST_ID.get() + " Version=live-plan-v7.7 Attempt=" + str(attempt + 1) + " Plans=" + json.dumps([
                 {"resultType": p.resultType, "operation": p.operation, "requiresFilter": p.requiresFilter,
                  "hasFilter": bool(p.filters or p.field or p.template or p.folderId or p.folderName or p.name or p.entryIds or p.from_),
                  "allResults": p.allResults, "countOnly": p.countOnly,
@@ -1514,7 +1518,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(HTTPStatus.SERVICE_UNAVAILABLE, {"status": "unavailable", "error": error})
         return self.send_json(HTTPStatus.OK, {"status": "ready", "model": self.model_name,
             "modelTimeoutSeconds": self.model_timeout_seconds, "plannerTimeoutSeconds": self.planner_timeout_seconds, "engine": "LangGraph",
-            "routingVersion": "schema-agent-v5", "planningProtocol": "live-periods-v1", "plannerVersion": "live-plan-v7.6", "planIntentReview": self.review_plans,
+            "routingVersion": "schema-agent-v5", "planningProtocol": "live-periods-v1", "plannerVersion": "live-plan-v7.7", "planIntentReview": self.review_plans,
             "promptVersion": PROMPT_VERSION, "capabilities": ["schema-output", "structured-filters", "backend-dates", "aggregation", "follow-up", "focused-context", "plan-intent-review", "optional-semantic-review"]})
 
     def do_POST(self):
@@ -1623,7 +1627,7 @@ def main():
     Handler.review_plans = not args.skip_plan_review
     Handler.model = model
     Handler.graph = build_graph(model, fast=True, review_content=args.review_content)
-    print(f"LangGraph ready on http://127.0.0.1:{args.port}; model={args.model}; planner=live-plan-v7.6; planIntentReview={Handler.review_plans}; modelTimeoutSeconds={args.model_timeout_seconds}; plannerTimeoutSeconds={args.planner_timeout_seconds}; plannerOutputTokens={args.planner_output_tokens}", flush=True)
+    print(f"LangGraph ready on http://127.0.0.1:{args.port}; model={args.model}; planner=live-plan-v7.7; planIntentReview={Handler.review_plans}; modelTimeoutSeconds={args.model_timeout_seconds}; plannerTimeoutSeconds={args.planner_timeout_seconds}; plannerOutputTokens={args.planner_output_tokens}", flush=True)
     ThreadingHTTPServer(("127.0.0.1", args.port), Handler).serve_forever()
 
 

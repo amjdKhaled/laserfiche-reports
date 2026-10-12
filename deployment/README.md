@@ -1,5 +1,10 @@
 # تشغيل تقارير ليزرفيش محليًا ونقلها
 
+**الموديل الافتراضي: `gpt-oss:20b`.** للنقل الأسهل إلى Windows دون SDK أو
+Visual Studio على الجهاز الثاني، استخدم [حزمة النقل](TRANSFER.md):
+`deployment/windows/build-package.ps1` ثم فك ZIP وافتح `Install.cmd`.
+الحزمة تفحص تحميل النموذج الحقيقي قبل تسجيل التشغيل التلقائي.
+
 ## Windows بدون Visual Studio
 
 التثبيت مرة واحدة يحتاج .NET 8 SDK وPython 3.11 x64 وOllama المثبت عندك.
@@ -11,7 +16,7 @@
 3. من مجلد المشروع:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\deployment\windows\install.ps1 -Model qwen2.5:7b
+powershell -ExecutionPolicy Bypass -File .\deployment\windows\install.ps1 -Model gpt-oss:20b
 ```
 
 التثبيت في `%LOCALAPPDATA%\LaserficheReports`. ينسخ إعدادات `appsettings.Local.json`
@@ -55,7 +60,7 @@ Windows استخدم `host.docker.internal` مع المنفذ المنشور ا�
 
 ```powershell
 docker compose up -d --build
-docker compose exec reports ollama pull qwen2.5:7b
+docker compose exec reports ollama pull gpt-oss:20b
 docker compose exec reports ollama pull nomic-embed-text-v2-moe
 ```
 

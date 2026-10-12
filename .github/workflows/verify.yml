@@ -1,7 +1,7 @@
 name: Verify Reports
 on:
   push:
-    branches: [feature/reports-chat-langgraph]
+    branches: [feature/reports-chat-langgraph, fix/typed-semantic-repository-plans]
   pull_request:
 jobs:
   dotnet:
@@ -16,8 +16,16 @@ jobs:
         run: |
           $parseErrors = $null
           $tokens = $null
-          [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path scripts/configure-database.ps1), [ref]$tokens, [ref]$parseErrors) | Out-Null
-          if ($parseErrors.Count -gt 0) { throw ($parseErrors | Out-String) }
+          Get-ChildItem scripts,deployment/windows,tools/reports-graph -Filter *.ps1 -Recurse | ForEach-Object {
+            [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$parseErrors) | Out-Null
+            if ($parseErrors.Count -gt 0) { throw ($parseErrors | Out-String) }
+          }
+      - shell: pwsh
+        run: ./deployment/windows/build-package.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LaserficheReports-Windows
+          path: artifacts/*.zip
   python:
     runs-on: ubuntu-latest
     steps:

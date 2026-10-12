@@ -60,7 +60,7 @@ an existing document in this mode updates its metadata evidence without
 deleting its existing OCR page chunks.
 
 1. Run local Supabase and Ollama. Ensure `nomic-embed-text-v2-moe` and
-   `qwen2.5:7b` are installed in Ollama.
+   `gpt-oss:20b` are installed in Ollama.
 2. Copy `src/LaserficheReports.Web/appsettings.Local.example.json` to
    `src/LaserficheReports.Web/appsettings.Local.json` and enter your existing
    Laserfiche and local PostgreSQL details. Do not commit the private file.
@@ -75,7 +75,7 @@ powershell -ExecutionPolicy Bypass -File .\tools\reports-graph\setup.ps1
 5. In a dedicated PowerShell window start the answer graph:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\reports-graph\start.ps1 -Model qwen2.5:7b
+powershell -ExecutionPolicy Bypass -File .\tools\reports-graph\start.ps1 -Model gpt-oss:20b
 ```
 
 6. In another PowerShell window start .NET:
@@ -396,7 +396,7 @@ table headings, currency/units, workflow execution, filenames versus page conten
 incomplete multipart answers and comparisons across both requested documents.
 
 ```powershell
-.\tools\reports-graph\.venv\Scripts\python.exe .\tools\reports-graph\evaluate.py --model qwen2.5:7b
+.\tools\reports-graph\.venv\Scripts\python.exe .\tools\reports-graph\evaluate.py --model gpt-oss:20b
 ```
 
 The evaluator verifies expected status, required/allowed references and quotation contents;
@@ -773,7 +773,7 @@ To capture a real failed request, restart **both** the web application (with a b
 and the graph, reproduce the question, and collect the local planning diagnostic:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\reports-graph\start.ps1 -Model qwen2.5:7b -TimeoutSeconds 0 -PlannerTimeoutSeconds 0 -PlannerTracePath .\logs\planner-trace.jsonl
+powershell -ExecutionPolicy Bypass -File .\tools\reports-graph\start.ps1 -Model gpt-oss:20b -TimeoutSeconds 0 -PlannerTimeoutSeconds 0 -PlannerTracePath .\logs\planner-trace.jsonl
 # After reproducing the question, run in another terminal at the repository root:
 powershell -ExecutionPolicy Bypass -File .\tools\reports-graph\diagnose.ps1
 ```

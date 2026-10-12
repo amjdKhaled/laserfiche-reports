@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run actual qwen2.5:7b against held-out questions. Fixtures are NOT in its prompt.
+"""Run actual gpt-oss:20b against held-out questions. Fixtures are NOT in its prompt.
 
 python evaluate_planner.py --output planner-evaluation.json
 A failed case is a model/contract regression, never a reason to add a question handler.

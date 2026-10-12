@@ -1,6 +1,6 @@
 param(
     [string]$InstallPath = "$env:LOCALAPPDATA\LaserficheReports",
-    [string]$Model = 'qwen2.5:7b',
+    [string]$Model = 'gpt-oss:20b',
     [int]$Port = 5187
 )
 $ErrorActionPreference = 'Stop'
@@ -25,6 +25,8 @@ if ($LASTEXITCODE -ne 0) { throw 'Python 3.11 x64 is required for installation.'
 if ($LASTEXITCODE -ne 0) { throw 'Python dependencies failed to install.' }
 $localConfig = "$source\src\LaserficheReports.Web\appsettings.Local.json"
 if ((Test-Path $localConfig) -and !(Test-Path "$InstallPath\web\appsettings.Local.json")) { Copy-Item $localConfig "$InstallPath\web" }
+& $ollama pull $Model
+if ($LASTEXITCODE -ne 0) { throw 'Model download failed. Open Ollama, check internet access and retry; startup has not been registered.' }
 $userId = [Security.Principal.WindowsIdentity]::GetCurrent().Name
 $action = New-ScheduledTaskAction -Execute "$InstallPath\python\Scripts\pythonw.exe" -Argument "`"$InstallPath\supervise.py`" --root `"$InstallPath`" --ollama `"$ollama`" --model `"$Model`" --port $Port" -WorkingDirectory $InstallPath
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $userId

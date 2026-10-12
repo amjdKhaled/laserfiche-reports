@@ -24,7 +24,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--root', required=True)
     parser.add_argument('--ollama', default='ollama')
-    parser.add_argument('--model', default=os.environ.get('REPORTS_CHAT_MODEL', 'qwen2.5:7b'))
+    parser.add_argument('--model', default=os.environ.get('REPORTS_CHAT_MODEL', 'gpt-oss:20b'))
     parser.add_argument('--port', type=int, default=5187)
     parser.add_argument('--bind', default='127.0.0.1')
     args = parser.parse_args()
