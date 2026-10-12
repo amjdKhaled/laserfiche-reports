@@ -1,0 +1,93 @@
+{
+  "suite": "generated_contract_validation",
+  "modelCalls": 0,
+  "naturalLanguageAccuracyMeasured": false,
+  "seed": 20261012,
+  "cases": 100000,
+  "uniqueInputs": 100000,
+  "passed": 100000,
+  "failed": 0,
+  "durationSeconds": 3.488,
+  "families": {
+    "calendar_period": {
+      "passed": 5000,
+      "failed": 0
+    },
+    "numeric_comparison": {
+      "passed": 5000,
+      "failed": 0
+    },
+    "literal_injection": {
+      "passed": 5000,
+      "failed": 0
+    },
+    "unknown_field": {
+      "passed": 5000,
+      "failed": 0
+    },
+    "year_is_not_date_literal": {
+      "passed": 5000,
+      "failed": 0
+    },
+    "relative_on_number": {
+      "passed": 5000,
+      "failed": 0
+    },
+    "ordered_text": {
+      "passed": 5000,
+      "failed": 0
+    },
+    "nested_logic": {
+      "passed": 5000,
+      "failed": 0
+    },
+    "conflicting_period_bounds": {
+      "passed": 5000,
+      "failed": 0
+    },
+    "invalid_calendar": {
+      "passed": 5000,
+      "failed": 0
+    },
+    "numeric_aggregate": {
+      "passed": 5000,
+      "failed": 0
+    },
+    "text_aggregate": {
+      "passed": 5000,
+      "failed": 0
+    },
+    "text_calendar_bucket": {
+      "passed": 5000,
+      "failed": 0
+    },
+    "missing_metric_field": {
+      "passed": 5000,
+      "failed": 0
+    },
+    "invalid_having_index": {
+      "passed": 5000,
+      "failed": 0
+    },
+    "menu_roundtrip": {
+      "passed": 5000,
+      "failed": 0
+    },
+    "wrong_selected_field": {
+      "passed": 5000,
+      "failed": 0
+    },
+    "mixed_group_leaf": {
+      "passed": 5000,
+      "failed": 0
+    },
+    "fractional_integer": {
+      "passed": 5000,
+      "failed": 0
+    },
+    "invalid_date_text": {
+      "passed": 5000,
+      "failed": 0
+    }
+  }
+}

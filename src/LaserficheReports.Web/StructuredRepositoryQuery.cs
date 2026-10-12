@@ -133,7 +133,8 @@ internal static class StructuredRepositoryQuery
             if (IsNumber(type))
             {
                 if (!decimal.TryParse(literal, NumberStyles.AllowLeadingSign | NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out var number) ||
-                    (type.Contains("Integer", StringComparison.OrdinalIgnoreCase) && number != decimal.Truncate(number)))
+                    ((type.Contains("Integer", StringComparison.OrdinalIgnoreCase) ||
+                      type.Equals("Long", StringComparison.OrdinalIgnoreCase) || type.Equals("Short", StringComparison.OrdinalIgnoreCase)) && number != decimal.Truncate(number)))
                     throw new ArgumentException("قيمة رقمية غير صالحة.");
                 return number.ToString(CultureInfo.InvariantCulture);
             }

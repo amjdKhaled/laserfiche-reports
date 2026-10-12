@@ -868,3 +868,8 @@ as model responses. Restart the graph after pulling and check `live-plan-v7.4`.
 
 دليل تثبيت Windows بدون Visual Studio، والبدء التلقائي، والتشغيل والنقل باستخدام Docker:
 [deployment/README.md](deployment/README.md). إصدار المخطط `live-plan-v7.4` يعرض اقتراحات توضيح من الكتالوج عند تعذر التخطيط بعد إعادة المحاولة، دون تنفيذ بديل غير مؤكد.
+
+
+### QA and clarification recovery (live-plan-v7.5)
+
+See [deployment/QA.md](deployment/QA.md) for the generated 100,000-case contract run, discovered fixes, and the separate resumable Qwen language evaluation. These are different test layers; contract passes are not language-accuracy scores.

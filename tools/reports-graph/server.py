@@ -22,7 +22,8 @@ from httpx import TimeoutException
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_ollama import ChatOllama
 from langgraph.graph import END, START, StateGraph
-from clarification_options import clarification as unresolved_clarification, selected_option
+from clarification_options import (clarification as unresolved_clarification, selected_option,
+                                   catalog_selection, repeats_clarification)
 from request_body import RequestBodyError, read_request_body
 from context_windows import focused_window
 from report_reasoning import (PROMPT_VERSION, Extraction, Draft, Review, COMPOSE_SYSTEM,
@@ -320,7 +321,7 @@ class AggregateMetric(StrictModel):
 class AggregateHaving(StrictModel):
     metric: int = Field(ge=0, le=3)
     operator: Literal["equals", "not_equals", "greater_than", "less_than", "greater_or_equal", "less_or_equal"]
-    value: float
+    value: float = Field(allow_inf_nan=False)
 
 
 class RoutePlan(StrictModel):
@@ -514,7 +515,7 @@ def validate_plan_schema(request, catalog):
             if not re.fullmatch(r"[+-]?[0-9]+(?:\.[0-9]+)?", literal):
                 raise ValueError("Numeric fields cannot be compared with dates/text: " + field)
             value = Decimal(literal)
-            if "integer" in kind and value != value.to_integral_value():
+            if ("integer" in kind or kind in ("long", "short")) and value != value.to_integral_value():
                 raise ValueError("Integer field requires a whole number: " + field)
         else:
             if not literal.strip() or any(c in literal for c in '\"{}[]*?') or any(ord(c) < 32 for c in literal):
@@ -525,7 +526,8 @@ def validate_plan_schema(request, catalog):
         if depth > 5:
             raise ValueError("Filter depth exceeded")
         if node.conditions is not None:
-            if not node.conditions or node.logic is None or any((node.field, node.tag, node.operator, node.value, node.upper, node.relative, node.upperRelative, node.period)):
+            if not node.conditions or node.logic is None or any(v is not None for v in
+                    (node.field, node.tag, node.operator, node.value, node.upper, node.relative, node.upperRelative, node.period)):
                 raise ValueError("Invalid logical group")
             for child in node.conditions:
                 check_filter(child, depth + 1)
@@ -570,6 +572,21 @@ def validate_plan_schema(request, catalog):
             raise ValueError("Unknown repository template")
         if plan.filters:
             check_filter(plan.filters)
+        # Mirror execution constraints so invalid model plans get repaired here,
+        # before the C# aggregation service rejects the user's request.
+        for group in plan.groupFields:
+            kind = builtin_types.get(group.field, fields.get(group.field) or 'String').lower()
+            if group.bucket is not None and kind not in ('date', 'datetime'):
+                raise ValueError('Calendar grouping requires a date field: ' + group.field)
+        for metric in plan.metrics:
+            if metric.function != 'count' and metric.field is None:
+                raise ValueError('Aggregate metric requires a field: ' + metric.function)
+            kind = builtin_types.get(metric.field, fields.get(metric.field) or 'String').lower()
+            if metric.function not in ('count', 'distinct_count') and kind not in (
+                    'integer', 'longinteger', 'number', 'decimal', 'double', 'shortinteger', 'long', 'short'):
+                raise ValueError('Arithmetic aggregation requires a numeric field: ' + str(metric.field))
+        if plan.having is not None and plan.having.metric >= max(len(plan.metrics), 1):
+            raise ValueError('Aggregate having refers to a metric that is not present')
 
 
 class PlannerOutputSchema:
@@ -706,8 +723,22 @@ def planner_schema_for_catalog(catalog, intent=None):
             # The legacy field=value shortcut is not part of structured selection.
             # Exposing it without a value makes a valid-looking but unexecutable plan.
             original_plan["properties"].pop("field", None)
-            contract["$defs"]["GroupDimension"]["properties"]["field"] = {"enum": names}
-            contract["$defs"]["AggregateMetric"]["properties"]["field"] = optional_names(names)
+            dimensions = [{"type": "object", "properties": {"field": {"enum": names},
+                "bucket": {"type": "null"}}, "required": ["field"], "additionalProperties": False}]
+            if groups['date']:
+                dimensions.append({"type": "object", "properties": {"field": {"enum": groups['date']},
+                    "bucket": {"enum": ['day', 'week', 'month', 'year']}},
+                    "required": ['field', 'bucket'], "additionalProperties": False})
+            contract['$defs']['GroupDimension'] = {'anyOf': dimensions}
+            metrics = [{"type": "object", "properties": {"function": {"const": "count"},
+                "field": optional_names(names)}, "required": ["function"], "additionalProperties": False}]
+            if names:
+                metrics.append({"type": "object", "properties": {"function": {"const": "distinct_count"},
+                    "field": {"enum": names}}, "required": ['function', 'field'], "additionalProperties": False})
+            if groups['number']:
+                metrics.append({"type": "object", "properties": {"function": {"enum": ['sum', 'average', 'min', 'max']},
+                    "field": {"enum": groups['number']}}, "required": ['function', 'field'], "additionalProperties": False})
+            contract['$defs']['AggregateMetric'] = {'anyOf': metrics}
             selection = contract["$defs"]["Selection"]["anyOf"]
             if catalog.get("templates"):
                 for variant in selection[1:]:
@@ -859,6 +890,10 @@ DIRECT_PLAN_SYSTEM = ROUTE_SYSTEM.replace(
 خطط مباشرة من سؤال المستخدم وكتالوج المستودع. خصائص الإدخال المضمنة: created تاريخ إنشاء الوثيقة الفعلي، modified تاريخ آخر تعديل، creator منشئها، name اسمها، entryId معرفها، template قالبها، pageCount عدد صفحاتها. استخدم created لسؤال عن وقت إنشاء الوثائق وmodified لوقت تعديلها، ولا تبحث عن حقل Metadata بديل دون سبب من السؤال. للفترات الميلادية استخدم period={year:Y} للسنة، أو أضف month للشهر وday لليوم؛ القيم مأخوذة من السؤال. in_period للوثائق خلال الفترة، through_period حتى نهاية الفترة شاملًا وما قبلها، before_period قبل بداية الفترة، from_period من بدايتها وما بعدها، after_period بعد نهايتها. التطبيق يحسب حدود الفترة؛ لا تخترع value أو upper معها. الفترات تخص حقول Date/DateTime فقط؛ السنة الرقمية في حقل Number تبقى مقارنة رقمية. لا تستخدم period لتاريخ هجري أو تقويم غير محسوم.  أعد contextMode=current للسؤال المستقل، followup للإشارة إلى نتيجة أو طلب سابق، clarification_reply للإجابة عن التوضيح المعلق. اختر السياق في نفس الاستجابة ثم خطط المطلوب منه. استخلص المطلوب والشروط معًا، ولا تفصل شرطًا عن نتيجته في تقرير مستقل. الوصف المختصر أو الخطأ الإملائي لا يستلزم كتابة اسم الحقل حرفيًا؛ طابق معناه بالاسم الكامل والنوع والوصف في الكتالوج. استخدم تقويم السؤال أو اختيار المستخدم في المحادثة. عند وجود clarificationContext، افهم هل الرسالة الحالية تجيب عنه أم تطلب تقريرًا جديدًا، واحتفظ بطلبه الأصلي فقط إذا كانت جوابًا عنه. اطلب توضيحًا فقط عند وجود بدائل حقيقية تؤثر في النتائج، واذكر البدائل المحددة. لا تطلب من المستخدم إعادة صياغة تاريخ مفهوم بتنسيق تقني. عقد JSON المرفق يحدد الأدوات الفعلية المتاحة وليس حقول المستودع المطلوبة في السؤال.
 """
 
+DIRECT_PLAN_SYSTEM += """
+افهم لهجة المستخدم مثل الفصحى: «ورني/طلع لي/جيب لي» طلب عرض، «كم وحدة/عدّها/عددها بس» طلب عدد، و«مين أكثر جهة» تجميع وترتيب حسب العدد إذا كانت الجهة معروفة من الكتالوج. هذه أمثلة لغوية وليست أسماء حقول أو شروطًا ثابتة. «ما تغيرت من أكثر من شهر» تخص آخر تعديل وحدًا زمنيًا متحركًا، وليست تاريخ الإنشاء. افهم «مو/مب/ما يساوي/إلا/غير» والنفي في الجملة كاملة؛ لا تسقطه ولا تستبدل OR بـ AND. الرد المختصر «بس الإدارة الفلانية» يضيف قيدًا إلى الاختيار السابق، و«كم عددها» يحتفظ بكل قيوده. السؤال المستقل يبدأ طلبًا جديدًا. أسماء الحقول والقيم النهائية تأتي من الكتالوج والسياق، ولا تحول تهجئة عامية إلى قيمة مخزنة مختلقة. لا تطلب توضيحًا لمجرد العامية أو الخطأ الإملائي. اطلب فقط المعلومة التي يغيّر غيابها النتيجة. الفشل التقني في إنشاء الخطة ليس دليلًا أن السؤال غامض. الصفر نتيجة صحيحة عند تنفيذ بحث مكتمل لم يجد مطابقات؛ لا توسّع الشروط للحصول على نتائج غير مطلوبة.
+"""
+
 def planner_request(content, question=None):
     raw = json.loads(content)
     if isinstance(raw, dict):
@@ -985,6 +1020,29 @@ def pending_clarification(history):
     return None
 
 
+def validate_selected_catalog_option(request, selection):
+    """Validate an explicit UI choice; never generate a predicate from words."""
+    if not selection or all(p.operation in ('clarify', 'schema', 'templates') for p in request.reports):
+        return
+    def filter_uses(node):
+        if node is None:
+            return False
+        if node.conditions is not None:
+            return any(filter_uses(child) for child in node.conditions)
+        if selection['kind'] == 'field':
+            return node.field == selection['name']
+        return node.field == 'template' and node.value == selection['name']
+    for plan in request.reports:
+        if filter_uses(plan.filters):
+            return
+        if selection['kind'] == 'template' and plan.template == selection['name']:
+            return
+        if selection['kind'] == 'field' and (selection['name'] in (plan.field, plan.sortField) or
+                any(item.field == selection['name'] for item in [*plan.groupFields, *plan.metrics])):
+            return
+    raise ValueError('The explicit catalog selection must be used: ' + json.dumps(selection, ensure_ascii=False))
+
+
 def validate_question_intent(request, intent):
     if all(plan.operation == "clarify" for plan in request.reports):
         return
@@ -1019,7 +1077,7 @@ def plan_reports(model, payload, *, budget_seconds=None, max_tokens=1536, review
     # Opt-in local diagnostics contain only planning data, never API headers,
     # credentials or OCR. Preserve inputs to reproduce the real model failure.
     write_planner_trace(trace_path, {"stage": "route_input", "payload": payload,
-        "model": getattr(model, "model", type(model).__name__), "plannerVersion": "live-plan-v7.4"})
+        "model": getattr(model, "model", type(model).__name__), "plannerVersion": "live-plan-v7.5"})
     # Plan against every authoritative field/template name, without long descriptions.
     # Never shortlist names by keywords: that could hide a field needed by the AI.
     payload = dict(payload)
@@ -1048,12 +1106,20 @@ def plan_reports(model, payload, *, budget_seconds=None, max_tokens=1536, review
         "fieldSamples": payload["catalog"]["fieldSamples"], "sampleStatus": payload["catalog"]["sampleStatus"]}}
     clarification_context = pending_clarification(payload.get("history", []))
     choice = selected_option(payload["question"], clarification_context)
+    selection = catalog_selection(choice, payload['catalog'])
     if choice is not None:
-        clarification_context = {**clarification_context, "selectedOption": choice}
+        clarification_context = {**clarification_context, "selectedOption": choice, "reply": payload['question']}
+        if selection:
+            clarification_context['selection'] = selection
+        # Small models must plan the complete request, not the digit "1".
+        # Keep the verbatim reply separately, and retain the full live catalog.
+        model_payload['question'] = clarification_context['question']
+        model_payload['currentReply'] = payload['question']
+        model_payload['contextMode'] = 'clarification_reply'
     if clarification_context:
         model_payload["clarificationContext"] = clarification_context
     clarification_guidance = """
-If clarificationContext.selectedOption exists, it is the exact numbered option selected by the user: use clarification_reply and resolve it against the live catalog, preserving the original request's operation and conditions. Never interpret the menu number as a field value, document ID or count. An option chooses a field/template only, not an unstated comparison. For a full restatement, use all explicit details in the current question; it can resolve the pending ambiguity. Do not ask the same clarification when the supplied name uniquely matches the live catalog. Ordinal replies such as الثانية mean the corresponding displayed option. If ambiguity remains, ask specifically for the missing condition, not for details already supplied."""
+If clarificationContext.selectedOption exists, it is the exact displayed option selected by the user. question contains the original complete request, currentReply contains the verbatim selection. Use clarification_reply. clarificationContext.selection, when present, is the exact live field/template chosen by the user; use its name and type while preserving the original operation and ALL conditions. Never interpret the menu number as a field value, document ID or count. An option chooses a field/template only, not an unstated comparison. Do not re-offer that same field menu. For a full restatement, use all explicit details in the current question; it can resolve the pending ambiguity. Do not ask the same clarification when the supplied name uniquely matches the live catalog. Ordinal replies such as الثانية mean the corresponding displayed option. If ambiguity remains, ask specifically for the missing condition, not for details already supplied."""
     messages = [SystemMessage(content=(ROUTE_SYSTEM if interpret_intent else DIRECT_PLAN_SYSTEM) + clarification_guidance),
                 HumanMessage(content=json.dumps(model_payload, ensure_ascii=False, separators=(",", ":")))]
     def invoke_plan(call_messages, schema, tokens, diagnostics=False):
@@ -1094,7 +1160,7 @@ If clarificationContext.selectedOption exists, it is the exact numbered option s
             return {"logic": node.logic, "conditions": [filter_shape(child) for child in node.conditions]}
         return {**({"tag": node.tag} if node.tag is not None else {"field": node.field}), "operator": node.operator}
     intent = None
-    context_mode = "current"
+    context_mode = "clarification_reply" if choice is not None else "current"
     def interpret_question(feedback=None):
         intent_messages = [SystemMessage(content=INTENT_SYSTEM + clarification_guidance), HumanMessage(content=json.dumps(
             {**{key: payload[key] for key in ("question", "history", "today") if key in payload}, **({"clarificationContext": clarification_context} if clarification_context else {})},
@@ -1131,13 +1197,11 @@ If clarificationContext.selectedOption exists, it is the exact numbered option s
         semantic_rejection = False
         try:
             if not interpret_intent:
-                context_mode = json.loads(content).get("contextMode", "current")
+                context_mode = 'clarification_reply' if choice is not None else json.loads(content).get("contextMode", "current")
                 if context_mode not in ("current", "followup", "clarification_reply"):
                     raise ValueError("Invalid request context mode")
                 if context_mode == "clarification_reply" and clarification_context is None:
                     raise ValueError("No pending clarification exists for this reply")
-                if choice is not None and context_mode != "clarification_reply":
-                    raise ValueError("An explicit menu selection must use clarification_reply and the original request")
                 model_payload["contextMode"] = context_mode
             request = canonicalize_property_names(planner_request(content, payload["question"]), payload["catalog"])
             print("Stage=PLANNER_DRAFT RequestId=" + REQUEST_ID.get() + " Attempt=" + str(attempt + 1) +
@@ -1147,16 +1211,20 @@ If clarificationContext.selectedOption exists, it is the exact numbered option s
                     "folderLocator": "id" if p.folderId is not None else "name" if p.folderName else None,
                     "hasClarification": bool(request.clarification)} for p in request.reports], ensure_ascii=False), flush=True)
             validate_plan_schema(request, payload["catalog"])
+            validate_selected_catalog_option(request, selection)
+            if choice is not None and repeats_clarification(request.clarification, clarification_context):
+                raise ValueError('The user already selected ' + choice +
+                    '. Do not repeat the answered menu. Plan the original request using that choice; ask only for a different, genuinely missing criterion.')
             if intent is not None:
                 validate_question_intent(request, intent)
-            if review_intent and not (not interpret_intent and all(p.operation == "clarify" for p in request.reports)):
+            if review_intent and not (not interpret_intent and selection is None and all(p.operation == "clarify" for p in request.reports)):
                 reviewed_plan = request.model_dump(by_alias=True, exclude_none=True, exclude_defaults=True)
                 # Preserve explicit date anchors/boundaries for the reviewer;
                 # removing nested defaults can turn today's bound into {}.
                 for actual, reviewed in zip(request.reports, reviewed_plan["reports"]):
                     if actual.filters is not None:
                         reviewed["filters"] = actual.filters.model_dump(exclude_none=True)
-                review_messages = [SystemMessage(content=PLAN_REVIEW_SYSTEM), HumanMessage(content=json.dumps(
+                review_messages = [SystemMessage(content=PLAN_REVIEW_SYSTEM + clarification_guidance), HumanMessage(content=json.dumps(
                     {**model_payload, "executionDefaults": {"scope": "entire currently selected repository",
                         "displayLimit": 50, "ordering": "backend default; not a selection condition"},
                         "proposedPlan": reviewed_plan},
@@ -1170,6 +1238,8 @@ If clarificationContext.selectedOption exists, it is the exact numbered option s
                 if not accepted:
                     semantic_rejection = True
                     if attempt == 1 and review.clarification:
+                        if choice is not None and repeats_clarification(review.clarification, clarification_context):
+                            raise ValueError('Reviewer repeated an already answered clarification')
                         # A repeated semantic rejection cannot execute a query.
                         # Only a genuine ambiguity supplied by the reviewer is
                         # surfaced as clarification; dependency failures stay errors.
@@ -1178,7 +1248,7 @@ If clarificationContext.selectedOption exists, it is the exact numbered option s
                         return response_with_context(safe)
                     raise ValueError("Intent review rejected plan: " + json.dumps(
                         {"checks": checks, "issues": review.issues, "clarification": review.clarification}, ensure_ascii=False))
-            print("Stage=PLANNER_VALIDATED RequestId=" + REQUEST_ID.get() + " Version=live-plan-v7.4 Attempt=" + str(attempt + 1) + " Plans=" + json.dumps([
+            print("Stage=PLANNER_VALIDATED RequestId=" + REQUEST_ID.get() + " Version=live-plan-v7.5 Attempt=" + str(attempt + 1) + " Plans=" + json.dumps([
                 {"resultType": p.resultType, "operation": p.operation, "requiresFilter": p.requiresFilter,
                  "hasFilter": bool(p.filters or p.field or p.template or p.folderId or p.folderName or p.name or p.entryIds or p.from_),
                  "allResults": p.allResults, "countOnly": p.countOnly,
@@ -1193,6 +1263,10 @@ If clarificationContext.selectedOption exists, it is the exact numbered option s
             write_planner_trace(trace_path, {"stage": "plan_rejected", "attempt": attempt + 1,
                 "semanticRejection": semantic_rejection, "errors": errors})
             if attempt == 1:
+                if choice is not None:
+                    # A failed model plan is not new ambiguity. Re-offering the
+                    # original menu here creates an unbounded selection loop.
+                    raise
                 if not interpret_intent:
                     active_question = (clarification_context["question"] + " " + payload["question"]
                         if clarification_context and context_mode == "clarification_reply" else payload["question"])
@@ -1436,7 +1510,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(HTTPStatus.SERVICE_UNAVAILABLE, {"status": "unavailable", "error": error})
         return self.send_json(HTTPStatus.OK, {"status": "ready", "model": self.model_name,
             "modelTimeoutSeconds": self.model_timeout_seconds, "plannerTimeoutSeconds": self.planner_timeout_seconds, "engine": "LangGraph",
-            "routingVersion": "schema-agent-v5", "planningProtocol": "live-periods-v1", "plannerVersion": "live-plan-v7.4", "planIntentReview": self.review_plans,
+            "routingVersion": "schema-agent-v5", "planningProtocol": "live-periods-v1", "plannerVersion": "live-plan-v7.5", "planIntentReview": self.review_plans,
             "promptVersion": PROMPT_VERSION, "capabilities": ["schema-output", "structured-filters", "backend-dates", "aggregation", "follow-up", "focused-context", "plan-intent-review", "optional-semantic-review"]})
 
     def do_POST(self):
@@ -1545,7 +1619,7 @@ def main():
     Handler.review_plans = not args.skip_plan_review
     Handler.model = model
     Handler.graph = build_graph(model, fast=True, review_content=args.review_content)
-    print(f"LangGraph ready on http://127.0.0.1:{args.port}; model={args.model}; planner=live-plan-v7.4; planIntentReview={Handler.review_plans}; modelTimeoutSeconds={args.model_timeout_seconds}; plannerTimeoutSeconds={args.planner_timeout_seconds}; plannerOutputTokens={args.planner_output_tokens}", flush=True)
+    print(f"LangGraph ready on http://127.0.0.1:{args.port}; model={args.model}; planner=live-plan-v7.5; planIntentReview={Handler.review_plans}; modelTimeoutSeconds={args.model_timeout_seconds}; plannerTimeoutSeconds={args.planner_timeout_seconds}; plannerOutputTokens={args.planner_output_tokens}", flush=True)
     ThreadingHTTPServer(("127.0.0.1", args.port), Handler).serve_forever()
 
 

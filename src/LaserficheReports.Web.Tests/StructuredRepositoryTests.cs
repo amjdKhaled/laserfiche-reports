@@ -7,6 +7,20 @@ namespace LaserficheReports.Web.Tests;
 
 public class StructuredRepositoryTests
 {
+    [Theory]
+    [InlineData("Long")]
+    [InlineData("Short")]
+    [InlineData("LongInteger")]
+    [InlineData("Integer")]
+    public void IntegerAliasesRejectFractionalFiltersBeforeSearch(string type)
+    {
+        LFFieldDefinition[] fields = [new() { Name = "عدد المعاملات", FieldType = type }];
+        Assert.Throws<ArgumentException>(() => StructuredRepositoryQuery.Compile(
+            new("عدد المعاملات", "equals", "1.5"), fields, Today));
+        Assert.Equal("{[]:[عدد المعاملات]=\"15\"}", StructuredRepositoryQuery.Compile(
+            new("عدد المعاملات", "equals", "15"), fields, Today));
+    }
+
     [Fact]
     public void CalendarPeriodsCoverTheWholeYearMonthAndLeapDay()
     {

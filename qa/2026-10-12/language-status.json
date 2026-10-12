@@ -1,0 +1,12 @@
+{
+  "suite": "real_model_synthetic_catalog",
+  "corpusVersion": "arabic-plans-1",
+  "requested": 100000,
+  "executed": 0,
+  "passed": 0,
+  "failed": 0,
+  "routeRequests": 0,
+  "repositoryQueries": 0,
+  "status": "blocked",
+  "reason": "<urlopen error [Errno 111] Connection refused>"
+}
