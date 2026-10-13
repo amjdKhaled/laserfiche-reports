@@ -58,7 +58,8 @@ Stop-Service LaserficheReports
 $listener=New-Object Net.Sockets.TcpListener([Net.IPAddress]::Loopback,54324)
 $listener.Start()
 try {
-    Start-Service LaserficheReports
+    try { Start-Service LaserficheReports }
+    catch { Write-Host 'Service startup correctly rejected an occupied planner port.' }
     $stopped=$false
     for ($attempt=0;$attempt -lt 20;$attempt++) {
         if ((Get-Service LaserficheReports).Status -eq 'Stopped') { $stopped=$true; break }
@@ -86,20 +87,16 @@ finally { $locked.Dispose() }
 if ((Get-FileHash $config).Hash -ne $configHash -or (Get-FileHash $hosting).Hash -ne $hostingHash) { throw 'Failed repair did not restore settings.' }
 # Repackage the same payload with a higher product version to exercise MajorUpgrade.
 $upgrade=Join-Path $logs 'upgrade-fixture.msi'; Copy-Item $msi $upgrade
-$installer=New-Object -ComObject WindowsInstaller.Installer; $database=$installer.OpenDatabase($upgrade,1)
-$productCode='{'+[Guid]::NewGuid().ToString().ToUpperInvariant()+'}'
-$view=$database.OpenView("UPDATE ``Property`` SET ``Value`` = '$productCode' WHERE ``Property`` = 'ProductCode'"); $view.Execute(); $view.Close()
 $expected=Get-Content (Join-Path (Split-Path $msi) 'build-info.json') -Raw | ConvertFrom-Json
 $version=[version]$expected.Version; $upgradeVersion="{0}.{1}.{2}" -f $version.Major,$version.Minor,($version.Build+1)
-$view=$database.OpenView("UPDATE ``Property`` SET ``Value`` = '$upgradeVersion' WHERE ``Property`` = 'ProductVersion'"); $view.Execute(); $view.Close(); $database.Commit()
-$view=$database.OpenView("UPDATE ``Upgrade`` SET ``VersionMax`` = '$upgradeVersion' WHERE ``ActionProperty`` = 'WIX_UPGRADE_DETECTED'"); $view.Execute(); $view.Close()
-$view=$database.OpenView("UPDATE ``Upgrade`` SET ``VersionMin`` = '$upgradeVersion' WHERE ``ActionProperty`` = 'WIX_DOWNGRADE_DETECTED'"); $view.Execute(); $view.Close(); $database.Commit()
-[Runtime.InteropServices.Marshal]::FinalReleaseComObject($view) | Out-Null
-[Runtime.InteropServices.Marshal]::FinalReleaseComObject($database) | Out-Null
-$summary=$installer.SummaryInformation($upgrade,20)
-$summary.GetType().InvokeMember('Property',[Reflection.BindingFlags]::SetProperty,$null,$summary,@(9,('{'+[Guid]::NewGuid().ToString().ToUpperInvariant()+'}'))) | Out-Null
-$summary.Persist(); [Runtime.InteropServices.Marshal]::FinalReleaseComObject($summary) | Out-Null
-[Runtime.InteropServices.Marshal]::FinalReleaseComObject($installer) | Out-Null
+$stage=Get-ChildItem "$repo\.build-cache" -Directory -Filter 'reports-*' | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
+if (!$stage) { throw 'The upgrade fixture requires staging from build/publish.ps1.' }
+$payload=Join-Path $stage.FullName 'payload'; $harvest=Join-Path $stage.FullName 'Payload.wxs'
+# Recompile the MSI so its Upgrade table contains the correct version bounds.
+& dotnet tool run wix build "$repo\installer\Reports.Installer\Product.wxs" $harvest -arch x64 `
+    -ext 'WixToolset.Util.wixext/4.0.5' -d "ProductVersion=$upgradeVersion" -d "PayloadRoot=$payload" `
+    -d "SafetyActionsPath=$repo\installer\Reports.SafetyActions\bin\Release\net48\Reports.SafetyActions.CA.dll" -o $upgrade
+if ($LASTEXITCODE -ne 0) { throw 'Upgrade MSI fixture build failed.' }
 Run-Msi 'upgrade' @('/i',('"'+$upgrade+'"'))
 if ((Get-FileHash $config).Hash -ne $configHash -or (Get-FileHash $runtime).Hash -ne $runtimeHash) { throw 'Upgrade changed settings.' }
 Require-Web

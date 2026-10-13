@@ -34,7 +34,7 @@ namespace LaserficheReports.Setup
         private readonly Label maintenance = new Label { Text = "A Reports MSI installation was found.", AutoSize = true };
         private readonly Label review = new Label { Dock = DockStyle.Fill, AutoSize = false };
         private int page;
-        private bool applying, complete;
+        private bool applying, complete, checking;
         private string profile = "";
         private readonly string[] titles = { "Welcome", "Connect to Laserfiche", "Choose deployment options", "Review and install", "Installing Reports", "Setup complete" };
         internal Wizard(ReportsBa ba, LaunchAction requested)
@@ -78,14 +78,16 @@ namespace LaserficheReports.Setup
                 ShowPage(5); var label = new Label { Dock = DockStyle.Fill, Text = message, AutoSize = false }; pages[5].Controls.Add(label);
                 if (ok && !remove.Checked)
                 {
+                    checking = true; next.Enabled = cancel.Enabled = false;
                     label.Text += "\n\nChecking the installed web app and local AI service...";
                     label.Text += "\n\n" + await CheckInstalledAsync();
+                    checking = false; next.Enabled = cancel.Enabled = true;
                     var open = new Button { Text = "Open Reports", Dock = DockStyle.Bottom, Height = 42 };
                     open.Click += (_, __) => Process.Start(new ProcessStartInfo($"http://127.0.0.1:{fields["Port"].Text}") { UseShellExecute = true }); pages[5].Controls.Add(open);
                 }
             };
             next.Click += (_, __) => Advance(); back.Click += (_, __) => ShowPage(Math.Max(0, page - 1)); cancel.Click += (_, __) => Close();
-            FormClosing += (_, e) => { if (applying) e.Cancel = true; };
+            FormClosing += (_, e) => { if (applying || checking) e.Cancel = true; };
             maintenance.Visible = repair.Visible = remove.Visible = false; next.Enabled = false; ShowPage(0);
         }
         private void Advance()
