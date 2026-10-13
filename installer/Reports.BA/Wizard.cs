@@ -66,7 +66,7 @@ namespace LaserficheReports.Setup
             var deployment = Grid(pages[2]);
             Field(deployment, "Port", "Reports local web port", "5187"); Field(deployment, "GraphPort", "Local planner port", "8766");
             Field(deployment, "Model", "Ollama model name", "qwen2.5:14b"); Field(deployment, "OllamaUrl", "Local Ollama address", "http://127.0.0.1:11434");
-            AddRow(deployment, "Install directory", new Label { AutoSize = true, Text = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "LaserficheReports") });
+            AddRow(deployment, "Install directory", new Label { AutoSize = true, Text = Path.Combine(Environment.GetEnvironmentVariable("ProgramW6432") ?? Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "LaserficheReports") });
             AddRow(deployment, "Configuration", new Label { AutoSize = true, Text = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "LaserficheReports") });
             pages[3].Controls.Add(review); pages[4].Controls.Add(result); pages[4].Controls.Add(progress);
             LoadSettings();

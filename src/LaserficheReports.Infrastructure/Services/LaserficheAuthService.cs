@@ -106,7 +106,9 @@ internal sealed class LaserficheAuthService : ILaserficheAuthService
     private string CacheKeyFor(RepositoryDescriptor repository)
     {
         var scope = CurrentScope();
-        var key = $"{CacheKeyPrefix}{repository.Key}:{repository.RepositoryId}:{scope}:g{GenerationFor(scope)}";
+        var serverHash = Convert.ToHexString(SHA256.HashData(
+            Encoding.UTF8.GetBytes(repository.ServerUrl.TrimEnd('/').ToLowerInvariant())))[..16];
+        var key = $"{CacheKeyPrefix}{serverHash}:{repository.Key}:{repository.RepositoryId}:{scope}:g{GenerationFor(scope)}";
         _logger.LogInformation(
             "[LF AUTH] Token cache key used. Repository={RepositoryId}; Scope={Scope}; Key={CacheKey}.",
             repository.RepositoryId, scope, key);

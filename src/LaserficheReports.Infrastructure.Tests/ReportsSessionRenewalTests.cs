@@ -108,6 +108,17 @@ public sealed class ReportsSessionRenewalTests
     }
 
     [Fact]
+    public async Task SameRepositoryOnAnotherServer_DoesNotReuseThePreviousServersToken()
+    {
+        var (service, handler) = Create(Token("server-one"), Token("server-two"));
+        await service.TryAuthenticateAsync(Repo, "same-user", "same-password");
+        var anotherServer = Repo with { ServerUrl = "http://another-lf.test" };
+        Assert.Equal("server-two", await service.GetTokenAsync(anotherServer));
+        Assert.Equal("server-one", await service.GetTokenAsync(Repo));
+        Assert.Equal(2, handler.Bodies.Count);
+    }
+
+    [Fact]
     public async Task LicensedSessionLimit_AutomaticRecoveryDoesNotRetryEveryRead()
     {
         var (service, handler) = Create(Token("old"), Response(HttpStatusCode.TooManyRequests, "{\"errorCode\":9030}"));

@@ -10,7 +10,7 @@
       <Payload SourceFile="$(var.BaRoot)\WixToolset.Mba.Host.config" Name="WixToolset.Mba.Host.config" />
     </BootstrapperApplication>
     <!-- Connection configuration contains no credentials. Accounts sign in through the app. -->
-    <Variable Name="ReportsProfile" Type="string" Hidden="yes" />
+    <Variable Name="ReportsProfile" Type="string" Value="" Hidden="yes" />
     <Variable Name="NetFx48Release" Type="numeric" Value="0" />
     <util:RegistrySearch Id="NetFx48Search" Variable="NetFx48Release" Root="HKLM" Key="SOFTWARE\Microsoft\NET Framework Setup\NDP\v4\Full" Value="Release" Result="value" />
     <Chain>
