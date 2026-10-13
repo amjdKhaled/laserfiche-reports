@@ -64,6 +64,7 @@ if ((Get-FileHash $config).Hash -ne $configHash -or (Get-FileHash $hosting).Hash
 Require-Web
 # A denied second write proves the journal restores the first configuration file.
 $profile.ServerUrl='https://rollback-target.invalid'
+$profile.Model='qwen2.5:7b'
 $locked=[IO.File]::Open($hosting,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
 try { Run-Msi 'rollback' @('/i',('"'+$msi+'"'),'REINSTALL=ALL','REINSTALLMODE=amus',('REPORTS_PROFILE='+(Encoded-Profile))) $false }
 finally { $locked.Dispose() }

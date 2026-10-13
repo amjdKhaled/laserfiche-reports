@@ -125,7 +125,8 @@ namespace LaserficheReports.Setup
                 connection["Laserfiche"] = laserfiche;
                 var hosting = ReadObject(hostingPath);
                 foreach (var key in new[] { "Port", "GraphPort", "Model", "OllamaUrl" }) hosting[key] = profile[key];
-                var writes = new[] { Tuple.Create(connectionPath, Json.Serialize(connection)), Tuple.Create(hostingPath, Json.Serialize(hosting)) };
+                var writes = new[] { Tuple.Create(connectionPath, Json.Serialize(connection)), Tuple.Create(hostingPath, Json.Serialize(hosting)) }
+                    .Where(item => !File.Exists(item.Item1) || !File.ReadAllBytes(item.Item1).SequenceEqual(Encoding.UTF8.GetBytes(item.Item2))).ToArray();
                 var journal = new Dictionary<string, object>();
                 foreach (var item in writes)
                 {

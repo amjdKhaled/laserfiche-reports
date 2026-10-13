@@ -2,6 +2,8 @@
   <PropertyGroup>
     <TargetFramework>net48</TargetFramework>
     <PlatformTarget>x64</PlatformTarget>
+    <Platform>x64</Platform>
+    <OutputPath>bin\$(Configuration)\</OutputPath>
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <AssemblyName>Reports.SafetyActions</AssemblyName>

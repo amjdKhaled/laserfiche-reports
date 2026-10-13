@@ -31,6 +31,18 @@ jobs:
       - name: Test native install, repair, rollback, upgrade and removal
         shell: pwsh
         run: ./installer/Test-ReportsInstallation.ps1 -MsiPath "./artifacts/LaserficheReports-1.0.$env:GITHUB_RUN_NUMBER/LaserficheReports.msi"
+      - name: Collect Reports runtime diagnostics
+        if: always()
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts/acceptance/runtime | Out-Null
+          if (Test-Path "$env:ProgramData/LaserficheReports/logs") {
+            Copy-Item "$env:ProgramData/LaserficheReports/logs/*" artifacts/acceptance/runtime -Recurse -Force
+          }
+          Get-Service LaserficheReports -ErrorAction SilentlyContinue | Format-List * | Out-File artifacts/acceptance/service.txt
+          Get-WinEvent -FilterHashtable @{LogName='Application';StartTime=(Get-Date).AddMinutes(-20)} -ErrorAction SilentlyContinue |
+            Where-Object ProviderName -match 'Reports|\.NET Runtime|Application Error' |
+            Select-Object -First 20 TimeCreated,ProviderName,Message | Format-List | Out-File artifacts/acceptance/events.txt
       - uses: actions/upload-artifact@v4
         if: always()
         with:
