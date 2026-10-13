@@ -53,6 +53,21 @@ try { Run-Msi 'reject-hardlink' @('/i',('"'+$msi+'"'),('REPORTS_PROFILE='+(Encod
 finally { [IO.File]::Delete($linked) }
 Run-Msi 'install' @('/i',('"'+$msi+'"'),('REPORTS_PROFILE='+(Encoded-Profile)))
 Require-Web
+# A busy planner port must stop this host without terminating the unrelated owner.
+Stop-Service LaserficheReports
+$listener=New-Object Net.Sockets.TcpListener([Net.IPAddress]::Loopback,54324)
+$listener.Start()
+try {
+    Start-Service LaserficheReports
+    $stopped=$false
+    for ($attempt=0;$attempt -lt 20;$attempt++) {
+        if ((Get-Service LaserficheReports).Status -eq 'Stopped') { $stopped=$true; break }
+        Start-Sleep -Seconds 1
+    }
+    if (!$stopped -or !$listener.Server.IsBound) { throw 'Busy planner port was accepted or the unrelated owner was stopped.' }
+} finally { $listener.Stop() }
+Start-Service LaserficheReports
+Require-Web
 $unknown=Join-Path $root 'unrelated-document.txt'; 'keep unknown app file' | Set-Content $unknown
 $unknownData=Join-Path $data 'unrelated-document.txt'; 'keep unknown data file' | Set-Content $unknownData
 $runtime=Join-Path $data 'laserfiche.runtime.json'; '{"Laserfiche":{"TimeoutSeconds":300}}' | Set-Content $runtime

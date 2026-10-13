@@ -1,5 +1,7 @@
 using System.Diagnostics;
 using System.Text.Json;
+using System.Net;
+using System.Net.Sockets;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.DependencyInjection;
@@ -28,6 +30,16 @@ sealed class ReportsWorker(ILogger<ReportsWorker> logger) : BackgroundService
         var uri = new Uri(ollama);
         if (uri.Scheme != "http" || !uri.IsLoopback || !string.IsNullOrEmpty(uri.UserInfo))
             throw new InvalidOperationException("Ollama must use a local HTTP endpoint.");
+        // Never let a manually running planner or another web app impersonate
+        // this installation. Refuse busy ports instead of killing their owner.
+        foreach (var listenerPort in new[] { port, graphPort })
+        {
+            var listener = new TcpListener(IPAddress.Loopback, listenerPort);
+            try { listener.Start(); }
+            catch (SocketException error)
+            { throw new InvalidOperationException($"Reports port {listenerPort} is already in use. Stop the other copy before starting the Reports service.", error); }
+            finally { listener.Stop(); }
+        }
         await Task.WhenAll(
             Supervise("web", Path.Combine(root, "web", "LaserficheReports.Web.exe"), [],
                 new Dictionary<string, string> { ["ASPNETCORE_URLS"] = $"http://127.0.0.1:{port}",

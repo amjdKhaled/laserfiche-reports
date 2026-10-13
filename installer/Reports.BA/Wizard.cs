@@ -156,12 +156,25 @@ namespace LaserficheReports.Setup
                         {
                             if (response.IsSuccessStatusCode)
                             {
+                                var status = json.Deserialize<Dictionary<string, object>>(await response.Content.ReadAsStringAsync());
+                                var expectedPath = Path.Combine(Environment.GetEnvironmentVariable("ProgramW6432") ?? Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "LaserficheReports", "web", "build-info.json");
+                                var expected = json.Deserialize<Dictionary<string, object>>(File.ReadAllText(expectedPath));
+                                if (!status.TryGetValue("build", out var buildValue) || !(buildValue is Dictionary<string, object> build) ||
+                                    !build.TryGetValue("SourceCommit", out var actualCommit) || Convert.ToString(actualCommit) != Convert.ToString(expected["SourceCommit"]))
+                                    return "A different Reports build answered on this port. Stop the old copy and restart the LaserficheReports service.";
                                 using (var ai = await client.GetAsync($"http://127.0.0.1:{fields["GraphPort"].Text}/health"))
-                                    return ai.IsSuccessStatusCode ? "Reports web app and planner are ready. Sign in and run a report to verify repository access." : "Reports is installed and the web app is running. Local AI is not ready: open Ollama and install the selected model. Check ProgramData\\LaserficheReports\\logs.";
+                                {
+                                    if (!ai.IsSuccessStatusCode) return "Reports is installed and the web app is running. Local AI is not ready: open Ollama and install the selected model. Check ProgramData\\LaserficheReports\\logs.";
+                                    var health = json.Deserialize<Dictionary<string, object>>(await ai.Content.ReadAsStringAsync());
+                                    if (!health.TryGetValue("model", out var actualModel) || Convert.ToString(actualModel) != fields["Model"].Text.Trim())
+                                        return "The planner reports a different model. Stop the old planner and restart the Reports service.";
+                                    return "Reports web app and planner are ready. Sign in and run a report to verify repository access.";
+                                }
                             }
                         }
                     }
                     catch (HttpRequestException) { } catch (TaskCanceledException) { }
+                    catch (Exception error) { return "Installation completed, but runtime identity could not be verified: " + error.Message; }
                     await Task.Delay(1000);
                 }
                 return "Installation completed, but runtime startup could not be verified. Read ProgramData\\LaserficheReports\\logs before starting another copy.";
