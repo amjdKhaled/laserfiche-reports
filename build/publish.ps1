@@ -76,7 +76,13 @@ try {
     }
     Invoke-Checked dotnet @('tool','restore')
     foreach ($extension in @('WixToolset.Util.wixext','WixToolset.Bal.wixext')) {
-        Invoke-Checked dotnet @('tool','run','wix','extension','add',"$extension/4.0.5")
+        & dotnet tool run wix extension add "$extension/4.0.5"
+        if ($LASTEXITCODE -ne 0) {
+            $cached = & dotnet tool run wix extension list
+            if ($LASTEXITCODE -ne 0 -or !(($cached | Out-String) -match ([regex]::Escape($extension)+'.*4\.0\.5'))) {
+                throw "WiX extension $extension/4.0.5 could not be installed or verified."
+            }
+        }
     }
     Invoke-Checked dotnet @('publish',"$source\src\LaserficheReports.Web",'-c','Release','-r','win-x64','--self-contained','true','-o',"$payload\web","-p:Version=$Version")
     Invoke-Checked dotnet @('publish',"$source\installer\Reports.Service",'-c','Release','-r','win-x64','--self-contained','true','-o',$payload,"-p:Version=$Version")
@@ -118,14 +124,14 @@ try {
     if (!(Test-Path $actions)) { throw 'Missing native custom action package.' }
     $msi = Join-Path $release 'LaserficheReports.msi'
     Invoke-Checked dotnet @('tool','run','wix','build',"$source\installer\Reports.Installer\Product.wxs",$harvest,'-arch','x64',
-        '-ext','WixToolset.Util.wixext','-d',"ProductVersion=$Version",'-d',"PayloadRoot=$payload",'-d',"SafetyActionsPath=$actions",'-o',$msi)
+        '-ext','WixToolset.Util.wixext/4.0.5','-d',"ProductVersion=$Version",'-d',"PayloadRoot=$payload",'-d',"SafetyActionsPath=$actions",'-o',$msi)
     $setup = Join-Path $release 'LaserficheReports-Setup.exe'
     $netfx = Join-Path $stage 'ndp48-web.exe'
     Invoke-WebRequest 'https://go.microsoft.com/fwlink/?LinkId=2085155' -OutFile $netfx -UseBasicParsing
     $signature = Get-AuthenticodeSignature $netfx
     if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'Microsoft Corporation') { throw 'Untrusted .NET Framework prerequisite.' }
-    Invoke-Checked dotnet @('tool','run','wix','build',"$source\installer\Reports.Bundle\Bundle.wxs",'-ext','WixToolset.Bal.wixext',
-        '-ext','WixToolset.Util.wixext','-d',"NetFxInstaller=$netfx",'-d',"ProductVersion=$Version",'-d',"MsiPath=$msi",'-d',"BaRoot=$baStage",'-o',$setup)
+    Invoke-Checked dotnet @('tool','run','wix','build',"$source\installer\Reports.Bundle\Bundle.wxs",'-ext','WixToolset.Bal.wixext/4.0.5',
+        '-ext','WixToolset.Util.wixext/4.0.5','-d',"NetFxInstaller=$netfx",'-d',"ProductVersion=$Version",'-d',"MsiPath=$msi",'-d',"BaRoot=$baStage",'-o',$setup)
     Copy-Item "$source\docs\windows-installer.md" "$release\README.md"
     $hashes = Get-ChildItem $release -File | Where-Object Extension -in @('.exe','.msi') | ForEach-Object { '{0}  {1}' -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash,$_.Name }
     $hashes | Set-Content "$release\SHA256SUMS.txt" -Encoding ASCII

@@ -14,12 +14,13 @@ $sentinelHash = (Get-FileHash $sentinel).Hash
 $profile = @{ServerUrl='https://target-server.invalid';ApiBasePath='/LFRepositoryAPI';ApiVersion='v2';RepositoryId='TargetRepo';
     WebClientBaseUrl='https://target-server.invalid/laserfiche';Port=54323;GraphPort=54324;Model='qwen2.5:14b';OllamaUrl='http://127.0.0.1:11434'}
 function Encoded-Profile { [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($profile | ConvertTo-Json -Compress))) }
-function Run-Msi([string]$Name,[string[]]$Arguments,[bool]$Success=$true) {
+function Run-Msi([string]$Name,[string[]]$Arguments,[bool]$Success=$true,[string]$ExpectedReason='') {
     $log = Join-Path $logs "$Name.log"
     $process = Start-Process msiexec.exe -ArgumentList ($Arguments + @('/qn','/norestart','/L*v',('"'+$log+'"'))) -PassThru
     if (!$process.WaitForExit(180000)) { throw "MSI $Name timed out; $log" }
     if ($Success -and $process.ExitCode -notin @(0,3010)) { throw "MSI $Name failed ($($process.ExitCode)); $log" }
     if (!$Success -and $process.ExitCode -in @(0,3010)) { throw "MSI accepted unsafe operation $Name" }
+    if ($ExpectedReason -and (Get-Content $log -Raw) -notmatch [regex]::Escape($ExpectedReason)) { throw "MSI $Name failed for an unexpected reason; $log" }
     if ((Get-FileHash $sentinel).Hash -ne $sentinelHash) { throw 'Unrelated file changed.' }
 }
 function Require-Web {
@@ -40,15 +41,15 @@ function Require-Web {
     $status | ConvertTo-Json -Depth 8 | Set-Content "$logs\installed-build.json"
 }
 # Refuse a redirected program directory before modifying any payload.
-Run-Msi 'reject-foreign-path' @('/i',('"'+$msi+'"'),"INSTALLFOLDER=$outside",('REPORTS_PROFILE='+(Encoded-Profile))) $false
+Run-Msi 'reject-foreign-path' @('/i',('"'+$msi+'"'),"INSTALLFOLDER=$outside",('REPORTS_PROFILE='+(Encoded-Profile))) $false 'Reports isolation rejected'
 if (Test-Path $root) { throw 'Expected a clean disposable test machine.' }
 New-Item -ItemType Junction -Path $root -Target $outside | Out-Null
-try { Run-Msi 'reject-junction' @('/i',('"'+$msi+'"'),('REPORTS_PROFILE='+(Encoded-Profile))) $false }
+try { Run-Msi 'reject-junction' @('/i',('"'+$msi+'"'),('REPORTS_PROFILE='+(Encoded-Profile))) $false 'Reports isolation rejected' }
 finally { [IO.Directory]::Delete($root) }
 New-Item -ItemType Directory -Force -Path "$root\web" | Out-Null
 $linked=Join-Path $root 'web\LaserficheReports.Web.exe'
 New-Item -ItemType HardLink -Path $linked -Target $sentinel | Out-Null
-try { Run-Msi 'reject-hardlink' @('/i',('"'+$msi+'"'),('REPORTS_PROFILE='+(Encoded-Profile))) $false }
+try { Run-Msi 'reject-hardlink' @('/i',('"'+$msi+'"'),('REPORTS_PROFILE='+(Encoded-Profile))) $false 'Reports isolation rejected' }
 finally { [IO.File]::Delete($linked) }
 Run-Msi 'install' @('/i',('"'+$msi+'"'),('REPORTS_PROFILE='+(Encoded-Profile)))
 Require-Web
@@ -75,6 +76,8 @@ $view=$database.OpenView("UPDATE ``Property`` SET ``Value`` = '$productCode' WHE
 $expected=Get-Content (Join-Path (Split-Path $msi) 'build-info.json') -Raw | ConvertFrom-Json
 $version=[version]$expected.Version; $upgradeVersion="{0}.{1}.{2}" -f $version.Major,$version.Minor,($version.Build+1)
 $view=$database.OpenView("UPDATE ``Property`` SET ``Value`` = '$upgradeVersion' WHERE ``Property`` = 'ProductVersion'"); $view.Execute(); $view.Close(); $database.Commit()
+$view=$database.OpenView("UPDATE ``Upgrade`` SET ``VersionMax`` = '$upgradeVersion' WHERE ``ActionProperty`` = 'WIX_UPGRADE_DETECTED'"); $view.Execute(); $view.Close()
+$view=$database.OpenView("UPDATE ``Upgrade`` SET ``VersionMin`` = '$upgradeVersion' WHERE ``ActionProperty`` = 'WIX_DOWNGRADE_DETECTED'"); $view.Execute(); $view.Close(); $database.Commit()
 [Runtime.InteropServices.Marshal]::FinalReleaseComObject($view) | Out-Null
 [Runtime.InteropServices.Marshal]::FinalReleaseComObject($database) | Out-Null
 $summary=$installer.SummaryInformation($upgrade,20)

@@ -8,7 +8,8 @@
     <Property Id="NETFRAMEWORK48">
       <RegistrySearch Id="Net48Search" Root="HKLM" Key="SOFTWARE\Microsoft\NET Framework Setup\NDP\v4\Full" Name="Release" Type="raw" />
     </Property>
-    <Launch Condition="Installed OR NETFRAMEWORK48 &gt;= 528040" Message=".NET Framework 4.8 is required for the setup wizard and Windows Installer actions." />
+    <!-- MSI RegLocator prefixes REG_DWORD values with '#'; compare the raw six-digit release string. -->
+    <Launch Condition="Installed OR NETFRAMEWORK48 &gt;= &quot;#528040&quot;" Message=".NET Framework 4.8 is required for the setup wizard and Windows Installer actions." />
     <Property Id="REPORTS_PROFILE" Secure="yes" Hidden="yes" />
     <Property Id="REPORTS_TRANSACTION" Secure="yes" />
     <Property Id="ARPCOMMENTS" Value="Local smart document reports. Configuration and Laserfiche files are preserved on removal." />
