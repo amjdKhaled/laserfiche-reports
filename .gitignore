@@ -20,3 +20,6 @@ ocr-evaluation/
 # Local deployment artifacts and transfer archives
 artifacts/
 *.tar
+.build-cache/
+!.config/
+!.config/dotnet-tools.json

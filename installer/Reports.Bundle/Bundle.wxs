@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal" xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+  <Bundle Name="Laserfiche Reports" Manufacturer="ISB" Version="$(var.ProductVersion)"
+          UpgradeCode="{4D571965-8A9C-4466-BA43-88C79A20B84C}" AboutUrl="https://github.com/amjdKhaled/laserfiche-reports">
+    <BootstrapperApplication>
+      <bal:WixManagedBootstrapperApplicationHost />
+      <Payload SourceFile="$(var.BaRoot)\Reports.BA.dll" />
+      <Payload SourceFile="$(var.BaRoot)\WixToolset.Mba.Core.dll" />
+      <Payload SourceFile="$(var.BaRoot)\mbanative.dll" />
+      <Payload SourceFile="$(var.BaRoot)\WixToolset.Mba.Host.config" Name="WixToolset.Mba.Host.config" />
+    </BootstrapperApplication>
+    <!-- Connection configuration contains no credentials. Accounts sign in through the app. -->
+    <Variable Name="ReportsProfile" Type="string" Hidden="yes" />
+    <Variable Name="NetFx48Release" Type="numeric" Value="0" />
+    <util:RegistrySearch Id="NetFx48Search" Variable="NetFx48Release" Root="HKLM" Key="SOFTWARE\Microsoft\NET Framework Setup\NDP\v4\Full" Value="Release" Result="value" />
+    <Chain>
+      <ExePackage Id="NetFx48Prereq" InstallArguments="/q /norestart" DetectCondition="NetFx48Release &gt;= 528040" Permanent="yes" Vital="yes" bal:PrereqPackage="yes">
+        <ExePackagePayload Name="ndp48-web.exe" SourceFile="$(var.NetFxInstaller)" DownloadUrl="https://go.microsoft.com/fwlink/?LinkId=2085155" />
+      </ExePackage>
+      <MsiPackage Id="ReportsMsi" SourceFile="$(var.MsiPath)" Vital="yes" ForcePerMachine="yes">
+      <MsiProperty Name="REPORTS_PROFILE" Value="[ReportsProfile]" />
+    </MsiPackage></Chain>
+  </Bundle>
+</Wix>

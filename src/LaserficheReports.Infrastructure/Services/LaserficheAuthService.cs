@@ -394,6 +394,22 @@ internal sealed class LaserficheAuthService : ILaserficheAuthService
         return Task.CompletedTask;
     }
 
+    public async Task InvalidateTokenAsync(RepositoryDescriptor repository, string rejectedToken)
+    {
+        var cacheKey = CacheKeyFor(repository);
+        var gate = _keyLocks.GetOrAdd(cacheKey, static _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            // A delayed 401 for token A must never evict token B acquired by
+            // another request. Use the same gate as acquisition to avoid races.
+            if (_cache.TryGetValue(cacheKey, out string? current) &&
+                string.Equals(current, rejectedToken, StringComparison.Ordinal))
+                _cache.Remove(cacheKey);
+        }
+        finally { gate.Release(); }
+    }
+
     /// <inheritdoc />
     public async Task<bool> TryAuthenticateAsync(
         RepositoryDescriptor repository,
@@ -452,7 +468,7 @@ internal sealed class LaserficheAuthService : ILaserficheAuthService
             // and is the primary reason a single login can surface as HTTP 429.
             var tokenResponse = await RequestTokenAsync(
                     tokenUrl, username, password, cancellationToken,
-                    retryTooManyRequests: false)
+                    retryTooManyRequests: false, explicitLogin: true)
                 .ConfigureAwait(false);
 
             // Warm the token cache so subsequent GetTokenAsync calls skip re-authentication.
@@ -520,6 +536,8 @@ internal sealed class LaserficheAuthService : ILaserficheAuthService
         _cache.Set(cacheKey, response.AccessToken, TimeSpan.FromSeconds(expirySeconds));
         if (!string.IsNullOrWhiteSpace(response.RefreshToken))
             _cache.Set(RefreshKeyFor(repository), response.RefreshToken, TimeSpan.FromHours(8));
+        else
+            _cache.Remove(RefreshKeyFor(repository));
     }
 
     /// <summary>
@@ -541,14 +559,15 @@ internal sealed class LaserficheAuthService : ILaserficheAuthService
         string username,
         string password,
         CancellationToken cancellationToken,
-        bool retryTooManyRequests = true)
+        bool retryTooManyRequests = true,
+        bool explicitLogin = false)
     {
         var cooldownKey = "LFLoginCooldown:" + tokenUrl + ":" +
             Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(username.ToUpperInvariant())));
         // 9030 is a session/license rejection, not transient request throttling.
         // Share its short cooldown across parallel reads for this account/repository.
         var sessionLimitKey = "LFSessionLimit:" + cooldownKey;
-        if (retryTooManyRequests && _cache.TryGetValue(sessionLimitKey, out Domain.Exceptions.LaserficheException? sessionLimit) && sessionLimit is not null)
+        if (!explicitLogin && _cache.TryGetValue(sessionLimitKey, out Domain.Exceptions.LaserficheException? sessionLimit) && sessionLimit is not null)
             throw sessionLimit;
         if (!retryTooManyRequests && _cache.TryGetValue(cooldownKey, out DateTimeOffset retryAt))
             throw new Domain.Exceptions.LaserficheException(

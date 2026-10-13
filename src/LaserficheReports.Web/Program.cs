@@ -206,7 +206,11 @@ app.Use(async (context, next) =>
     }
 });
 app.UseDefaultFiles();
-app.UseStaticFiles();
+app.UseStaticFiles(new StaticFileOptions
+{
+    // Revalidate on updates instead of keeping an old installed UI in the browser.
+    OnPrepareResponse = context => context.Context.Response.Headers.CacheControl = "no-cache"
+});
 
 app.MapGet("/api/app/status", (IConfiguration config) => Results.Ok(new
 {
@@ -214,7 +218,8 @@ app.MapGet("/api/app/status", (IConfiguration config) => Results.Ok(new
     mode = "local-only",
     ocrEnabled = config.GetValue("Ocr:Enabled", false),
     processId = Environment.ProcessId,
-    startedAtUtc
+    startedAtUtc,
+    build = ReportsBuildInformation.Read(builder.Environment.ContentRootPath)
 }));
 
 app.MapReportSessions();

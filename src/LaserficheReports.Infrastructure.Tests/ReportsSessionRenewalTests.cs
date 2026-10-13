@@ -81,6 +81,47 @@ public sealed class ReportsSessionRenewalTests
         Assert.Equal("recovered", await service.GetTokenAsync(Repo));
         Assert.Equal(4, handler.Bodies.Count);
     }
+    [Fact]
+    public async Task Delayed401_DoesNotEvictTheRenewedToken()
+    {
+        var (service, handler) = Create(Token("old"), Token("new"));
+        await service.TryAuthenticateAsync(Repo, "same-user", "same-password");
+        await service.InvalidateTokenAsync(Repo, "old");
+        Assert.Equal("new", await service.GetTokenAsync(Repo));
+        await Task.WhenAll(Enumerable.Range(0, 20).Select(_ => service.InvalidateTokenAsync(Repo, "old")));
+        Assert.Equal("new", await service.GetTokenAsync(Repo));
+        Assert.Equal(2, handler.Bodies.Count);
+    }
+
+    [Fact]
+    public async Task ManyRenewalCycles_ContinueReturningTheSameUsersTokens()
+    {
+        var (service, handler) = Create(Enumerable.Range(0, 30).Select(i => Token("access-" + i)).ToArray());
+        await service.TryAuthenticateAsync(Repo, "same-user", "same-password");
+        for (var i = 1; i < 30; i++)
+        {
+            await service.InvalidateTokenAsync(Repo, "access-" + (i - 1));
+            var tokens = await Task.WhenAll(Enumerable.Range(0, 20).Select(_ => service.GetTokenAsync(Repo)));
+            Assert.All(tokens, value => Assert.Equal("access-" + i, value));
+        }
+        Assert.Equal(30, handler.Bodies.Count);
+    }
+
+    [Fact]
+    public async Task LicensedSessionLimit_AutomaticRecoveryDoesNotRetryEveryRead()
+    {
+        var (service, handler) = Create(Token("old"), Response(HttpStatusCode.TooManyRequests, "{\"errorCode\":9030}"));
+        await service.TryAuthenticateAsync(Repo, "same-user", "same-password");
+        await service.InvalidateTokenAsync(Repo, "old");
+        for (var i = 0; i < 20; i++)
+        {
+            var error = await Assert.ThrowsAsync<LaserficheReports.Domain.Exceptions.LaserficheException>(() => service.GetTokenAsync(Repo));
+            Assert.Equal(429, error.StatusCode);
+            Assert.Equal("9030", error.LFErrorCode);
+        }
+        Assert.Equal(2, handler.Bodies.Count);
+    }
+
     private sealed class Handler(HttpResponseMessage[] responses) : HttpMessageHandler, IHttpClientFactory
     {
         private readonly Queue<HttpResponseMessage> queue = new(responses);

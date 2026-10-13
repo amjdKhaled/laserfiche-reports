@@ -64,16 +64,16 @@ internal sealed class BearerTokenHandler : DelegatingHandler
                 request.Method,
                 request.RequestUri);
 
-            await _authService.InvalidateTokenAsync(repo).ConfigureAwait(false);
+            response.Dispose();
+            await _authService.InvalidateTokenAsync(repo, token).ConfigureAwait(false);
 
             var freshToken = await _authService
                 .GetTokenAsync(repo, cancellationToken)
                 .ConfigureAwait(false);
 
-            var retryRequest = await CloneRequestAsync(request, cancellationToken).ConfigureAwait(false);
+            using var retryRequest = await CloneRequestAsync(request, cancellationToken).ConfigureAwait(false);
             retryRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", freshToken);
 
-            response.Dispose();
             response = await base.SendAsync(retryRequest, cancellationToken).ConfigureAwait(false);
         }
 
@@ -88,7 +88,11 @@ internal sealed class BearerTokenHandler : DelegatingHandler
         HttpRequestMessage original,
         CancellationToken cancellationToken)
     {
-        var clone = new HttpRequestMessage(original.Method, original.RequestUri);
+        var clone = new HttpRequestMessage(original.Method, original.RequestUri)
+        { Version = original.Version, VersionPolicy = original.VersionPolicy };
+
+        foreach (var option in original.Options)
+            clone.Options.Set(new HttpRequestOptionsKey<object?>(option.Key), option.Value);
 
         foreach (var header in original.Headers)
         {

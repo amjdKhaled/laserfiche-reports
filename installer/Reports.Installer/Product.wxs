@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+  <Package Name="Laserfiche Reports" Manufacturer="ISB" Language="1033" Version="$(var.ProductVersion)"
+           UpgradeCode="{4C4E0935-D8F9-4F60-B7D6-9BF7A39AFB97}" Scope="perMachine" InstallerVersion="500" Compressed="yes">
+    <MajorUpgrade Schedule="afterInstallInitialize" DowngradeErrorMessage="A newer Reports version is installed." />
+    <MediaTemplate EmbedCab="yes" />
+    <Launch Condition="VersionNT64" Message="Reports requires Windows x64." />
+    <Property Id="NETFRAMEWORK48">
+      <RegistrySearch Id="Net48Search" Root="HKLM" Key="SOFTWARE\Microsoft\NET Framework Setup\NDP\v4\Full" Name="Release" Type="raw" />
+    </Property>
+    <Launch Condition="Installed OR NETFRAMEWORK48 &gt;= 528040" Message=".NET Framework 4.8 is required for the setup wizard and Windows Installer actions." />
+    <Property Id="REPORTS_PROFILE" Secure="yes" Hidden="yes" />
+    <Property Id="REPORTS_TRANSACTION" Secure="yes" />
+    <Property Id="ARPCOMMENTS" Value="Local smart document reports. Configuration and Laserfiche files are preserved on removal." />
+    <Property Id="ARPHELPLINK" Value="https://github.com/amjdKhaled/laserfiche-reports/issues" />
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="LaserficheReports">
+        <Directory Id="WEBFOLDER" Name="web" />
+        <Directory Id="PLANNERFOLDER" Name="planner" />
+      </Directory>
+    </StandardDirectory>
+    <StandardDirectory Id="CommonAppDataFolder"><Directory Id="DATAROOT" Name="LaserficheReports" /></StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder"><Directory Id="STARTMENUFOLDER" Name="Laserfiche Reports" /></StandardDirectory>
+    <util:QueryWindowsWellKnownSIDs />
+    <Component Id="ReportsServiceComponent" Directory="INSTALLFOLDER" Guid="{2CAEC571-BFE1-49F5-9B99-9D1B01D2D25F}" Bitness="always64">
+      <File Id="ReportsServiceExe" Source="$(var.PayloadRoot)\LaserficheReports.Service.exe" KeyPath="yes" />
+      <ServiceInstall Id="ReportsServiceInstall" Name="LaserficheReports" DisplayName="Laserfiche Reports"
+          Description="Runs only the local Reports web app and planner. Does not manage Laserfiche or Ollama."
+          Type="ownProcess" Start="auto" ErrorControl="normal" Account="NT AUTHORITY\LocalService" />
+      <ServiceControl Id="ReportsServiceControl" Name="LaserficheReports" Start="install" Stop="both" Remove="uninstall" Wait="yes" />
+      <util:ServiceConfig ServiceName="LaserficheReports" FirstFailureActionType="restart" SecondFailureActionType="restart"
+          ThirdFailureActionType="restart" RestartServiceDelayInSeconds="30" ResetPeriodInDays="1" />
+    </Component>
+    <Component Id="ReportsDataDirectory" Directory="DATAROOT" Guid="{935AF0E3-BD52-4F91-9B08-37842D417A14}" Permanent="yes" Bitness="always64">
+      <CreateFolder><util:PermissionEx User="[WIX_ACCOUNT_LOCALSERVICE]" GenericAll="yes" /></CreateFolder>
+    </Component>
+    <Component Id="ReportsShortcut" Directory="STARTMENUFOLDER" Guid="{5F63BE33-A995-4CAC-B780-E170B919DB49}" Bitness="always64">
+      <Shortcut Id="ReportsOpenShortcut" Name="Laserfiche Reports" Target="[System64Folder]WindowsPowerShell\v1.0\powershell.exe"
+          Arguments="-NoProfile -ExecutionPolicy Bypass -File &quot;[INSTALLFOLDER]Open-Reports.ps1&quot;" WorkingDirectory="INSTALLFOLDER" />
+      <RegistryValue Root="HKLM" Key="Software\ISB\LaserficheReports" Name="ShortcutInstalled" Type="integer" Value="1" KeyPath="yes" />
+      <RemoveFolder Id="RemoveReportsMenu" On="uninstall" />
+    </Component>
+    <Feature Id="ReportsCore" Title="Laserfiche Reports" Level="1" AllowAbsent="no">
+      <ComponentGroupRef Id="ReportsPayload" />
+      <ComponentRef Id="ReportsServiceComponent" /><ComponentRef Id="ReportsDataDirectory" /><ComponentRef Id="ReportsShortcut" />
+    </Feature>
+    <Binary Id="ReportsActions" SourceFile="$(var.SafetyActionsPath)" />
+    <CustomAction Id="ValidateReportsIsolation" BinaryRef="ReportsActions" DllEntry="ValidateIsolation" Execute="immediate" Return="check" />
+    <CustomAction Id="SetWriteReportsData" Property="WriteReportsConfiguration" Value="DataRoot=[DATAROOT];Profile=[REPORTS_PROFILE];Transaction=[REPORTS_TRANSACTION]" HideTarget="yes" />
+    <CustomAction Id="SetRollbackReportsData" Property="RollbackReportsConfiguration" Value="Transaction=[REPORTS_TRANSACTION]" />
+    <CustomAction Id="SetCommitReportsData" Property="CommitReportsConfiguration" Value="Transaction=[REPORTS_TRANSACTION]" />
+    <CustomAction Id="WriteReportsConfiguration" BinaryRef="ReportsActions" DllEntry="WriteConfiguration" Execute="deferred" Impersonate="no" Return="check" HideTarget="yes" />
+    <CustomAction Id="RollbackReportsConfiguration" BinaryRef="ReportsActions" DllEntry="RollbackConfiguration" Execute="rollback" Impersonate="no" Return="check" />
+    <CustomAction Id="CommitReportsConfiguration" BinaryRef="ReportsActions" DllEntry="CommitConfiguration" Execute="commit" Impersonate="no" Return="check" />
+    <InstallExecuteSequence>
+      <Custom Action="ValidateReportsIsolation" After="CostFinalize" />
+      <Custom Action="SetWriteReportsData" Before="WriteReportsConfiguration" Condition="NOT REMOVE~=&quot;ALL&quot;" />
+      <Custom Action="SetRollbackReportsData" Before="RollbackReportsConfiguration" Condition="NOT REMOVE~=&quot;ALL&quot;" />
+      <Custom Action="SetCommitReportsData" Before="CommitReportsConfiguration" Condition="NOT REMOVE~=&quot;ALL&quot;" />
+      <Custom Action="RollbackReportsConfiguration" After="InstallFiles" Condition="NOT REMOVE~=&quot;ALL&quot;" />
+      <Custom Action="WriteReportsConfiguration" After="RollbackReportsConfiguration" Condition="NOT REMOVE~=&quot;ALL&quot;" />
+      <Custom Action="CommitReportsConfiguration" After="WriteReportsConfiguration" Condition="NOT REMOVE~=&quot;ALL&quot;" />
+    </InstallExecuteSequence>
+  </Package>
+</Wix>

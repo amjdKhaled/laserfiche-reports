@@ -38,6 +38,10 @@ public interface ILaserficheAuthService
     /// <param name="repository">The repository whose cached token should be discarded.</param>
     Task InvalidateTokenAsync(RepositoryDescriptor repository);
 
+    /// <summary>Invalidates only the token actually rejected by the API, preserving a newer token.</summary>
+    Task InvalidateTokenAsync(RepositoryDescriptor repository, string rejectedToken) =>
+        InvalidateTokenAsync(repository);
+
     /// <summary>
     /// Removes ALL cached tokens belonging to the current HTTP session, across every
     /// repository. Call this on Sign Out / Change Account so a token acquired by the
