@@ -68,6 +68,11 @@ builder.Services.AddSession(options =>
 builder.Services.AddLaserficheInfrastructure(builder.Configuration);
 builder.Services.AddScoped<ReportsChatService>();
 builder.Services.AddScoped<LiveRepositoryReportService>();
+builder.Services.AddScoped<AuditTrailSource>();
+builder.Services.AddScoped<RecycleBinSource>();
+builder.Services.AddSingleton<RecycleBinConfiguration>();
+builder.Services.AddScoped<AuditSessionCredentials>();
+builder.Services.AddSingleton<AuditTrailConfiguration>();
 builder.Services.AddScoped<QuestionRouter>();
 builder.Services.AddTransient<GraphCorrelationHandler>();
 builder.Services.AddHttpClient("ReportsGraph", client =>
@@ -78,7 +83,7 @@ builder.Services.AddHttpClient("ReportsGraph", client =>
         uri.Host is not ("127.0.0.1" or "localhost" or "::1"))
         throw new InvalidOperationException("ReportsGraph:BaseUrl must be local HTTP.");
     client.BaseAddress = new Uri(uri.AbsoluteUri.TrimEnd('/') + "/");
-    var graphTimeout = builder.Configuration.GetValue<int?>("ReportsGraph:TimeoutSeconds") ?? 0;
+    var graphTimeout = builder.Configuration.GetValue<int?>("ReportsGraph:TimeoutSeconds") ?? 3600;
     client.Timeout = graphTimeout <= 0 ? Timeout.InfiniteTimeSpan : TimeSpan.FromSeconds(graphTimeout);
 }).AddHttpMessageHandler<GraphCorrelationHandler>().ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
 {
@@ -97,7 +102,7 @@ app.Use(async (context, next) =>
     var original = context.RequestAborted;
     using var budget = CancellationTokenSource.CreateLinkedTokenSource(original);
     var path = context.Request.Path;
-    var requestTimeout = path.StartsWithSegments("/api/reports/chat") ? builder.Configuration.GetValue<int?>("Reports:RequestTimeoutSeconds") ?? 0 :
+    var requestTimeout = ReportTimeouts.IsReportRequest(path) ? builder.Configuration.GetValue<int?>("Reports:RequestTimeoutSeconds") ?? 3600 :
         path.StartsWithSegments("/api/ingestion") ? 1800 : path.Value?.EndsWith("/status") == true ? 10 : 60;
     if (requestTimeout > 0) budget.CancelAfter(TimeSpan.FromSeconds(requestTimeout));
     context.RequestAborted = budget.Token;
@@ -158,6 +163,8 @@ app.Use(async (context, next) =>
     var cookie = context.Request.Cookies[".LaserficheReports.Session"] ?? "new-session";
     var gate = sessionGates[(StringComparer.Ordinal.GetHashCode(cookie) & int.MaxValue) % sessionGates.Length];
     var acquired = false;
+    var mutatesSession = context.Request.Path.StartsWithSegments("/api/session") ||
+        context.Request.Path.Equals(new PathString("/api/audit-trail/credentials"));
     if (!await gate.WaitAsync(TimeSpan.FromSeconds(5), context.RequestAborted))
     {
         context.Response.StatusCode = 409;
@@ -182,7 +189,7 @@ app.Use(async (context, next) =>
             await context.Response.WriteAsJsonAsync(new { error = "session_scope_changed", message = "تغيّر المستودع في جلسة أخرى. أعد تسجيل الدخول إلى المستودع المطلوب." });
             return;
         }
-        if (!context.Request.Path.StartsWithSegments("/api/session"))
+        if (!mutatesSession)
         {
             gate.Release();
             acquired = false;
@@ -199,6 +206,16 @@ app.Use(async (context, next) =>
         context.Response.StatusCode = error.StatusCode is 401 or 403 or 404 ? error.StatusCode : 502;
         await context.Response.WriteAsJsonAsync(new { error = RepositoryReadError.Message(error), upstreamStatus = error.StatusCode, requestId = context.TraceIdentifier });
     }
+    catch (RecycleBinException error) when (!context.Response.HasStarted)
+    {
+        context.Response.StatusCode = 503;
+        await context.Response.WriteAsJsonAsync(new { error = "recycle_bin_unavailable", message = error.Message });
+    }
+    catch (AuditTrailException error) when (!context.Response.HasStarted)
+    {
+        context.Response.StatusCode = 503;
+        await context.Response.WriteAsJsonAsync(new { error = "audit_trail_unavailable", message = error.Message });
+    }
     catch (ArgumentException error) when (!context.Response.HasStarted)
     {
         context.Response.StatusCode = 400;
@@ -213,6 +230,8 @@ app.Use(async (context, next) =>
         }
     }
 });
+app.MapAuditTrailSetup();
+app.MapRecycleBin();
 app.UseDefaultFiles();
 app.UseStaticFiles(new StaticFileOptions
 {
@@ -277,6 +296,26 @@ app.MapGet("/api/reports/planning-catalog", async (LiveRepositoryReportService r
         catalog = await reports.CatalogAsync(cancellationToken) });
 });
 
+app.MapPost("/api/reports/audit", async (QueryPlan plan, LiveRepositoryReportService reports,
+    IRepositoryContext repositories, ISessionCredentialStore sessions, CancellationToken ct) =>
+{
+    if (await sessions.TryGetAsync(ct) is null) return Results.Unauthorized();
+    if (plan.Operation != "audit") return Results.BadRequest(new { error = "استخدم عملية audit فقط." });
+    plan.ValidateIntent();
+    var repository = await repositories.GetActiveRepositoryAsync(ct);
+    return Results.Ok(await reports.CreateAsync(repository.RepositoryId, plan, plan.EntryIds ?? [], ct));
+});
+
+app.MapPost("/api/reports/availability", async (AvailabilityRequest request, LiveRepositoryReportService reports,
+    IRepositoryContext repositories, ISessionCredentialStore sessions, CancellationToken ct) =>
+{
+    if (await sessions.TryGetAsync(ct) is null) return Results.Unauthorized();
+    var repository = await repositories.GetActiveRepositoryAsync(ct);
+    var ids = request.EntryIds ?? [];
+    return Results.Ok(await reports.CreateAsync(repository.RepositoryId,
+        new QueryPlan("availability", EntryIds: ids, ResultType: "details"), ids, ct));
+});
+
 app.MapGet("/api/reports/documents", async (int? page, string? search, ReportsChatService chat,
     ISessionCredentialStore sessions, CancellationToken cancellationToken) =>
 {
@@ -322,6 +361,10 @@ app.MapPost("/api/reports/chat", async (ChatQuestion request, ReportsChatService
     catch (UnauthorizedAccessException)
     {
         return Results.Json(new { error = "session_expired", message = "تعذر تجديد جلسة Laserfiche. سجّل الدخول مرة أخرى." }, statusCode: 401);
+    }
+    catch (AuditTrailException exception)
+    {
+        return Results.Json(new { error = "audit_trail_unavailable", message = exception.Message }, statusCode: 503);
     }
     catch (GraphServiceException exception)
     {

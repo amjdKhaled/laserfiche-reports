@@ -1,19 +1,32 @@
 name: Verify Reports
 on:
   push:
-    branches: [feature/reports-chat-langgraph, fix/typed-semantic-repository-plans]
+    branches: [main, feature/reports-chat-langgraph, fix/typed-semantic-repository-plans]
   pull_request:
 jobs:
   dotnet:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Exercise the same detached checkout used by pull_request builds.
+          ref: ${{ github.sha }}
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      - name: Verify SDK reader packaging on a fresh checkout
+        shell: pwsh
+        run: |
+          dotnet build src/LaserficheReports.Web/LaserficheReports.Web.csproj --configuration Release
+          if ($LASTEXITCODE -ne 0) { throw 'Fresh Web/SDK reader build failed.' }
+          $reader = 'src/LaserficheReports.Web/bin/Release/net8.0/recycle-bin'
+          foreach ($file in @('LaserficheReports.RecycleBin.exe', 'LaserficheReports.RecycleBin.exe.config', 'Laserfiche.RepositoryAccess.dll', 'Laserfiche-SDK-EULA.md')) {
+            $path = Join-Path $reader $file
+            if (!(Test-Path $path) -or (Get-Item $path).Length -eq 0) { throw "Reader payload missing: $file" }
+          }
       - run: dotnet test LaserficheReports.sln --configuration Release
       - shell: pwsh
         run: |
@@ -23,6 +36,9 @@ jobs:
             [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$parseErrors) | Out-Null
             if ($parseErrors.Count -gt 0) { throw ($parseErrors | Out-String) }
           }
+      - name: Test Git identity for attached and detached checkouts
+        shell: pwsh
+        run: ./build/Test-SourceInfo.ps1
       - shell: pwsh
         run: ./deployment/windows/build-package.ps1
       - name: Build EXE and MSI from the verified source

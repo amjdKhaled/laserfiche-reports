@@ -230,7 +230,7 @@ internal sealed class LaserficheAuthService : ILaserficheAuthService
                     var renewed = await RequestRefreshTokenAsync(
                         _adapter.BuildTokenUrlV2(repository.RepositoryId), refreshToken, cancellationToken)
                         .ConfigureAwait(false);
-                    CacheTokenResponse(repository, cacheKey, renewed);
+                    CacheTokenResponse(repository, cacheKey, renewed, preserveRefreshToken: true);
                     return renewed.AccessToken;
                 }
                 // After the Repository API closes an idle Laserfiche session, renewing it fails with
@@ -551,14 +551,18 @@ internal sealed class LaserficheAuthService : ILaserficheAuthService
     private void CacheTokenResponse(
         RepositoryDescriptor repository,
         string cacheKey,
-        TokenResponse response)
+        TokenResponse response,
+        bool preserveRefreshToken = false)
     {
         var expirySeconds = Math.Max(1, Math.Min(response.ExpiresIn, Math.Max(response.ExpiresIn - EarlyExpiryBufferSeconds, 30)));
         _cache.Remove("LFRefreshRejected:" + cacheKey);
         _cache.Set(cacheKey, response.AccessToken, TimeSpan.FromSeconds(expirySeconds));
         if (!string.IsNullOrWhiteSpace(response.RefreshToken))
             _cache.Set(RefreshKeyFor(repository), response.RefreshToken, TimeSpan.FromHours(8));
-        else
+        // A successful refresh may return only an access token. Keep the existing
+        // refresh token (and its original expiry) unless the server rotates it.
+        // A new password login must still discard the previous identity's token.
+        else if (!preserveRefreshToken)
             _cache.Remove(RefreshKeyFor(repository));
     }
 

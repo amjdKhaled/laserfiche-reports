@@ -111,3 +111,28 @@ body,input,button,textarea,select{font-family:var(--isb-font)}
 @media(max-width:760px){.shell .sidebar{width:100%;padding:12px 16px;display:flex;flex-direction:row;align-items:center;justify-content:space-between;gap:12px}.shell .brand{margin:0}.shell .brand-logo{width:42px;height:37px}.shell .brand strong{font-size:13px}.shell .brand small{display:none}.shell .new-chat{width:auto;font-size:11px;padding:10px}.shell .topbar{min-height:0;padding:16px}.shell .topbar h1{font-size:19px}.shell .top-actions{gap:6px}.shell .tabs button{font-size:11px;padding:8px 10px}.shell .logout{font-size:11px;padding:8px}.shell .repository-badge{font-size:11px}.shell .messages{padding:20px 14px}.shell .message.user{max-width:92%}.shell .message.assistant .bubble{padding:16px}.shell .composer{width:calc(100% - 28px);min-height:64px}.shell .welcome{margin:4vh auto}.shell .welcome h2{font-size:23px}.shell .suggestions{grid-template-columns:1fr;margin-top:20px;gap:9px}.shell .suggestions button{padding:12px 16px}.shell #docs-view{padding:17px}}
 @media(prefers-reduced-motion:reduce){.shell *{transition:none!important}}
 @media print{.shell{background:white}.shell .message.assistant .bubble{box-shadow:none;border:0}.shell .report-table th{background:var(--isb-field)}.shell .report-table tbody tr:hover{background:transparent}}
+/* Consistent header proportions, readable pattern, and aligned controls. */
+.shell .topbar{height:auto;min-height:132px;padding:24px 32px;gap:20px;flex-wrap:wrap;background-image:linear-gradient(rgba(11,57,84,.52),rgba(11,57,84,.52)),url('/brand/assets/header-pattern-tile.svg');background-size:auto,80px 80px}
+.shell .topbar>div:first-child{flex:1 1 320px;min-width:0}
+.shell .topbar h1{font-size:clamp(23px,2.2vw,30px);font-weight:600;line-height:1.6;letter-spacing:0}
+.shell .topbar p{font-size:12px;line-height:1.9;max-width:570px;margin:4px 0 0}
+.shell .top-actions{display:flex;align-items:center;flex-wrap:wrap;gap:10px;justify-content:flex-start}
+.shell .top-actions>button,.shell .tabs{min-height:44px;margin:0}
+.shell .tabs{align-items:center}.shell .tabs button{white-space:nowrap;min-height:34px}
+.shell .repository-badge{display:flex;align-items:center;gap:7px;max-width:270px}
+.shell .repository-badge strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.shell .sidebar{background-image:linear-gradient(rgba(11,57,84,.8),rgba(11,57,84,.8)),url('/brand/assets/header-pattern-tile.svg');background-size:auto,80px 80px}
+.shell .brand strong{font-size:16px;line-height:1.8}.shell .brand small{margin-top:3px}
+.shell .report-actions{display:flex;align-items:center;flex-wrap:wrap;row-gap:10px}
+.shell .report-actions button,.shell .report-format{min-height:42px;font-size:12px;line-height:1.6}
+.shell .message.assistant .bubble{line-height:1.95}
+.audit-setup{padding:20px 24px;border:1px solid var(--isb-border);border-radius:13px;background:var(--isb-surface);margin:0 0 28px;color:var(--isb-ink)}
+.audit-setup summary{cursor:pointer;font-size:16px;font-weight:600;line-height:1.8}.audit-setup summary span{font-size:11px;font-weight:400;color:var(--isb-slate);margin-inline-start:12px}
+.audit-setup p,.audit-setup small{font-size:12px;color:var(--isb-slate);line-height:1.9}.audit-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin:16px 0}
+.audit-fields label{display:flex;flex-direction:column;gap:7px;font-size:12px;min-width:0}.audit-toggle{display:flex;gap:8px;align-items:center;font-size:13px}
+.audit-fields input,.audit-fields textarea{width:100%;min-width:0;box-sizing:border-box;padding:11px 12px;border:1px solid var(--isb-border);background:var(--isb-field);border-radius:8px;color:var(--isb-ink);font:inherit;line-height:1.7}.audit-fields textarea{resize:vertical}
+.audit-fields input:focus,.audit-fields textarea:focus{outline:2px solid var(--isb-blue);outline-offset:1px}
+.audit-identity{border-top:1px solid var(--isb-border-soft);padding-top:18px;margin-top:18px}.audit-identity strong{font-size:13px}.audit-actions{display:flex;gap:10px;flex-wrap:wrap}
+.audit-actions button{padding:11px 16px;border-radius:8px;border:1px solid var(--isb-border);color:var(--isb-blue);background:white;font:inherit;font-size:12px;cursor:pointer}.audit-actions button:first-child{background:var(--isb-blue);border-color:var(--isb-blue);color:#fff}.audit-setup .feedback{margin:14px 0 0;min-height:24px;overflow-wrap:anywhere}
+@media(min-width:761px) and (max-width:1200px){.shell .topbar{padding:20px 24px}.shell .top-actions{width:100%}.shell .topbar>div:first-child{flex-basis:100%}}
+@media(max-width:760px){.shell .topbar{padding:16px 18px;gap:12px;min-height:0}.shell .topbar h1{font-size:23px}.shell .topbar p{font-size:11px}.shell .top-actions{gap:7px}.shell .top-actions>button,.shell .tabs{min-height:40px}.shell .brand strong{font-size:13px}.audit-setup{padding:16px}.audit-fields{grid-template-columns:1fr}.shell .repository-badge{max-width:210px}}

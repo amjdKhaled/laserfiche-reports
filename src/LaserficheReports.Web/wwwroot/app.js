@@ -15,6 +15,8 @@ let scanKey = '';
 let documentsPage = 1;
 let hasMoreDocuments = false;
 let historySaved = true;
+const activeRequests = new Set();
+let signingOut = false;
 function save() {
   try { localStorage.setItem(storeKey, JSON.stringify(chats.slice(0, 30))); historySaved = true; }
   catch { historySaved = false; }
@@ -30,8 +32,18 @@ async function api(url, options) {
   const headers = new Headers(options?.headers || {});
   if (sessionRepository) headers.set('X-Reports-Repository', sessionRepository);
   if (sessionGeneration) headers.set('X-Reports-Session', sessionGeneration);
-  const response = await fetch(url, { ...options, headers });
-  const body = await response.json().catch(() => ({}));
+  const controller = new AbortController();
+  const timeout = AbortSignal.timeout(3600000);
+  activeRequests.add(controller);
+  let response, body;
+  try {
+    response = await fetch(url, { ...options, headers, signal: options?.signal
+      ? AbortSignal.any([controller.signal, options.signal, timeout]) : AbortSignal.any([controller.signal, timeout]) });
+    body = await response.json().catch(() => ({}));
+  } catch (error) {
+    if (timeout.aborted) throw new Error('انتهت مهلة الطلب المحددة بساعة. أعد المحاولة أو ضيّق نطاق التقرير.');
+    throw error;
+  } finally { activeRequests.delete(controller); }
   if (epoch !== sessionEpoch) throw new Error('تغيّرت جلسة المستودع؛ تم تجاهل نتيجة الطلب السابق.');
   if ((response.status === 401 || response.status === 409 && body.error === 'session_scope_changed') && url !== '/api/session/login') $('login-layer').classList.remove('hidden');
   if (!response.ok) {
@@ -47,6 +59,7 @@ async function api(url, options) {
 function openSession(username, repository, server, generation) {
   sessionGeneration = generation || '';
   sessionEpoch++;
+  document.dispatchEvent(new CustomEvent('reports-session-cleared'));
   sessionRepository = repository || '';
   sessionServer = server || '';
   $('active-repository').textContent = sessionRepository || 'غير محدد';
@@ -65,6 +78,7 @@ function openSession(username, repository, server, generation) {
   catch { scan = null; }
   active = null;
   $('login-layer').classList.add('hidden');
+  document.dispatchEvent(new CustomEvent('reports-session-opened'));
   renderHistory();
   renderMessages();
   renderScan();
@@ -112,17 +126,31 @@ $('login-form').onsubmit = async event => {
   finally { $('login-submit').disabled = false; }
 };
 $('logout').onclick = async () => {
-  if (scanning || pendingOperations) return;
-  try { await api('/api/session/logout', { method: 'POST' }); }
-  finally {
+  if (signingOut) return;
+  signingOut = true;
+  $('logout').disabled = true;
+  pauseScan = true;
+  for (const controller of activeRequests) controller.abort();
+  try {
+    await api('/api/session/logout', { method: 'POST' });
     sessionEpoch++;
-    chats = []; active = null;
-    pauseScan = true;
-    scan = null;
-    $('login-layer').classList.remove('hidden');
+    document.dispatchEvent(new CustomEvent('reports-session-cleared'));
+    sessionRepository = ''; sessionGeneration = ''; sessionServer = '';
+    chats = []; active = null; scan = null;
+    $('password').value = '';
+    if ($('audit-password')) $('audit-password').value = '';
+    if (reportResultsWindow && !reportResultsWindow.closed) reportResultsWindow.close();
     renderHistory(); renderMessages();
+    window.close();
+    window.location.replace('/signed-out.html');
+  } catch (error) {
+    $('login-error').textContent = `تعذر تأكيد تسجيل الخروج: ${error.message}. حاول مرة أخرى.`;
+    $('login-layer').classList.remove('hidden');
+    signingOut = false;
+    $('logout').disabled = false;
   }
 };
+
 function renderHistory() {
   $('history').replaceChildren();
   chats.forEach(chat => {
@@ -572,7 +600,7 @@ function saveScan() {
 function renderScan() {
   $('scan-start').disabled = scanning;
   $('scan-reset').disabled = scanning;
-  $('logout').disabled = scanning;
+  $('logout').disabled = signingOut;
   $('scan-start').textContent = scan?.folders?.length || scan?.documents?.length || scan?.failed?.length
     ? 'استئناف الفهرسة' : 'بدء الفهرسة الشاملة';
   $('scan-pause').disabled = !scanning;
@@ -609,21 +637,25 @@ $('scan-start').onclick = async () => {
   }
   pauseScan = false;
   scanning = true;
+  const epoch = sessionEpoch;
+  const currentScan = scan;
   scan.notice = '';
   renderScan();
   const seenFolders = new Set(scan.seenFolders);
   const seenDocuments = new Set(scan.seenDocuments);
   try {
-    while (!pauseScan && (scan.folders.length || scan.documents.length)) {
+    while (epoch === sessionEpoch && scan === currentScan && !pauseScan && (scan.folders.length || scan.documents.length)) {
       if (scan.documents.length) {
         const id = scan.documents[0];
         scan.current = `فهرسة الوثيقة ${id}`; renderScan();
         try {
           const result = await api(`/api/ingestion/laserfiche/${id}`, { method: 'POST' });
+          if (epoch !== sessionEpoch || scan !== currentScan) break;
           scan.chunks += result.chunkCount || 0;
           scan.documentsDone++;
           if (result.wasSkipped) scan.skipped = (scan.skipped || 0) + 1;
         } catch (error) {
+          if (signingOut || epoch !== sessionEpoch || scan !== currentScan) break;
           if (error.status === 401 || error.status === 409) { pauseScan = true; scan.notice = error.message; break; }
           if (error.status === 503) {
             pauseScan = true;
@@ -643,6 +675,7 @@ $('scan-start').onclick = async () => {
         scan.current = `فحص المجلد ${id || 'الجذر'}`; renderScan();
         try {
           const result = await api(`/api/reports/repository/folders/${id}/children`);
+          if (epoch !== sessionEpoch || scan !== currentScan) break;
           if (scan.repositoryId && scan.repositoryId.toLowerCase() !== result.repositoryId.toLowerCase()) {
             pauseScan = true;
             scan.notice = 'تغيّر المستودع؛ اضغط فحص جديد لبدء فهرسة المستودع الحالي.';
@@ -658,6 +691,7 @@ $('scan-start').onclick = async () => {
           }
           scan.foldersDone++;
         } catch (error) {
+          if (signingOut || epoch !== sessionEpoch || scan !== currentScan) break;
           if (error.status === 401 || error.status === 409) { pauseScan = true; scan.notice = error.message; break; }
           if (error.status >= 500) {
             pauseScan = true;
@@ -674,9 +708,11 @@ $('scan-start').onclick = async () => {
     }
   } finally {
     scanning = false;
-    scan.current = '';
-    saveScan(); renderScan();
-    loadDocuments();
+    if (epoch === sessionEpoch && scan === currentScan) {
+      scan.current = '';
+      saveScan(); renderScan();
+      if (!signingOut) loadDocuments();
+    }
   }
 };
 const launch = new URLSearchParams(location.search);

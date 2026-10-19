@@ -29,9 +29,9 @@ def main():
     parser.add_argument('--bind', default='127.0.0.1')
     parser.add_argument('--graph-port', type=int, default=5050)
     parser.add_argument('--no-web', action='store_true', help='IIS hosts the web app; supervise only the graph and Ollama')
-    # A planning normally takes under 30 seconds on the GPU; a stuck model call must end with an error, not hang.
-    parser.add_argument('--model-timeout-seconds', type=int, default=180)
-    parser.add_argument('--planner-timeout-seconds', type=int, default=180)
+    # One-hour budget per report; a stuck model call still ends with an error instead of hanging forever.
+    parser.add_argument('--model-timeout-seconds', type=int, default=3600)
+    parser.add_argument('--planner-timeout-seconds', type=int, default=3600)
     args = parser.parse_args()
     root = Path(args.root).resolve()
     logs = root / 'logs'
@@ -49,7 +49,8 @@ def main():
     env = dict(os.environ)
     env.update(ASPNETCORE_URLS=f'http://{args.bind}:{args.port}', PYTHONUNBUFFERED='1', PYTHONUTF8='1',
                REPORTS_CHAT_MODEL=args.model, LocalAI__ChatModel=args.model,
-               ReportsGraph__BaseUrl=f'http://127.0.0.1:{args.graph_port}')
+               ReportsGraph__BaseUrl=f'http://127.0.0.1:{args.graph_port}',
+               Reports__RequestTimeoutSeconds="3600", ReportsGraph__TimeoutSeconds="3600")
     commands = {}
     # Reuse a user's existing Ollama; only processes created here are stopped.
     if not reachable('http://127.0.0.1:11434/api/tags'):

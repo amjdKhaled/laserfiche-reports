@@ -168,6 +168,9 @@ public static class ServiceCollectionExtensions
         })
         .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
         {
+            // Factory handlers are pooled across browser sessions. Authentication
+            // is carried by each request's Bearer token, never a shared cookie jar.
+            UseCookies = false,
             AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate
         })
         .AddHttpMessageHandler<LaserficheRequestLoggingHandler>();
@@ -181,6 +184,7 @@ public static class ServiceCollectionExtensions
         })
         .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
         {
+            UseCookies = false,
             AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate
         })
         .AddHttpMessageHandler<BearerTokenHandler>()

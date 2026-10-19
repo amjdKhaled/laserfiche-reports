@@ -4,6 +4,19 @@
            UpgradeCode="{4C4E0935-D8F9-4F60-B7D6-9BF7A39AFB97}" Scope="perMachine" InstallerVersion="500" Compressed="yes">
     <MajorUpgrade Schedule="afterInstallInitialize" DowngradeErrorMessage="A newer Reports version is installed." />
     <MediaTemplate EmbedCab="yes" />
+    <UIRef Id="ReportsSetupUI" />
+    <Property Id="ARPNOMODIFY" Value="1" />
+    <Property Id="REPORTS_CONFIGURE" Secure="yes" />
+    <Property Id="REPORTS_SERVER" Secure="yes" />
+    <Property Id="REPORTS_API_PATH" Secure="yes" />
+    <Property Id="REPORTS_API_VERSION" Secure="yes" />
+    <Property Id="REPORTS_REPOSITORY" Secure="yes" />
+    <Property Id="REPORTS_WEBCLIENT" Secure="yes" />
+    <Property Id="REPORTS_PORT" Secure="yes" />
+    <Property Id="REPORTS_GRAPH_PORT" Secure="yes" />
+    <Property Id="REPORTS_MODEL" Secure="yes" />
+    <Property Id="REPORTS_OLLAMA" Secure="yes" />
+
     <Launch Condition="VersionNT64" Message="Reports requires Windows x64." />
     <Property Id="NETFRAMEWORK48">
       <RegistrySearch Id="Net48Search" Root="HKLM" Key="SOFTWARE\Microsoft\NET Framework Setup\NDP\v4\Full" Name="Release" Type="raw" />
@@ -38,6 +51,8 @@
     <Component Id="ReportsShortcut" Directory="STARTMENUFOLDER" Guid="{5F63BE33-A995-4CAC-B780-E170B919DB49}" Bitness="always64">
       <Shortcut Id="ReportsOpenShortcut" Name="Laserfiche Reports" Target="[System64Folder]WindowsPowerShell\v1.0\powershell.exe"
           Arguments="-NoProfile -ExecutionPolicy Bypass -File &quot;[INSTALLFOLDER]Open-Reports.ps1&quot;" WorkingDirectory="INSTALLFOLDER" />
+      <Shortcut Id="ReportsUninstallShortcut" Name="Uninstall Laserfiche Reports" Target="[System64Folder]msiexec.exe"
+          Arguments="/x [ProductCode]" WorkingDirectory="INSTALLFOLDER" />
       <RegistryValue Root="HKLM" Key="Software\ISB\LaserficheReports" Name="ShortcutInstalled" Type="integer" Value="1" KeyPath="yes" />
       <RemoveFolder Id="RemoveReportsMenu" On="uninstall" />
     </Component>
@@ -46,6 +61,9 @@
       <ComponentRef Id="ReportsServiceComponent" /><ComponentRef Id="ReportsDataDirectory" /><ComponentRef Id="ReportsShortcut" />
     </Feature>
     <Binary Id="ReportsActions" SourceFile="$(var.SafetyActionsPath)" />
+    <CustomAction Id="LoadReportsMsiSettings" BinaryRef="ReportsActions" DllEntry="LoadMsiSettings" Execute="immediate" Return="check" />
+    <CustomAction Id="PrepareReportsMsiSettings" BinaryRef="ReportsActions" DllEntry="PrepareMsiSettings" Execute="immediate" Return="check" />
+    <InstallUISequence><Custom Action="LoadReportsMsiSettings" After="CostFinalize" Condition="UILevel = 5 AND NOT REMOVE~=&quot;ALL&quot;" /></InstallUISequence>
     <CustomAction Id="ValidateReportsIsolation" BinaryRef="ReportsActions" DllEntry="ValidateIsolation" Execute="immediate" Return="check" />
     <CustomAction Id="SetWriteReportsData" Property="WriteReportsConfiguration" Value="DataRoot=[DATAROOT];Profile=[REPORTS_PROFILE];Transaction=[REPORTS_TRANSACTION]" HideTarget="yes" />
     <CustomAction Id="SetRollbackReportsData" Property="RollbackReportsConfiguration" Value="Transaction=[REPORTS_TRANSACTION]" />

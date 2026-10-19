@@ -1,0 +1,41 @@
+diff --git a/tools/reports-graph/server.py b/tools/reports-graph/server.py
+index 05cb463..58b40c8 100644
+--- a/tools/reports-graph/server.py
++++ b/tools/reports-graph/server.py
+@@ -5,6 +5,7 @@ import argparse
+ import json
+ import os
+ import re
++import sys
+ import threading
+ import time
+ from datetime import date
+@@ -30,6 +31,10 @@ from search_reference import SEARCH_REFERENCE, SEMANTIC_FIELDS
+ from report_reasoning import (PROMPT_VERSION, Extraction, Draft, Review, COMPOSE_SYSTEM,
+                               REVIEW_SYSTEM, invoke_structured, compact_schema, validate_draft, apply_review, StrictModel, Quotation, Finding, REQUEST_ID)
+ 
++# Arabic log lines must not fail planning on Windows hosts whose console code page is not Arabic (e.g. cp1252).
++for _stream in (sys.stdout, sys.stderr):
++    if _stream is not None and hasattr(_stream, "reconfigure"):
++        _stream.reconfigure(encoding="utf-8", errors="replace")
+ 
+ class State(TypedDict, total=False):
+     question: str
+@@ -267,7 +272,7 @@ class CombinedDraft(StrictModel):
+     findings: list[Finding] = Field(max_length=8)
+ 
+ 
+-DEFAULT_CHAT_MODEL = os.environ.get("REPORTS_CHAT_MODEL", "gpt-oss:20b")
++DEFAULT_CHAT_MODEL = os.environ.get("REPORTS_CHAT_MODEL", "qwen3-vl:8b-instruct")
+ 
+ 
+ class RelativeDate(StrictModel):
+@@ -1597,7 +1602,7 @@ class Handler(BaseHTTPRequestHandler):
+ def main():
+     parser = argparse.ArgumentParser()
+     parser.add_argument("--planner-trace-path", help="Opt-in local JSONL planning inputs, schemas and model replies")
+-    parser.add_argument("--port", type=int, default=8766)
++    parser.add_argument("--port", type=int, default=5050)
+     parser.add_argument("--model", default=DEFAULT_CHAT_MODEL)
+     parser.add_argument("--ollama-url", default=os.environ.get("REPORTS_OLLAMA_URL", "http://127.0.0.1:11434"))
+     parser.add_argument("--review-content", action="store_true", help="Optional extra semantic review call for OCR answers")

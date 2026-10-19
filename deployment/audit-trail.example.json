@@ -1,0 +1,28 @@
+{
+  "AuditTrail": {
+    "Enabled": true,
+    "BaseUrl": "https://AUDIT-SERVER/AuditTrail",
+    "TimeoutSeconds": 3600,
+    "PollMilliseconds": 1000,
+    "MaxRows": 100000,
+    "MaxBytes": 33554432,
+    "Repositories": {
+      "REPOSITORY_ID": {
+        "DataSource": "REPOSITORY(SERVER)",
+        "ReportId": "SAVED_REPORT_ID",
+        "ExportDirectory": "C:\\ProgramData\\Laserfiche\\AuditAnalytics\\Export",
+        "ScopeDescription": "REPLACE: saved-report filters, date window and auditing coverage",
+        "Columns": {
+          "eventTime": "EXACT_RAW_TIME_HEADER",
+          "eventType": "EXACT_RAW_EVENT_HEADER",
+          "userName": "EXACT_RAW_USER_HEADER",
+          "entryId": "EXACT_RAW_ENTRY_ID_HEADER",
+          "entryName": "EXACT_RAW_ENTRY_NAME_HEADER",
+          "outcome": "EXACT_RAW_OUTCOME_HEADER"
+        },
+        "EventLabels": {},
+        "DateFormat": null
+      }
+    }
+  }
+}

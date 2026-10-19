@@ -1,5 +1,5 @@
-param([string]$Model = "", [int]$TimeoutSeconds = 0,
-      [int]$PlannerTimeoutSeconds = 0, [int]$PlannerOutputTokens = 1536,
+param([string]$Model = "", [int]$TimeoutSeconds = 3600,
+      [int]$PlannerTimeoutSeconds = 3600, [int]$PlannerOutputTokens = 1536,
       [string]$PlannerTracePath = "", [int]$Port = 5050)
 $ErrorActionPreference = "Stop"
 $python = Join-Path $PSScriptRoot ".venv\Scripts\python.exe"

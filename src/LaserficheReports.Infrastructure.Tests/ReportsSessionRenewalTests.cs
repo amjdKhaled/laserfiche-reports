@@ -3,6 +3,7 @@ using LaserficheReports.Application.DTOs;
 using LaserficheReports.Application.Interfaces;
 using LaserficheReports.Domain.Common;
 using LaserficheReports.Infrastructure.Adapters;
+using LaserficheReports.Infrastructure.Http;
 using LaserficheReports.Infrastructure.Options;
 using LaserficheReports.Infrastructure.Services;
 using Microsoft.AspNetCore.Http;
@@ -35,6 +36,70 @@ public sealed class ReportsSessionRenewalTests
     private static HttpResponseMessage Response(HttpStatusCode status, string body = "{}") => new(status) { Content = new StringContent(body) };
     private static HttpResponseMessage Token(string name, bool refresh = false) => Response(HttpStatusCode.OK,
         "{\"access_token\":\"" + name + "\",\"expires_in\":900" + (refresh ? ",\"refresh_token\":\"renewal\"" : "") + "}");
+
+    [Fact]
+    public async Task RepositoryReads_AfterRepeated401_RenewAndReturnLiveData()
+    {
+        var (service, handler) = Create(Token("old", true), Response(HttpStatusCode.Unauthorized),
+            Token("second"), Response(HttpStatusCode.OK, "{\"value\":[{\"id\":619}]}"),
+            Response(HttpStatusCode.Unauthorized), Token("third"),
+            Response(HttpStatusCode.OK, "{\"value\":[{\"id\":620}]}"));
+        await service.TryAuthenticateAsync(Repo, "same-user", "same-password");
+        using var bearer = new BearerTokenHandler(service, new Repository(),
+            NullLogger<BearerTokenHandler>.Instance) { InnerHandler = handler };
+        using var client = new HttpClient(bearer);
+
+        Assert.Contains("619", await client.GetStringAsync("http://lf.test/Entries"));
+        Assert.Contains("620", await client.GetStringAsync("http://lf.test/Entries"));
+        Assert.Equal(new[] { "old", "second", "second", "third" }, handler.ReadTokens);
+        Assert.Equal(3, handler.Bodies.Count);
+        Assert.All(handler.Bodies.Skip(1), body => Assert.Contains("grant_type=refresh_token", body));
+    }
+
+    [Fact]
+    public async Task RefreshWithoutRotation_KeepsRenewingWithoutOpeningAnotherPasswordSession()
+    {
+        var (service, handler) = Create(Token("old", true), Token("second"), Token("third"));
+        await service.TryAuthenticateAsync(Repo, "same-user", "same-password");
+        await service.InvalidateTokenAsync(Repo, "old");
+        Assert.Equal("second", await service.GetTokenAsync(Repo));
+        await service.InvalidateTokenAsync(Repo, "second");
+        var tokens = await Task.WhenAll(Enumerable.Range(0, 20).Select(_ => service.GetTokenAsync(Repo)));
+        Assert.All(tokens, token => Assert.Equal("third", token));
+        Assert.Equal(3, handler.Bodies.Count);
+        Assert.All(handler.Bodies.Skip(1), body =>
+        {
+            Assert.Contains("grant_type=refresh_token", body);
+            Assert.Contains("refresh_token=renewal", body);
+            Assert.DoesNotContain("password", body);
+        });
+    }
+
+    [Fact]
+    public async Task RotatedRefresh_IsUsedByTheNextRenewal()
+    {
+        var rotated = Response(HttpStatusCode.OK,
+            "{\"access_token\":\"second\",\"refresh_token\":\"rotated\",\"expires_in\":900}");
+        var (service, handler) = Create(Token("old", true), rotated, Token("third"));
+        await service.TryAuthenticateAsync(Repo, "same-user", "same-password");
+        await service.InvalidateTokenAsync(Repo, "old");
+        Assert.Equal("second", await service.GetTokenAsync(Repo));
+        await service.InvalidateTokenAsync(Repo, "second");
+        Assert.Equal("third", await service.GetTokenAsync(Repo));
+        Assert.Contains("refresh_token=rotated", handler.Bodies[2]);
+    }
+
+    [Fact]
+    public async Task NewPasswordLoginWithoutRefresh_DoesNotReusePreviousRefreshToken()
+    {
+        var (service, handler) = Create(Token("old", true), Token("new-login"), Token("recovered"));
+        await service.TryAuthenticateAsync(Repo, "same-user", "same-password");
+        await service.TryAuthenticateAsync(Repo, "same-user", "same-password");
+        await service.InvalidateTokenAsync(Repo, "new-login");
+        Assert.Equal("recovered", await service.GetTokenAsync(Repo));
+        Assert.Contains("grant_type=password", handler.Bodies[2]);
+        Assert.DoesNotContain("refresh_token", handler.Bodies[2]);
+    }
 
     [Fact]
     public async Task RejectedRefresh_RecoversSameUserOnceForConcurrentReads()
@@ -173,9 +238,20 @@ public sealed class ReportsSessionRenewalTests
     {
         private readonly Queue<HttpResponseMessage> queue = new(responses);
         public List<string> Bodies { get; } = [];
+        public List<string?> ReadTokens { get; } = [];
         public HttpClient CreateClient(string name) => new(this, false);
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
-        { Bodies.Add(await request.Content!.ReadAsStringAsync(ct)); return queue.Dequeue(); }
+        {
+            if (request.Content is not null) Bodies.Add(await request.Content.ReadAsStringAsync(ct));
+            else ReadTokens.Add(request.Headers.Authorization?.Parameter);
+            return queue.Dequeue();
+        }
+    }
+    private sealed class Repository : IRepositoryContext
+    {
+        public Task<RepositoryDescriptor> GetActiveRepositoryAsync(CancellationToken ct = default) => Task.FromResult(Repo);
+        public Task<IReadOnlyList<RepositoryDescriptor>> GetAllRepositoriesAsync(CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<RepositoryDescriptor>>([Repo]);
     }
     private sealed class Monitor(LaserficheOptions options) : IOptionsMonitor<LaserficheOptions>
     {

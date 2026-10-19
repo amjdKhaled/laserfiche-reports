@@ -11,6 +11,26 @@ $outside = Join-Path $env:TEMP ('Reports-Unrelated-' + [Guid]::NewGuid().ToStrin
 New-Item -ItemType Directory $outside | Out-Null
 $sentinel = Join-Path $outside 'Laserfiche-sentinel.txt'; 'unrelated document' | Set-Content $sentinel
 $sentinelHash = (Get-FileHash $sentinel).Hash
+# Independent fake Laserfiche libraries/data on a disposable runner. Hash them
+# after every rejected operation and install/repair/upgrade/uninstall action.
+$lfSentinels = @{}
+foreach ($parent in @($env:ProgramFiles,$env:ProgramData)) {
+    $fixture = Join-Path $parent ('Laserfiche\ReportsSafetyFixture-' + [Guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Force $fixture | Out-Null
+    foreach ($leaf in @('RepositoryAccess.dll','DocumentServices.dll','repository-data.dat')) {
+        $file = Join-Path $fixture $leaf; 'unrelated Laserfiche fixture' | Set-Content $file
+        $lfSentinels[$file] = (Get-FileHash $file).Hash
+    }
+}
+# Verify the shipped MSI includes both native configuration pages and AI selection.
+$wi = New-Object -ComObject WindowsInstaller.Installer
+$db = $wi.OpenDatabase($msi,0)
+foreach ($dialog in @('ReportsConnectionDlg','ReportsAiDlg')) {
+    $view = $db.OpenView("SELECT ``Dialog`` FROM ``Dialog`` WHERE ``Dialog``='$dialog'")
+    $view.Execute(); if (!$view.Fetch()) { throw "Missing MSI settings dialog: $dialog" }; $view.Close()
+}
+[void][Runtime.InteropServices.Marshal]::ReleaseComObject($db)
+[void][Runtime.InteropServices.Marshal]::ReleaseComObject($wi)
 $profile = @{ServerUrl='https://target-server.invalid';ApiBasePath='/LFRepositoryAPI';ApiVersion='v2';RepositoryId='TargetRepo';
     WebClientBaseUrl='https://target-server.invalid/laserfiche';Port=54323;GraphPort=54324;Model='qwen2.5:14b';OllamaUrl='http://127.0.0.1:11434'}
 function Encoded-Profile { [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($profile | ConvertTo-Json -Compress))) }
@@ -22,6 +42,9 @@ function Run-Msi([string]$Name,[string[]]$Arguments,[bool]$Success=$true,[string
     if (!$Success -and $process.ExitCode -in @(0,3010)) { throw "MSI accepted unsafe operation $Name" }
     if ($ExpectedReason -and (Get-Content $log -Raw) -notmatch [regex]::Escape($ExpectedReason)) { throw "MSI $Name failed for an unexpected reason; $log" }
     if ((Get-FileHash $sentinel).Hash -ne $sentinelHash) { throw 'Unrelated file changed.' }
+    foreach ($file in $lfSentinels.Keys) {
+        if (!(Test-Path $file) -or (Get-FileHash $file).Hash -ne $lfSentinels[$file]) { throw "Laserfiche fixture changed: $file" }
+    }
 }
 function Require-Web {
     $status=$null
@@ -51,7 +74,12 @@ $linked=Join-Path $root 'web\LaserficheReports.Web.exe'
 New-Item -ItemType HardLink -Path $linked -Target $sentinel | Out-Null
 try { Run-Msi 'reject-hardlink' @('/i',('"'+$msi+'"'),('REPORTS_PROFILE='+(Encoded-Profile))) $false 'Reports isolation rejected' }
 finally { [IO.File]::Delete($linked) }
-Run-Msi 'install' @('/i',('"'+$msi+'"'),('REPORTS_PROFILE='+(Encoded-Profile)))
+# The native MSI UI supplies these same secure properties; no EXE/profile required.
+$msiSettings = @('REPORTS_CONFIGURE=1','REPORTS_SERVER=https://target-server.invalid','REPORTS_API_PATH=/LFRepositoryAPI',
+    'REPORTS_API_VERSION=v2','REPORTS_REPOSITORY=TargetRepo','REPORTS_WEBCLIENT=https://target-server.invalid/laserfiche',
+    'REPORTS_PORT=54323','REPORTS_GRAPH_PORT=54324','REPORTS_MODEL=qwen2.5:14b','REPORTS_OLLAMA=http://127.0.0.1:11434')
+Run-Msi 'reject-invalid-settings' (@('/i',('"'+$msi+'"')) + $msiSettings + @('REPORTS_GRAPH_PORT=54323')) $false 'Web and planner ports must differ'
+Run-Msi 'install' (@('/i',('"'+$msi+'"')) + $msiSettings)
 Require-Web
 # A busy planner port must stop this host without terminating the unrelated owner.
 Stop-Service LaserficheReports
@@ -75,6 +103,18 @@ $runtime=Join-Path $data 'laserfiche.runtime.json'; '{"Laserfiche":{"TimeoutSeco
 $runtimeHash=(Get-FileHash $runtime).Hash
 $config=Join-Path $data 'laserfiche.config.json'; $configHash=(Get-FileHash $config).Hash
 $hosting=Join-Path $data 'hosting.config.json'; $hostingHash=(Get-FileHash $hosting).Hash
+# An explicit configuration change must override stale runtime connection values
+# while preserving unrelated runtime settings, then ordinary repair preserves bytes.
+'{"Laserfiche":{"ServerUrl":"https://old-host.invalid","RepositoryId":"OldRepo","DetectedApiVersion":"v1","TimeoutSeconds":300},"Unrelated":{"Keep":true}}' | Set-Content $runtime
+Run-Msi 'reconfigure' (@('/i',('"'+$msi+'"'),'REINSTALL=ALL','REINSTALLMODE=amus') + $msiSettings)
+$effectiveRuntime = Get-Content $runtime -Raw | ConvertFrom-Json
+if ($effectiveRuntime.Laserfiche.PSObject.Properties.Name -contains 'ServerUrl' -or
+    $effectiveRuntime.Laserfiche.PSObject.Properties.Name -contains 'RepositoryId' -or
+    $effectiveRuntime.Laserfiche.PSObject.Properties.Name -contains 'DetectedApiVersion' -or
+    $effectiveRuntime.Laserfiche.TimeoutSeconds -ne 300 -or !$effectiveRuntime.Unrelated.Keep) { throw 'Stale runtime override remained or unrelated settings were lost.' }
+$runtimeHash=(Get-FileHash $runtime).Hash
+$configHash=(Get-FileHash $config).Hash
+$hostingHash=(Get-FileHash $hosting).Hash
 Run-Msi 'repair' @('/fa',('"'+$msi+'"'))
 if ((Get-FileHash $config).Hash -ne $configHash -or (Get-FileHash $hosting).Hash -ne $hostingHash -or (Get-FileHash $runtime).Hash -ne $runtimeHash) { throw 'Repair changed saved settings.' }
 Require-Web
@@ -93,8 +133,8 @@ $stage=Get-ChildItem "$repo\.build-cache" -Directory -Filter 'reports-*' | Sort-
 if (!$stage) { throw 'The upgrade fixture requires staging from build/publish.ps1.' }
 $payload=Join-Path $stage.FullName 'payload'; $harvest=Join-Path $stage.FullName 'Payload.wxs'
 # Recompile the MSI so its Upgrade table contains the correct version bounds.
-& dotnet tool run wix build "$repo\installer\Reports.Installer\Product.wxs" $harvest -arch x64 `
-    -ext 'WixToolset.Util.wixext/4.0.5' -d "ProductVersion=$upgradeVersion" -d "PayloadRoot=$payload" `
+& dotnet tool run wix build "$repo\installer\Reports.Installer\Product.wxs" "$repo\installer\Reports.Installer\ReportsUI.wxs" $harvest -arch x64 `
+    -ext 'WixToolset.Util.wixext/4.0.5' -ext 'WixToolset.UI.wixext/4.0.5' -d "ProductVersion=$upgradeVersion" -d "PayloadRoot=$payload" `
     -d "SafetyActionsPath=$repo\installer\Reports.SafetyActions\bin\Release\net48\Reports.SafetyActions.CA.dll" -o $upgrade
 if ($LASTEXITCODE -ne 0) { throw 'Upgrade MSI fixture build failed.' }
 Run-Msi 'upgrade' @('/i',('"'+$upgrade+'"'))
@@ -104,5 +144,5 @@ Run-Msi 'uninstall' @('/x',('"'+$upgrade+'"'))
 if (Get-Service LaserficheReports -ErrorAction SilentlyContinue) { throw 'Reports service still registered.' }
 if (!(Test-Path $unknown) -or !(Test-Path $unknownData) -or !(Test-Path $runtime) -or !(Test-Path $config)) { throw 'Uninstall removed unknown files or saved settings.' }
 if (Test-Path "$root\LaserficheReports.Service.exe") { throw 'MSI-owned service binary remained.' }
-'Passed: path isolation, install, real HTTP hosting, installed commit/fonts, frozen planner, repair, rollback, major upgrade, uninstall, unknown-file and settings preservation.' | Set-Content "$logs\acceptance.txt"
+'Passed: native MSI settings pages/properties, model configuration, runtime-override replacement, Laserfiche library/data preservation, path isolation, install, real HTTP hosting, installed commit/fonts, frozen planner, repair, rollback, major upgrade, uninstall, unknown-file and settings preservation.' | Set-Content "$logs\acceptance.txt"
 Write-Host (Get-Content "$logs\acceptance.txt")

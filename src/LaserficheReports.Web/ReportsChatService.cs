@@ -97,7 +97,7 @@ internal sealed class ReportsChatService(
 
         var repository = await repositories.GetActiveRepositoryAsync(cancellationToken);
         using var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        var requestTimeout = configuration.GetValue<int?>("Reports:RequestTimeoutSeconds") ?? 0;
+        var requestTimeout = configuration.GetValue<int?>("Reports:RequestTimeoutSeconds") ?? 3600;
         if (requestTimeout > 0) budget.CancelAfter(TimeSpan.FromSeconds(requestTimeout));
         cancellationToken = budget.Token;
         if (history is { Length: > 8 } || (history?.Any(t => t is null || t.Role is not ("user" or "assistant") || t.Text is null || t.Text.Length > 3000 ||
@@ -125,11 +125,11 @@ internal sealed class ReportsChatService(
                 result = new ChatResult(clarification.Message, []) { IsClarification = true, ClarificationQuestion = question };
             }
             catch (Exception error) when (request.Reports.Length > 1 && !cancellationToken.IsCancellationRequested &&
-                error is LaserficheException or NpgsqlException or HttpRequestException or InvalidOperationException or ArgumentException)
+                error is RecycleBinException or AuditTrailException or LaserficheException or NpgsqlException or HttpRequestException or InvalidOperationException or ArgumentException)
             {
                 logger.LogWarning("Report section failed Operation={Operation} ErrorType={ErrorType} Reason={Reason}", plan.Operation, error.GetType().Name,
-                    error is ArgumentException ? error.Message : "upstream failure");
-                result = new ChatResult(error is ArgumentException ? error.Message : "تعذر إكمال هذا التقرير؛ لم تُعرض نتائج أو أعداد غير مؤكدة.", []);
+                    error is ArgumentException or RecycleBinException or AuditTrailException ? error.Message : "upstream failure");
+                result = new ChatResult(error is ArgumentException or RecycleBinException or AuditTrailException ? error.Message : "تعذر إكمال هذا التقرير؛ لم تُعرض نتائج أو أعداد غير مؤكدة.", []);
             }
             sections.Add(new ReportSection(plan.Title ?? "تقرير", result.Answer, result.Sources, result.Scope,
                 result.RelatedEntryIds, result.Quality, result.IsClarification, result.ClarificationQuestion));
@@ -159,7 +159,7 @@ internal sealed class ReportsChatService(
         var watch = System.Diagnostics.Stopwatch.StartNew();
         if (plan.Operation == "clarify")
             return new ChatResult("حدد اسم الحقل وقيمته كما تظهر في Laserfiche، أو رقم الوثيقة المطلوب تحليلها.", []);
-        if (plan.Operation is not ("search" or "folders" or "metadata" or "templates" or "schema" or "folder_information" or "recent" or "latest_created" or "latest_modified" or "created" or "modified" or "group" or "content"))
+        if (plan.Operation is not ("audit" or "recycle_bin" or "search" or "folders" or "metadata" or "availability" or "templates" or "schema" or "folder_information" or "recent" or "latest_created" or "latest_modified" or "created" or "modified" or "group" or "content"))
             throw new ArgumentException("لم أتعرف على الطلب. حدد الحقل وقيمته أو رقم الوثيقة والمعلومة المطلوبة.");
         if (plan.Name != null && (plan.Operation == "metadata" || plan.RequireUnique || plan.Content))
         {

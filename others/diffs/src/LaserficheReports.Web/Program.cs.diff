@@ -1,0 +1,37 @@
+diff --git a/src/LaserficheReports.Web/Program.cs b/src/LaserficheReports.Web/Program.cs
+index 750a630..b409936 100644
+--- a/src/LaserficheReports.Web/Program.cs
++++ b/src/LaserficheReports.Web/Program.cs
+@@ -60,7 +60,7 @@ builder.Services.AddScoped<QuestionRouter>();
+ builder.Services.AddTransient<GraphCorrelationHandler>();
+ builder.Services.AddHttpClient("ReportsGraph", client =>
+ {
+-    var baseUrl = builder.Configuration["ReportsGraph:BaseUrl"] ?? "http://127.0.0.1:8766";
++    var baseUrl = builder.Configuration["ReportsGraph:BaseUrl"] ?? "http://127.0.0.1:5050";
+     var uri = new Uri(baseUrl);
+     if (uri.Scheme != Uri.UriSchemeHttp ||
+         uri.Host is not ("127.0.0.1" or "localhost" or "::1"))
+@@ -120,9 +120,7 @@ app.Logger.LogInformation(
+ // Never serve its document index to a remote browser.
+ app.Use(async (context, next) =>
+ {
+-    var address = context.Connection.RemoteIpAddress;
+-    if (address is null || !System.Net.IPAddress.IsLoopback(
+-        address.IsIPv4MappedToIPv6 ? address.MapToIPv4() : address))
++    if (!LocalAccess.IsLocalMachine(context.Connection.RemoteIpAddress))
+     {
+         context.Response.StatusCode = StatusCodes.Status403Forbidden;
+         return;
+@@ -130,10 +128,8 @@ app.Use(async (context, next) =>
+     if (HttpMethods.IsPost(context.Request.Method) &&
+         context.Request.Headers.TryGetValue("Origin", out var origin))
+     {
+-        if (!Uri.TryCreate(origin.ToString(), UriKind.Absolute, out var source) ||
+-            source.Host is not ("127.0.0.1" or "localhost" or "::1") ||
+-            source.Scheme != context.Request.Scheme ||
+-            source.Port != context.Request.Host.Port)
++        if (!LocalAccess.IsTrustedOrigin(origin.ToString(), context.Request.Scheme,
++                context.Request.Host.Port, Environment.MachineName))
+         {
+             context.Response.StatusCode = StatusCodes.Status403Forbidden;
+             return;
