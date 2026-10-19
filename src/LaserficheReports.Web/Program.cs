@@ -57,6 +57,8 @@ builder.Services.AddLaserficheInfrastructure(builder.Configuration);
 builder.Services.AddScoped<ReportsChatService>();
 builder.Services.AddScoped<LiveRepositoryReportService>();
 builder.Services.AddScoped<AuditTrailSource>();
+builder.Services.AddScoped<RecycleBinSource>();
+builder.Services.AddSingleton<RecycleBinConfiguration>();
 builder.Services.AddScoped<AuditSessionCredentials>();
 builder.Services.AddSingleton<AuditTrailConfiguration>();
 builder.Services.AddScoped<QuestionRouter>();
@@ -196,6 +198,11 @@ app.Use(async (context, next) =>
         context.Response.StatusCode = error.StatusCode is 401 or 403 or 404 ? error.StatusCode : 502;
         await context.Response.WriteAsJsonAsync(new { error = RepositoryReadError.Message(error), upstreamStatus = error.StatusCode, requestId = context.TraceIdentifier });
     }
+    catch (RecycleBinException error) when (!context.Response.HasStarted)
+    {
+        context.Response.StatusCode = 503;
+        await context.Response.WriteAsJsonAsync(new { error = "recycle_bin_unavailable", message = error.Message });
+    }
     catch (AuditTrailException error) when (!context.Response.HasStarted)
     {
         context.Response.StatusCode = 503;
@@ -216,6 +223,7 @@ app.Use(async (context, next) =>
     }
 });
 app.MapAuditTrailSetup();
+app.MapRecycleBin();
 app.UseDefaultFiles();
 app.UseStaticFiles(new StaticFileOptions
 {

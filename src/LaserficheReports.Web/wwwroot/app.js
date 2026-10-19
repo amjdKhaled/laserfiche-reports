@@ -59,6 +59,7 @@ async function api(url, options) {
 function openSession(username, repository, server, generation) {
   sessionGeneration = generation || '';
   sessionEpoch++;
+  document.dispatchEvent(new CustomEvent('reports-session-cleared'));
   sessionRepository = repository || '';
   sessionServer = server || '';
   $('active-repository').textContent = sessionRepository || 'غير محدد';
@@ -105,6 +106,7 @@ $('logout').onclick = async () => {
   try {
     await api('/api/session/logout', { method: 'POST' });
     sessionEpoch++;
+    document.dispatchEvent(new CustomEvent('reports-session-cleared'));
     sessionRepository = ''; sessionGeneration = ''; sessionServer = '';
     chats = []; active = null; scan = null;
     $('password').value = '';

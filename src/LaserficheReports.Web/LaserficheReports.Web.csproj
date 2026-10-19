@@ -14,5 +14,13 @@
   <ItemGroup>
     <InternalsVisibleTo Include="LaserficheReports.Web.Tests" />
   </ItemGroup>
+  <Target Name="BuildRecycleBinReader" AfterTargets="Build" Condition="'$(OS)' == 'Windows_NT'">
+    <MSBuild Projects="$(MSBuildProjectDirectory)/../../tools/recycle-bin-reader/RecycleBin.Reader.csproj" Targets="Restore;Build" RemoveProperties="NoBuild;NoRestore;RuntimeIdentifier;SelfContained;PublishSingleFile;PublishTrimmed;TargetFramework;TargetFrameworks;PublishReadyToRun;OutputPath;PublishDir" Properties="Configuration=$(Configuration)" />
+    <ItemGroup><RecycleReaderFiles Include="$(MSBuildProjectDirectory)/../../tools/recycle-bin-reader/bin/$(Configuration)/net48/**/*" /></ItemGroup>
+    <Copy SourceFiles="@(RecycleReaderFiles)" DestinationFiles="@(RecycleReaderFiles->'$(TargetDir)recycle-bin/%(RecursiveDir)%(Filename)%(Extension)')" />
+  </Target>
+  <Target Name="PublishRecycleBinReader" AfterTargets="Publish" DependsOnTargets="BuildRecycleBinReader" Condition="'$(OS)' == 'Windows_NT'">
+    <Copy SourceFiles="@(RecycleReaderFiles)" DestinationFiles="@(RecycleReaderFiles->'$(PublishDir)recycle-bin/%(RecursiveDir)%(Filename)%(Extension)')" />
+  </Target>
 </Project>
 

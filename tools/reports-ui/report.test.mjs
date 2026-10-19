@@ -404,3 +404,36 @@ test('a failed logout stays open and shows the error instead of pretending succe
   assert.equal(window.document.getElementById('logout').disabled,false);
   await window.happyDOM.abort();
 });
+
+test('recycle bin reads current documents with session headers and clears data on logout', async(t)=>{
+  const window=setup(); const requests=[];
+  t.after(()=>window.happyDOM.abort());
+  window.document.write(readFileSync(root+'index.html','utf8').replace(/<script[^>]*>[\s\S]*?<\/script>/g,''));
+  window.close=()=>{};window.location.replace=()=>{};
+  window.fetch=async(url,options={})=>{
+    requests.push({url,options});
+    return {ok:true,status:200,json:async()=>{
+      if(url==='/api/session/status')return {authenticated:true,username:'tester',repository:'RepoA',generation:'one'};
+      if(url==='/api/recycle-bin/settings' && options.method!=='POST')return {binding:{enabled:true,secure:true,serverName:'LFServer',repositoryName:'NativeRepo'},reason:null};
+      if(url.startsWith('/api/reports/recycle-bin'))return {answer:'| الوثيقة |\n| --- |\n| PRIVATE BIN DOCUMENT |'};
+      return {saved:true};
+    }};
+  };
+  window.eval(readFileSync(root+'app.js','utf8')+'\n'+readFileSync(root+'recycle-bin.js','utf8'));
+  await new Promise(r=>setTimeout(r,20));
+  window.document.getElementById('recycle-setup').open=true;
+  await new Promise(r=>setTimeout(r,20));
+  window.document.getElementById('recycle-view').click();
+  await new Promise(r=>setTimeout(r,25));
+  const request=requests.find(r=>r.url.startsWith('/api/reports/recycle-bin'));
+  assert(request.url.includes('entryType=document&page=1&limit=50'));
+  assert(request.options.headers);
+  assert(window.document.getElementById('recycle-result').textContent.includes('PRIVATE BIN DOCUMENT'));
+  const save=requests.find(r=>r.url==='/api/recycle-bin/settings'&&r.options.method==='POST');
+  assert.equal(JSON.parse(save.options.body).serverName,'LFServer');
+  assert(!save.options.body.includes('password'));
+  window.document.getElementById('logout').click();
+  await new Promise(r=>setTimeout(r,20));
+  assert.equal(window.document.getElementById('recycle-result').textContent,'');
+  await window.happyDOM.abort();
+});
