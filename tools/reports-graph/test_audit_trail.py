@@ -1,7 +1,9 @@
 import json
 import unittest
 from pydantic import ValidationError
-from server import planner_request, direct_planner_schema, RoutePlan
+from server import planner_request, direct_planner_schema, RoutePlan, plan_reports, planner_schema_for_catalog, QuestionIntent
+from test_graph import FakeModel
+from jsonschema import Draft202012Validator
 
 
 class AuditTrailContractTests(unittest.TestCase):
@@ -34,3 +36,30 @@ class AuditTrailContractTests(unittest.TestCase):
         self.assertEqual(['EV123'], contract['$defs']['AuditQuery']['properties']['eventTypes']['items']['enum'])
         disabled = direct_planner_schema({'fields': [], 'templates': []}).model_json_schema()
         self.assertNotIn('AuditTrailPlan', disabled['$defs'])
+
+    def test_audit_catalog_survives_compaction_and_routes_real_event_code(self):
+        catalog = {'fields': [], 'templates': [], 'auditTrail': {'status': 'available',
+            'eventTypes': [{'value': 'EV123', 'label': 'Recycle Entry'}]}}
+        raw = {'contextMode': 'current', 'reports': [{'operation': 'audit', 'title': 'سجل الحذف',
+            'selection': {'requiresFilter': False}, 'audit': {'eventTypes': ['EV123']}}]}
+        contract = direct_planner_schema(catalog).model_json_schema()
+        Draft202012Validator.check_schema(contract)
+        Draft202012Validator(contract).validate(raw)
+        model = FakeModel([json.dumps(raw)])
+        result = plan_reports(model, {'question': 'من حذف الملفات؟', 'catalog': catalog})
+        self.assertEqual('audit', result['reports'][0]['operation'])
+        self.assertEqual(['EV123'], result['reports'][0]['audit']['eventTypes'])
+        self.assertIn('Recycle Entry', model.calls[0][1].content)
+        self.assertIn('EV123', model.calls[0][1].content)
+
+    def test_independent_count_and_statistics_grammar_accept_audit_tool(self):
+        catalog = {'fields': [], 'auditTrail': {'status': 'available', 'eventTypes': [{'value': 'EV123', 'label': 'Recycle Entry'}]}}
+        for kind, audit, count in [('count', {'eventTypes': ['EV123']}, True),
+                                   ('statistics', {'groupBy': 'userName'}, False)]:
+            intent = QuestionIntent.model_validate({'outputs': [{'resultType': kind, 'meaning': 'أحداث التدقيق',
+                'conditionShape': 'none', 'requestText': 'أحداث التدقيق'}]})
+            schema = planner_schema_for_catalog(catalog, intent).model_json_schema()
+            Draft202012Validator.check_schema(schema)
+            raw = {'outputs': {'output0': {'operation': 'audit', 'title': 'تقرير التدقيق',
+                'selection': {'requiresFilter': False}, 'audit': audit, 'countOnly': count}}}
+            Draft202012Validator(schema).validate(raw)
