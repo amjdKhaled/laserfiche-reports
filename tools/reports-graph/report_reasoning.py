@@ -114,6 +114,13 @@ def invoke_structured(model, messages, schema, max_tokens=None, *, compact=False
     if compact:
         contract = compact_schema(contract)
     options = {"format": contract}
+    # GPT-OSS cannot disable thinking. Its prediction budget includes reasoning,
+    # so the old 768/1536-token limits can end before the final JSON starts.
+    gpt_oss = str(getattr(model, "model", "")).split(":")[0].lower() == "gpt-oss"
+    if gpt_oss:
+        options["reasoning"] = "low"
+        if max_tokens is not None:
+            max_tokens = max(8192, max_tokens)
     if stream is not None:
         options["stream"] = stream
     if max_tokens is not None:

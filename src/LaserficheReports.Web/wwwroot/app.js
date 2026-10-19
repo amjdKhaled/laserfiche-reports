@@ -33,12 +33,13 @@ async function api(url, options) {
   const response = await fetch(url, { ...options, headers });
   const body = await response.json().catch(() => ({}));
   if (epoch !== sessionEpoch) throw new Error('تغيّرت جلسة المستودع؛ تم تجاهل نتيجة الطلب السابق.');
-  if ([401, 409].includes(response.status) && url !== '/api/session/login') $('login-layer').classList.remove('hidden');
+  if ((response.status === 401 || response.status === 409 && body.error === 'session_scope_changed') && url !== '/api/session/login') $('login-layer').classList.remove('hidden');
   if (!response.ok) {
     const error = new Error(body.detail || body.message || body.error ||
       `HTTP ${response.status} — راجع سجل التطبيق لمعرفة السبب`);
     error.status = response.status;
     error.diagnosticId = body.diagnosticId;
+    error.code = body.error;
     throw error;
   }
   return body;
@@ -100,6 +101,7 @@ function renderHistory() {
     const button = el('button', chat.id === active ? 'selected' : '', chat.title);
     button.onclick = () => { active = chat.id; renderHistory(); renderMessages(); showTab('chat'); };
     button.classList.add('history-open');
+    button.title = chat.title;
     const row = el('div', chat.id === active ? 'history-row selected' : 'history-row');
     const remove = el('button', 'history-delete', '×');
     remove.type = 'button'; remove.title = 'حذف المحادثة';
@@ -120,7 +122,7 @@ function renderMessages() {
     const welcome = el('div', 'welcome');
     welcome.innerHTML = '<div class="welcome-icon">✦</div><h2>ما التقرير الذي تريد إعداده؟</h2><p>اسأل عن المستودع أو حدد رقم وثيقة. تظهر النتائج كتقرير وجداول مع مصادرها.</p>';
     const suggestions = el('div', 'suggestions');
-    for (const question of ['ماهي الوثائق الموجود فيها إجراء الوثيقة يساوي تحت الاجراء', 'اعرض جميع الوثائق في المستودع', 'لخص أهم النقاط في الوثيقة 618 كتقرير']) {
+    for (const question of ['اعرض الوثائق التي أنشئت هذا الشهر', 'كم عدد الوثائق في المستودع؟', 'ما الحقول والقوالب المتاحة للبحث؟']) {
       const button = el('button', '', question);
       button.onclick = () => { $('question').value = question; $('question').focus(); };
       suggestions.append(button);
@@ -133,7 +135,7 @@ function renderMessages() {
         ? original.reports.map(report => ({...original, ...report, text: report.answer, reports: null})) : [original];
       parts.forEach((message, partIndex) => {
       const item = el('div', `message ${message.role}`);
-      item.append(el('div', 'label', message.role === 'user' ? 'أنت' : (message.title || 'Laserfiche Reports')));
+      item.append(el('div', 'label', message.role === 'user' ? 'أنت' : (message.title || 'تقارير ليزرفيش الذكية')));
       const sourcePrefix = `source-${chat.id}-${messageIndex}-${partIndex}`;
       const bubble = el('div', 'bubble');
       if (message.role === 'assistant') {
@@ -261,6 +263,22 @@ function showTab(tab) {
 $('tab-chat').onclick = () => showTab('chat');
 $('tab-docs').onclick = () => showTab('docs');
 $('new-chat').onclick = () => { active = null; renderHistory(); renderMessages(); showTab('chat'); };
+function conversationHistory(messages) {
+  const completed = [];
+  for (const message of messages) {
+    // A failed exchange establishes no new context. Preserve the pending
+    // clarification so another attempt can answer it without signing in again.
+    if (message.role === 'assistant' && (message.kind === 'error' || message.text?.startsWith('تعذر إكمال السؤال:'))) {
+      if (completed.at(-1)?.role === 'user') completed.pop();
+      continue;
+    }
+    completed.push(message);
+  }
+  return completed.slice(-8).map(message => ({ role: message.role,
+    text: (message.text || '').slice(0, message.role === 'user' ? 2000 : 1000),
+    ...(message.kind ? { kind: message.kind } : {}),
+    ...(message.clarificationQuestion ? { clarificationQuestion: message.clarificationQuestion.slice(0, 2000) } : {}) }));
+}
 $('ask-form').onsubmit = async event => {
   event.preventDefault();
   if ($('send').disabled) return;
@@ -279,12 +297,12 @@ $('ask-form').onsubmit = async event => {
   chat.messages.push({ role: 'assistant', text: 'جاري البحث في الوثائق وتحضير الإجابة...' });
   renderHistory(); renderMessages();
   try {
-    const result = await api('/api/reports/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question, history: chat.messages.slice(0, -2).slice(-8).map(m => ({ role: m.role, text: m.text.slice(0, m.role === 'user' ? 2000 : 1000) })) }) });
+    const result = await api('/api/reports/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question, history: conversationHistory(chat.messages.slice(0, -2)) }) });
     if (epoch !== sessionEpoch || !chats.includes(chat)) return;
-    chat.messages[chat.messages.length - 1] = { role: 'assistant', repositoryId: sessionRepository, relatedEntryIds: result.relatedEntryIds, reports: result.reports, text: result.answer, sources: result.sources, scope: result.scope, generatedAt: result.generatedAt, quality: result.quality };
+    chat.messages[chat.messages.length - 1] = { role: 'assistant', kind: result.isClarification ? 'clarification' : 'answer', clarificationQuestion: result.clarificationQuestion, repositoryId: sessionRepository, relatedEntryIds: result.relatedEntryIds, reports: result.reports, text: result.answer, sources: result.sources, scope: result.scope, generatedAt: result.generatedAt, quality: result.quality };
   } catch (error) {
-    chat.messages[chat.messages.length - 1] = { role: 'assistant', text: `تعذر إكمال السؤال: ${error.message}` };
-  } finally { pendingOperations--; $('send').disabled = false; if (epoch === sessionEpoch) { save(); renderMessages(); } }
+    chat.messages[chat.messages.length - 1] = { role: 'assistant', kind: 'error', errorCode: error.code, text: `تعذر إكمال السؤال: ${error.message}` };
+  } finally { pendingOperations--; $('send').disabled = pendingOperations > 0; if (epoch === sessionEpoch) { save(); renderMessages(); } }
 };
 $('question').onkeydown = event => {
   if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); $('ask-form').requestSubmit(); }

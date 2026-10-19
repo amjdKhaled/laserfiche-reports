@@ -667,7 +667,8 @@ internal sealed class LaserficheEntryService : ILaserficheEntryService
         // Keep the older property names as compatibility fallbacks for other
         // Repository API v1 builds.
         var definitionId = ReadInt(item, "fieldId")
-                           ?? ReadInt(item, "fieldDefinitionId");
+                           ?? ReadInt(item, "fieldDefinitionId")
+                           ?? ReadInt(item, "id");
         var inlineName   = ReadString(item, "fieldName")
                            ?? ReadString(item, "name");
         var fieldType    = ReadString(item, "fieldType");

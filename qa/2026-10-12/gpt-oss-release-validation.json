@@ -1,0 +1,31 @@
+{
+  "planner": "live-plan-v7.7",
+  "defaultModel": "gpt-oss:20b",
+  "python": {
+    "ran": 163,
+    "passed": 162,
+    "skipped": 1
+  },
+  "ui": {
+    "passed": 23
+  },
+  "supervisor": {
+    "passed": 1
+  },
+  "windowsPublish": {
+    "passed": true,
+    "warnings": 0,
+    "errors": 0
+  },
+  "dotnetTests": {
+    "status": "blocked",
+    "reason": "VSTest host cannot resolve current process path in this execution environment"
+  },
+  "realModelEvaluation": {
+    "executed": 0,
+    "status": "blocked",
+    "reason": "Ollama/model unavailable; run release_check.py on target machine"
+  },
+  "liveRepositoryQueries": 0,
+  "windowsInstallation": "not executed on Windows"
+}

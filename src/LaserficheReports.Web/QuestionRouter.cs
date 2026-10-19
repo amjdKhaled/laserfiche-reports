@@ -18,6 +18,11 @@ internal sealed record QueryPlan(string Operation, string? Field = null, string?
                 throw new ArgumentException("طلب التوضيح لا يجوز أن ينفذ استعلامًا.");
             return;
         }
+        if (Operation == "availability" && (EntryIds is not { Length: > 0 and <= 50 } || EntryIds.Any(id => id <= 0) ||
+            Filters != null || Field != null || Value != null || Template != null || FolderId != null || FolderName != null || Name != null ||
+            From != null || To != null || Content || CountOnly || GroupFields?.Length > 0 || Metrics?.Length > 0 || Having != null || Rollup != null ||
+            ResultType is not (null or "details")))
+            throw new ArgumentException("فحص إتاحة الوثائق يحتاج حتى 50 رقم إدخال محددًا، ولا يقبل فلاتر أو إحصاءات.");
         if (ResultType == "documents" && (Operation is not ("search" or "folders" or "recent" or "latest_created" or "latest_modified" or "created" or "modified") || CountOnly || Content) ||
             ResultType == "statistics" && Operation != "group" ||
             ResultType != null && Operation == "group" && ResultType != "statistics" ||
@@ -43,6 +48,7 @@ internal sealed class QuestionRouter(IHttpClientFactory clients)
             await GraphServiceException.EnsureSuccessAsync(health, "planning", cancellationToken);
             var status = await health.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>(cancellationToken);
             if (!status.TryGetProperty("routingVersion", out var version) || version.GetString() != "schema-agent-v5" ||
+                !status.TryGetProperty("planningProtocol", out var protocol) || protocol.GetString() != "live-periods-v1" ||
                 !status.TryGetProperty("modelTimeoutSeconds", out var timeout) || !timeout.TryGetInt32(out var seconds) || (seconds != 0 && seconds < 60))
                 throw new GraphServiceException("graph_protocol_mismatch", "planning", GraphServiceException.MessageFor("graph_protocol_mismatch"));
         }
@@ -72,7 +78,7 @@ internal sealed class QuestionRouter(IHttpClientFactory clients)
             if (plan.ResultType is not ("documents" or "count" or "statistics" or "content" or "details" or "schema" or "clarification"))
                 throw new ArgumentException("خدمة التخطيط لم تحدد نوع النتيجة المطلوبة؛ أعد تشغيل أحدث خدمة reports-graph.");
             plan.ValidateIntent();
-            if (plan.Operation is not ("search" or "folders" or "metadata" or "templates" or "schema" or "folder_information" or "recent" or "latest_created" or "latest_modified" or "created" or "modified" or "group" or "content" or "clarify") ||
+            if (plan.Operation is not ("search" or "folders" or "metadata" or "availability" or "templates" or "schema" or "folder_information" or "recent" or "latest_created" or "latest_modified" or "created" or "modified" or "group" or "content" or "clarify") ||
                 plan.Limit is < 1 or > 200 || plan.Page is < 1 or > 1000000 ||
                 plan.Sort is not (null or "creationTime desc" or "creationTime asc" or "lastModifiedTime desc" or "lastModifiedTime asc" or "name asc" or "name desc" or "id asc" or "id desc") ||
                 plan.ContentMode is not ("summary" or "search") || plan.SortDirection is not ("asc" or "desc") || plan.EntryType is not ("document" or "folder" or "all") ||
@@ -87,5 +93,5 @@ internal sealed class QuestionRouter(IHttpClientFactory clients)
         return request;
     }
 }
-internal sealed record ReportRequest(QueryPlan[] Reports, string? Clarification = null);
-internal sealed record ChatTurn(string Role, string Text);
+internal sealed record ReportRequest(QueryPlan[] Reports, string? Clarification = null, string? ClarificationQuestion = null);
+internal sealed record ChatTurn(string Role, string Text, string? Kind = null, string? ClarificationQuestion = null);

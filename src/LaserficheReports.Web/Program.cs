@@ -153,7 +153,7 @@ app.Use(async (context, next) =>
     if (!await gate.WaitAsync(TimeSpan.FromSeconds(5), context.RequestAborted))
     {
         context.Response.StatusCode = 409;
-        await context.Response.WriteAsJsonAsync(new { error = "الجلسة مشغولة حاليًا. أعد المحاولة بعد قليل." });
+        await context.Response.WriteAsJsonAsync(new { error = "session_busy", message = "الجلسة مشغولة حاليًا. أعد المحاولة بعد قليل." });
         return;
     }
     acquired = true;
@@ -171,7 +171,7 @@ app.Use(async (context, next) =>
              (!string.IsNullOrEmpty(generation) && generation != context.Session.GetString("ReportsGeneration"))))
         {
             context.Response.StatusCode = 409;
-            await context.Response.WriteAsJsonAsync(new { error = "تغيّر المستودع في جلسة أخرى. أعد تسجيل الدخول إلى المستودع المطلوب." });
+            await context.Response.WriteAsJsonAsync(new { error = "session_scope_changed", message = "تغيّر المستودع في جلسة أخرى. أعد تسجيل الدخول إلى المستودع المطلوب." });
             return;
         }
         if (!context.Request.Path.StartsWithSegments("/api/session"))
@@ -180,6 +180,11 @@ app.Use(async (context, next) =>
             acquired = false;
         }
         await next();
+    }
+    catch (UnauthorizedAccessException) when (!context.Response.HasStarted)
+    {
+        context.Response.StatusCode = 401;
+        await context.Response.WriteAsJsonAsync(new { error = "session_expired", message = "تعذر تجديد جلسة Laserfiche. سجّل الدخول مرة أخرى." });
     }
     catch (LaserficheException error) when (!context.Response.HasStarted)
     {
@@ -201,7 +206,11 @@ app.Use(async (context, next) =>
     }
 });
 app.UseDefaultFiles();
-app.UseStaticFiles();
+app.UseStaticFiles(new StaticFileOptions
+{
+    // Revalidate on updates instead of keeping an old installed UI in the browser.
+    OnPrepareResponse = context => context.Context.Response.Headers.CacheControl = "no-cache"
+});
 
 app.MapGet("/api/app/status", (IConfiguration config) => Results.Ok(new
 {
@@ -209,7 +218,8 @@ app.MapGet("/api/app/status", (IConfiguration config) => Results.Ok(new
     mode = "local-only",
     ocrEnabled = config.GetValue("Ocr:Enabled", false),
     processId = Environment.ProcessId,
-    startedAtUtc
+    startedAtUtc,
+    build = ReportsBuildInformation.Read(builder.Environment.ContentRootPath)
 }));
 
 app.MapReportSessions();
@@ -246,6 +256,26 @@ app.MapGet("/api/embeddings/status", async (ITextEmbeddingService embeddings,
         app.Logger.LogWarning(exception, "Local embedding readiness check failed.");
         return Results.Json(new { status = "unavailable", error = "ollama_embedding_unavailable" }, statusCode: 503);
     }
+});
+
+// Read-only diagnostics use the same selected repository and active session as chat.
+app.MapGet("/api/reports/planning-catalog", async (LiveRepositoryReportService reports,
+    IRepositoryContext repositories, ISessionCredentialStore sessions, CancellationToken cancellationToken) =>
+{
+    if (await sessions.TryGetAsync(cancellationToken) is null) return Results.Unauthorized();
+    var repository = await repositories.GetActiveRepositoryAsync(cancellationToken);
+    return Results.Ok(new { repositoryId = repository.RepositoryId, generatedAt = DateTimeOffset.UtcNow,
+        catalog = await reports.CatalogAsync(cancellationToken) });
+});
+
+app.MapPost("/api/reports/availability", async (AvailabilityRequest request, LiveRepositoryReportService reports,
+    IRepositoryContext repositories, ISessionCredentialStore sessions, CancellationToken ct) =>
+{
+    if (await sessions.TryGetAsync(ct) is null) return Results.Unauthorized();
+    var repository = await repositories.GetActiveRepositoryAsync(ct);
+    var ids = request.EntryIds ?? [];
+    return Results.Ok(await reports.CreateAsync(repository.RepositoryId,
+        new QueryPlan("availability", EntryIds: ids, ResultType: "details"), ids, ct));
 });
 
 app.MapGet("/api/reports/documents", async (int? page, string? search, ReportsChatService chat,
@@ -290,6 +320,10 @@ app.MapPost("/api/reports/chat", async (ChatQuestion request, ReportsChatService
     {
         return Results.Ok(await chat.AskAsync(request.Question, cancellationToken, request.History));
     }
+    catch (UnauthorizedAccessException)
+    {
+        return Results.Json(new { error = "session_expired", message = "تعذر تجديد جلسة Laserfiche. سجّل الدخول مرة أخرى." }, statusCode: 401);
+    }
     catch (GraphServiceException exception)
     {
         app.Logger.LogWarning(exception, "AI dependency failed Stage={Stage} Code={Code}", exception.Stage, exception.Code);
@@ -302,9 +336,9 @@ app.MapPost("/api/reports/chat", async (ChatQuestion request, ReportsChatService
     catch (LaserficheException exception)
     {
         app.Logger.LogWarning(exception, "Laserfiche read failed Status={Status} Code={Code} RequestId={RequestId}", exception.StatusCode, exception.LFErrorCode, System.Diagnostics.Activity.Current?.Id);
-        return Results.Json(new { error = "laserfiche_unavailable",
+        return Results.Json(new { error = exception.StatusCode == 401 ? "session_expired" : "laserfiche_unavailable",
             message = RepositoryReadError.Message(exception), upstreamStatus = exception.StatusCode, diagnosticId = exception.DiagnosticId },
-            statusCode: StatusCodes.Status503ServiceUnavailable);
+            statusCode: exception.StatusCode == 401 ? StatusCodes.Status401Unauthorized : StatusCodes.Status503ServiceUnavailable);
     }
     catch (PostgresException exception)
     {

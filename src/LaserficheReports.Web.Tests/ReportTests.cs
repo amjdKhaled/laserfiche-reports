@@ -12,6 +12,138 @@ namespace LaserficheReports.Web.Tests;
 public class ReportTests
 {
     [Fact]
+    public async Task AvailabilityChecksOnlyRequestedIdsAndDistinguishes403From404()
+    {
+        var entries = new Entries(0) { DeniedId = 620, MissingId = 621 };
+        var search = new Searches();
+        var result = await Create(entries, search).CreateAsync("repo",
+            new QueryPlan("availability", EntryIds: [619, 620, 621], ResultType: "details"), [619, 620, 621], default);
+        Assert.Contains("| 619 | وثيقة 619 | متاح |", result.Answer);
+        Assert.Contains("رفض الصلاحية (403)", result.Answer);
+        Assert.Contains("تعذر العثور عليه أو إظهاره (404)", result.Answer);
+        Assert.Contains("لا يمكن تمييز الحذف", result.Answer);
+        Assert.Equal(new[] { 619 }, result.RelatedEntryIds);
+        Assert.Equal(new[] { 619, 620, 621 }, entries.EntryCalls.Order());
+        Assert.Empty(search.Calls);
+        Assert.False(entries.Enumerated);
+    }
+
+    [Theory]
+    [InlineData(401)]
+    [InlineData(503)]
+    public async Task AvailabilityNeverLabelsAuthenticationOrServerFailureAsMissing(int status)
+    {
+        var entries = new Entries(0) { CustomError = status };
+        var error = await Assert.ThrowsAsync<LaserficheException>(() => Create(entries, new Searches()).CreateAsync("repo",
+            new QueryPlan("availability", EntryIds: [619], ResultType: "details"), [619], default));
+        Assert.Equal(status, error.StatusCode);
+    }
+
+    [Fact]
+    public void AvailabilityRejectsFiltersAndUnboundedRequests()
+    {
+        Assert.Throws<ArgumentException>(() => new QueryPlan("availability", ResultType: "details").ValidateIntent());
+        Assert.Throws<ArgumentException>(() => new QueryPlan("availability", EntryIds: [619], Name: "other", ResultType: "details").ValidateIntent());
+        Assert.Throws<ArgumentException>(() => new QueryPlan("availability", EntryIds: [619], CountOnly: true, ResultType: "count").ValidateIntent());
+    }
+
+    [Fact]
+    public async Task ConfirmedEmptySelectionKeepsZeroTableAndOffersClarificationWithoutExtraQuery()
+    {
+        var query = new Searches { Response = (_, _, _) => PagedResult<LFSearchResult>.Empty };
+        var result = await Create(new Entries(0), query).CreateAsync("repo",
+            new QueryPlan("search", Name: "missing", RequiresFilter: true, CountOnly: true), [], default);
+        Assert.Contains("عدد النتائج المطابقة: **0**", result.Answer);
+        Assert.Contains("| رقم الوثيقة |", result.Answer);
+        Assert.Contains("اقتراحات للتوضيح", result.Answer);
+        Assert.Single(query.Calls);
+    }
+
+    [Fact]
+    public async Task YearQuestionExecutesCurrentRepositorySearchAndKeepsTheDocumentTable()
+    {
+        var graph = new GraphClient("""
+            {"reports":[{"operation":"search","resultType":"documents","requiresFilter":true,
+            "filters":{"field":"created","operator":"in_period","period":{"year":2026}},"allResults":true}]}
+            """);
+        var searches = new Searches();
+        var entries = new Entries(73);
+        var chat = new ReportsChatService(new ConfigurationBuilder().Build(), new NoEmbeddings(), new Repository(), entries,
+            graph, Create(entries, searches), new QuestionRouter(graph), searches,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<ReportsChatService>.Instance);
+        var result = await chat.AskAsync("ماهي الوثائق التي انشأت بتاريخ 2026", default);
+        Assert.Equal(LiveRepositoryReportService.Documents + " & ({LF:Created>=\"2026-01-01\"} & {LF:Created<\"2027-01-01\"})", searches.Expression);
+        Assert.True(searches.ReadAll);
+        Assert.Equal(73, result.Sources.Count);
+        Assert.Contains("|", result.Answer);
+        Assert.DoesNotContain("تعذر", result.Answer);
+        Assert.Equal(new[] { "health", "route" }, graph.Paths);
+    }
+    [Fact]
+    public async Task LiveTagSelectionKeepsOriginalTableAndUsesCurrentCatalog()
+    {
+        var queries = new Searches();
+        var tags = new Tags();
+        var service = new LiveRepositoryReportService(new Entries(73), queries, new Definitions(), new Templates(),
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<LiveRepositoryReportService>.Instance, tags);
+        var catalog = System.Text.Json.JsonSerializer.SerializeToElement(await service.CatalogAsync(default));
+        Assert.Equal("complete", catalog.GetProperty("tagStatus").GetString());
+        Assert.Equal("قيد الفحص", catalog.GetProperty("tags")[0].GetProperty("Name").GetString());
+        var answer = await service.CreateAsync("repo", new QueryPlan("search", AllResults: true,
+            Filters: new(Tag: "قيد الفحص", Operator: "has_tag"), RequiresFilter: true, ResultType: "documents"), [], default);
+        Assert.Equal("{LF:Name=\"*\", Type=D} & {LF:Tags=\"قيد الفحص\"}", queries.Expression);
+        Assert.True(queries.ReadAll);
+        Assert.Equal(73, answer.RelatedEntryIds.Length);
+        Assert.Contains("| رقم الوثيقة | اسم الوثيقة | تاريخ الإنشاء | آخر تعديل | عدد الصفحات | المرجع |", answer.Answer);
+        Assert.Contains("الوسم: قيد الفحص", answer.Answer);
+        Assert.Equal(1, tags.Calls);
+        await Assert.ThrowsAsync<ArgumentException>(() => service.CreateAsync("repo", new QueryPlan("search",
+            Filters: new(Tag: "غير معرف", Operator: "has_tag"), CountOnly: true), [], default));
+    }
+
+    private sealed class Tags : ILaserficheTagDefinitionService
+    {
+        public int Calls { get; private set; }
+        public Task<IReadOnlyList<LFTagDefinition>> GetTagDefinitionsAsync(CancellationToken ct = default)
+        { Calls++; return Task.FromResult<IReadOnlyList<LFTagDefinition>>([new(1, "قيد الفحص")]); }
+    }
+
+    [Fact]
+    public async Task ContentRefreshCompletesBeforeRetrievalAndPropagatesFailure()
+    {
+        var ingestion = new RefreshIngestion();
+        await ReportsChatService.RefreshContentAsync(ingestion, [9, 11, 9], default);
+        Assert.Equal(new[] { 9, 11 }, ingestion.Calls);
+        ingestion = new RefreshIngestion { FailureId = 11 };
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            ReportsChatService.RefreshContentAsync(ingestion, [9, 11, 12], default));
+        Assert.Equal(new[] { 9, 11 }, ingestion.Calls);
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+        ingestion = new RefreshIngestion();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            ReportsChatService.RefreshContentAsync(ingestion, [9], cancelled.Token));
+        Assert.Empty(ingestion.Calls);
+    }
+
+    private sealed class RefreshIngestion : ILaserficheDocumentIngestionService
+    {
+        public List<int> Calls { get; } = [];
+        public int? FailureId { get; init; }
+        public int? MissingId { get; init; }
+        public int? CustomError { get; init; }
+        public async Task<DocumentIngestionResult> IngestMetadataAsync(int entryId,
+            CancellationToken cancellationToken = default)
+        {
+            await Task.Yield();
+            Calls.Add(entryId);
+            if (FailureId == entryId) throw new InvalidOperationException("refresh failed");
+            return new DocumentIngestionResult(1, entryId, "repo", "document", 0, true,
+                "ready", 1, "local", 1, 0, 0, 0, 0, null, null);
+        }
+    }
+
+    [Fact]
     public async Task CompleteDocumentReportKeepsOriginalColumnsAndEveryLiveRow()
     {
         var query = new Searches();
@@ -165,6 +297,37 @@ public class ReportTests
     };
 
     [Fact]
+    public async Task StructuredEqualityRecoversLiveSpellingWithoutDroppingOtherConditions()
+    {
+        var query = new Searches { Response = (expression, field, _) =>
+            field != null ? FieldRows(field, "تحت الإجراء", "ليس تحت الإجراء") :
+            expression.Contains("تحت الإجراء") ? FieldRows("إجراء الوثيقة", "تحت الإجراء") : PagedResult<LFSearchResult>.Empty };
+        var filters = new RepositoryFilter(Logic: "and", Conditions: [
+            new("إجراء الوثيقة", "equals", "تحت الاجراء"), new("created", "less_than", "2036-01-01")]);
+        var result = await Create(new Entries(73), query).SelectAsync(
+            new QueryPlan("search", Filters: filters), [1], false, default);
+        Assert.Equal(1, result.TotalCount);
+        Assert.Contains("{LF:Created<\"2036-01-01\"}", query.Expression);
+        Assert.Contains("{LF:ID=1}", query.Expression);
+        Assert.Contains("تحت الاجراء", query.Expression);
+        Assert.Contains("تحت الإجراء", query.Expression);
+        Assert.DoesNotContain("ليس تحت", query.Expression);
+    }
+
+    [Fact]
+    public async Task NormalizedValueRecoveryRespectsRequestedPage()
+    {
+        var query = new Searches { Response = (expression, field, _) => expression.Contains("=\"*\"}")
+            ? FieldRows(field!, "تحت الإجراء", "تحت الاجراء", "تحت  الاجراء") : PagedResult<LFSearchResult>.Empty };
+        var result = await Create(new Entries(73), query).SelectAsync(
+            new QueryPlan("search", "إجراء الوثيقة", "تحت الاجراء", Page: 2, Limit: 1), [], false, default);
+        Assert.Equal(2, Assert.Single(result.Items).EntryId);
+        Assert.Equal(2, result.PageNumber);
+        Assert.Equal(3, result.TotalCount);
+        Assert.True(result.HasNextPage);
+    }
+
+    [Fact]
     public async Task ZeroLiteralResultsCheckLiveValuesWithoutMatchingNegativeOrLongerValues()
     {
         var entries = new Entries(73);
@@ -281,7 +444,7 @@ public class ReportTests
         var index = 0;
         var query = new Searches { Response = (_, _, _) => new PagedResult<LFSearchResult>
         {
-            Items = [new LFSearchResult { EntryId = ++index == 1 ? 42 : 619, Name = index == 1 ? "وثيقة معدلة" : "وثيقة جديدة",
+            Items = [new LFSearchResult { EntryId = ++index <= 2 ? 42 : 619, Name = index <= 2 ? "وثيقة معدلة" : "وثيقة جديدة",
                 CreationTime = DateTimeOffset.Parse("2026-10-01T10:00:00+03:00"), LastModifiedTime = DateTimeOffset.Parse("2026-10-06T11:00:00+03:00") }],
             TotalCount = 73, HasMore = true
         } };
@@ -292,8 +455,8 @@ public class ReportTests
         var result = await chat.AskAsync("اعطيني تقرير عن آخر وثيقة تم تعديلها وتقرير آخر عن آخر وثيقة أُنشئت", default);
         Assert.Equal(2, result.Reports.Count);
         Assert.All(result.Reports, report => Assert.DoesNotContain("تعذرت صياغة ملخص AI", report.Answer));
-        Assert.Equal(new[] { "lastModifiedTime desc", "creationTime desc" }, query.Sorts);
-        Assert.Equal(new[] { 1, 1 }, query.Limits);
+        Assert.Equal(new[] { "id desc", "lastModifiedTime desc", "creationTime desc" }, query.Sorts);
+        Assert.Equal(new[] { 8, 1, 1 }, query.Limits);
         Assert.Equal(new[] { 42 }, result.Reports[0].RelatedEntryIds);
         Assert.Equal(new[] { 619 }, result.Reports[1].RelatedEntryIds);
         Assert.All(result.Reports, report =>
@@ -350,9 +513,48 @@ public class ReportTests
             Filters: new RepositoryFilter("الإدارة", "equals", "المحاسبة")), [], default);
         Assert.Contains("**73**", report.Answer);
         Assert.Single(searches.Calls);
-        Assert.Equal(1, searches.Limits[0]);
+        Assert.Equal(50, searches.Limits[0]);
         Assert.Empty(entries.EntryCalls);
         Assert.Contains("[الإدارة]=\"المحاسبة\"", searches.Expression);
+        Assert.Contains("| رقم الوثيقة | اسم الوثيقة | تاريخ الإنشاء | آخر تعديل | عدد الصفحات | المرجع |", report.Answer);
+        Assert.Contains("ليست القائمة الكاملة", report.Answer);
+        Assert.Equal(20, report.RelatedEntryIds.Length);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ZeroAndUnknownCountKeepTheDocumentTable(bool exact)
+    {
+        var searches = new Searches { Response = (_, _, _) => new PagedResult<LFSearchResult>
+            { Items = [], TotalCount = 0, IsTotalCountExact = exact } };
+        var report = await Create(new Entries(0), searches).CreateAsync("repo", new QueryPlan("search", CountOnly: true), [], default);
+        Assert.Contains("| رقم الوثيقة | اسم الوثيقة |", report.Answer);
+        Assert.Contains("لم يتم العثور على نتائج مطابقة", report.Answer);
+        Assert.Equal(exact, report.Answer.Contains("عدد النتائج المطابقة: **0**"));
+    }
+
+    [Fact]
+    public async Task CatalogSamplesActualValuesWithoutTreatingThemAsCompleteInventory()
+    {
+        var searches = new Searches();
+        var entries = new Entries(73);
+        var catalog = System.Text.Json.JsonSerializer.SerializeToElement(await Create(entries, searches).CatalogAsync(default));
+        Assert.Equal("partial", catalog.GetProperty("sampleStatus").GetString());
+        Assert.Equal("الإدارة العامة", catalog.GetProperty("fieldSamples").GetProperty("الإدارة")[0].GetString());
+        Assert.Equal(8, entries.FieldCalls.Count);
+        Assert.Equal(8, Assert.Single(searches.Limits));
+        Assert.DoesNotContain("الوثيقة", catalog.GetProperty("fieldSamples").EnumerateObject().Select(p => p.Name));
+    }
+
+    [Fact]
+    public async Task UnavailableSampleRetainsAuthoritativeDefinitionsWithoutInventingValues()
+    {
+        var searches = new Searches { Response = (_, _, _) => throw new LaserficheException("sample unavailable", 503) };
+        var catalog = System.Text.Json.JsonSerializer.SerializeToElement(await Create(new Entries(0), searches).CatalogAsync(default));
+        Assert.Equal("unavailable", catalog.GetProperty("sampleStatus").GetString());
+        Assert.Empty(catalog.GetProperty("fieldSamples").EnumerateObject());
+        Assert.Equal(2, catalog.GetProperty("fields").GetArrayLength());
     }
 
     [Fact]
@@ -379,9 +581,33 @@ public class ReportTests
             graph, Create(entries, searches), new QuestionRouter(graph), searches, Microsoft.Extensions.Logging.Abstractions.NullLogger<ReportsChatService>.Instance);
         await chat.AskAsync("رتبها بالأقدم", default, [new("user", "اعرض وثائق المحاسبة")]);
         Assert.Contains("اعرض وثائق المحاسبة", System.Text.Json.JsonDocument.Parse(graph.RouteBody).RootElement.GetProperty("history")[0].GetProperty("text").GetString());
-        Assert.Single(searches.Calls);
-        Assert.Equal("creationTime asc", Assert.Single(searches.Sorts));
+        Assert.Equal(2, searches.Calls.Count);
+        Assert.Equal("creationTime asc", searches.Sorts.Last());
         Assert.DoesNotContain("present", graph.Paths);
+    }
+
+    [Fact]
+    public async Task ClarificationCarriesItsOriginalQuestionAndReplyMetadata()
+    {
+        const string original = "كم وثيقة تنتهي قبل السنة المطلوبة؟";
+        var graph = new GraphClient("""
+            {"reports":[{"resultType":"clarification","requiresFilter":false,"operation":"clarify","limit":50}],
+             "clarification":"هل تقصد التقويم الميلادي أم الهجري؟",
+             "clarificationQuestion":"كم وثيقة تنتهي قبل السنة المطلوبة؟"}
+            """);
+        var searches = new Searches();
+        var entries = new Entries(73);
+        var chat = new ReportsChatService(new ConfigurationBuilder().Build(), new NoEmbeddings(), new Repository(), entries,
+            graph, Create(entries, searches), new QuestionRouter(graph), searches,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<ReportsChatService>.Instance);
+        var result = await chat.AskAsync("أقصد تاريخ السريان", default,
+            [new("user", original), new("assistant", "حدد التقويم", "clarification", original)]);
+        Assert.True(result.IsClarification);
+        Assert.Equal(original, result.ClarificationQuestion);
+        Assert.Empty(result.RelatedEntryIds);
+        var previous = System.Text.Json.JsonDocument.Parse(graph.RouteBody).RootElement.GetProperty("history")[1];
+        Assert.Equal("clarification", previous.GetProperty("kind").GetString());
+        Assert.Equal(original, previous.GetProperty("clarificationQuestion").GetString());
     }
 
     private sealed class GraphClient(string route, bool failPresentation = false) : HttpMessageHandler, IHttpClientFactory
@@ -393,7 +619,7 @@ public class ReportTests
         {
             var path = request.RequestUri!.AbsolutePath.Trim('/'); Paths.Add(path);
             if (path == "health") return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
-            { Content = new StringContent("{\"routingVersion\":\"schema-agent-v5\",\"modelTimeoutSeconds\":600}", System.Text.Encoding.UTF8, "application/json") };
+            { Content = new StringContent("{\"routingVersion\":\"schema-agent-v5\",\"planningProtocol\":\"live-periods-v1\",\"modelTimeoutSeconds\":600}", System.Text.Encoding.UTF8, "application/json") };
             var body = await request.Content!.ReadAsStringAsync(ct);
             string response;
             if (path == "route") { RouteBody = body; response = route; }
@@ -424,7 +650,7 @@ public class ReportTests
         Assert.Contains("LF:Lookin=", query.Calls[1]);
         Assert.Contains("Subfolders=Y", query.Calls[1]);
         Assert.DoesNotContain("Name=\"مركز الوثائق", query.Calls[1]);
-        Assert.Equal(1, query.Limits[1]);
+        Assert.Equal(50, query.Limits[1]);
     }
 
     [Theory]
@@ -448,9 +674,9 @@ public class ReportTests
         var chat = new ReportsChatService(new ConfigurationBuilder().Build(), new NoEmbeddings(), new Repository(), entries,
             graph, Create(entries, queries), new QuestionRouter(graph), queries, Microsoft.Extensions.Logging.Abstractions.NullLogger<ReportsChatService>.Instance);
         var answer = await chat.AskAsync("كم وثيقة في مجلد الأرشيف؟", default);
-        Assert.Contains("وضح اسم المجلد أو رقمه", answer.Answer);
+        Assert.Contains("اسم المجلد الصحيح أو رقمه", answer.Answer);
         Assert.DoesNotContain("عدد النتائج المطابقة: **0**", answer.Answer);
-        Assert.Single(queries.Calls);
+        Assert.Equal(2, queries.Calls.Count);
     }
 
     [Fact]
@@ -529,13 +755,17 @@ public class ReportTests
         public bool Enumerated { get; private set; }
         public int? DeniedId { get; init; }
         public int? FailureId { get; init; }
+        public int? MissingId { get; init; }
+        public int? CustomError { get; init; }
         public int? PageCount { get; init; }
         public int? Folder { get; init; }
         public List<int> EntryCalls { get; } = [];
         private static LFEntry Document(int id) => new() { Id = id, Name = $"وثيقة {id}", FullPath = $"\\قسم\\وثيقة {id}", EntryType = LFEntryType.Document };
         public Task<LFEntry> GetEntryAsync(int entryId, CancellationToken cancellationToken = default)
         {
-            EntryCalls.Add(entryId);
+            lock (EntryCalls) EntryCalls.Add(entryId);
+            if (CustomError is int status) throw new LaserficheException("fixture", status);
+            if (entryId == MissingId) throw new LaserficheException("not visible", 404);
             if (entryId == DeniedId) throw new LaserficheException("denied", 403);
             if (entryId == FailureId) throw new LaserficheException("outage", 503);
             return Task.FromResult(Document(entryId) with { PageCount = PageCount,
@@ -543,7 +773,7 @@ public class ReportTests
         }
         public Task<IReadOnlyList<LFFieldValue>> GetEntryFieldsAsync(int entryId, CancellationToken cancellationToken = default)
         {
-            FieldCalls.Add(entryId);
+            lock (FieldCalls) FieldCalls.Add(entryId);
             return Task.FromResult<IReadOnlyList<LFFieldValue>>([
                 new() { FieldName = "الوثيقة", Value = "حقل أقصر" },
                 new() { FieldName = "الإدارة", Value = "الإدارة العامة" },

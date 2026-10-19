@@ -1,0 +1,112 @@
+/* ISB identity from front_end: local Readex Pro, navy surfaces, blue actions and restrained gold accents. */
+:root{--primary:var(--isb-blue);--ink:var(--isb-ink);--canvas:var(--isb-page);--line:var(--isb-border)}
+.shell{background:var(--canvas)}
+.shell button,.shell a,.shell textarea,.shell select{transition:background-color .16s,border-color .16s,box-shadow .16s}
+.shell button:focus-visible,.shell a:focus-visible,.shell select:focus-visible{outline:3px solid var(--isb-gold);outline-offset:3px}
+.shell .sidebar{width:270px;background:var(--isb-deep-sea);color:var(--isb-on-dark);border:0;padding:26px 18px 18px;gap:0}
+.shell .brand{gap:12px;margin-bottom:30px;align-items:center}
+.shell .brand-logo{width:62px;height:48px;border-radius:10px;background:white;padding:5px}
+.shell .brand strong{font-size:17px;line-height:1.65;color:#fff}
+.shell .brand small{color:var(--isb-on-dark-muted);font-size:11px;line-height:1.8}
+.shell .new-chat{padding:13px 16px;background:var(--isb-blue);border:1px solid var(--isb-blue);box-shadow:0 5px 16px #051d3426;text-align:center;font-size:14px;font-weight:bold;border-radius:12px}
+.shell .new-chat:hover{background:var(--isb-blue-hover)}
+.shell .side-heading{color:var(--isb-on-dark-muted);font-size:11px;letter-spacing:.2px;margin:26px 10px 12px}
+.shell .history{min-height:0;scrollbar-width:thin;scrollbar-color:#5FA3C9 transparent;padding:0 2px}
+.shell .history-row{display:flex;align-items:center;border:1px solid transparent;border-radius:10px;margin:0 0 6px;min-height:51px;padding:3px 5px;gap:5px}
+.shell .history-row.selected{background:var(--isb-blue);border-color:#5FA3C9}
+.shell .history-row:hover{background:var(--isb-on-dark-pill)}
+.shell .history .history-open{font-size:12px;color:var(--isb-on-dark-muted);line-height:1.8;padding:8px 7px;max-height:none;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;flex:1;min-width:0;background:transparent}
+.shell .history .history-open.selected{color:#fff;background:transparent}
+.shell .history .history-delete{color:var(--isb-on-dark-muted);width:27px;height:29px;background:transparent;opacity:.75}
+.shell .history .history-delete:hover{background:#563846;color:#ffd4d4;opacity:1}
+.shell .side-footer{color:var(--isb-on-dark-muted);border-color:rgba(255,255,255,.18);padding-top:15px;margin-top:15px;font-size:11px}
+.shell .topbar{min-height:96px;padding:22px 30px;gap:14px;background:var(--isb-deep-sea);box-shadow:0 1px 0 var(--isb-border-soft)}
+.shell .topbar h1{font-size:23px;letter-spacing:-.5px;color:var(--isb-on-dark)}
+.shell .topbar p{font-size:12px;line-height:1.7;margin-top:6px;color:var(--isb-muted)}
+.shell .top-actions{gap:9px}
+.shell .tabs{background:var(--isb-on-dark-pill);border:1px solid rgba(255,255,255,.18);padding:4px;border-radius:11px}
+.shell .tabs button{font-size:12px;padding:9px 13px}
+.shell .logout{font-size:12px;border-color:var(--isb-border-soft);color:var(--isb-slate);padding:10px 12px}
+.shell .repository-badge{background:var(--isb-on-dark-pill);border-color:rgba(255,255,255,.25);color:var(--isb-on-dark);border-radius:10px;padding:9px 12px}
+.shell .messages{padding:30px clamp(20px,4vw,64px);scrollbar-width:thin;scrollbar-color:var(--isb-border) transparent;scroll-padding-bottom:24px}
+.shell .message{max-width:1080px;margin-bottom:28px}
+.shell .message .label{font-size:11px;margin:0 7px 9px;color:var(--isb-muted)}
+.shell .message.user{width:fit-content;max-width:min(80%,850px);margin-inline-start:0;margin-inline-end:auto}
+.shell .message.user .bubble{background:var(--isb-tint);border-color:var(--isb-border);border-radius:17px 4px 17px 17px;box-shadow:none;padding:14px 20px;font-size:14px;line-height:1.9}
+.shell .message.assistant .bubble{border:1px solid var(--isb-border);border-radius:15px;padding:25px 28px;box-shadow:0 5px 18px #1c426008;font-size:14px}
+.shell .report-body h2{font-size:21px;margin:10px 0 20px;color:var(--isb-ink)}
+.shell .report-scope{background:var(--isb-field);border:1px solid var(--isb-border-soft);border-inline-start:3px solid var(--isb-gold);padding:10px 14px;border-radius:8px;color:var(--isb-slate);font-size:12px}
+.shell .report-table-wrap{border-radius:10px;border-color:var(--isb-border);margin:18px 0 12px}
+.shell .report-table th{background:var(--isb-field);color:var(--isb-deep-sea);padding:13px 12px}
+.shell .report-table td{padding:12px;line-height:1.8}
+.shell .report-table tbody tr:hover{background:var(--isb-tint)}
+.shell .report-actions{gap:8px;padding-top:16px;margin-top:23px;border-color:var(--isb-border-soft)}
+.shell .report-actions button,.shell .report-format{font-size:11px;padding:9px 12px;border-radius:8px;min-height:36px}
+.shell .report-actions button:hover:not(:disabled){background:var(--isb-tint)}
+.shell .report-actions button:first-child:hover:not(:disabled){background:var(--isb-blue-hover);color:white}
+.shell .composer{width:calc(100% - 64px);max-width:1080px;border:1px solid var(--isb-border);border-radius:15px;padding:10px 12px;box-shadow:0 6px 30px #2546640b;margin-top:8px;min-height:72px}
+.shell .composer:focus-within{border-color:var(--isb-blue);box-shadow:0 0 0 3px var(--isb-tint)}
+.shell .composer textarea{font-size:14px;background:transparent;padding:10px;line-height:1.7}
+.shell .composer button{width:46px;height:46px;padding:0;border-radius:11px;background:var(--isb-blue);font-size:21px}
+.shell .note{color:var(--isb-slate);font-size:10px;margin:10px 12px 17px}
+.shell .welcome{max-width:690px;margin:8vh auto 5vh}
+.shell .welcome-icon{width:70px;height:70px;border-radius:23px;background:var(--isb-tint);color:var(--isb-blue);border:1px solid var(--isb-border);font-size:33px}
+.shell .welcome h2{font-size:28px;color:var(--isb-ink);margin:24px 0 12px;line-height:1.5}
+.shell .welcome p{font-size:13px;line-height:1.9;color:var(--isb-slate);max-width:540px;margin:auto}
+.shell .suggestions{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:30px}
+.shell .suggestions button{padding:19px 16px;text-align:start;border:1px solid var(--isb-border-soft);background:#fff;color:var(--isb-slate);border-radius:12px;font-size:12px;line-height:1.9;box-shadow:0 3px 9px #1c426006}
+.shell .suggestions button:hover{border-color:var(--isb-blue);background:var(--isb-field);box-shadow:0 5px 18px #1c426010}
+.shell #docs-view{padding:30px;max-width:1400px;width:100%;margin:auto}
+.shell .status-card,.shell .scan-panel,.shell .doc{border:1px solid var(--isb-border-soft);border-radius:13px;box-shadow:0 3px 12px #1c426006}
+.shell .section-title h2{color:var(--isb-ink);font-size:18px}
+.shell .source{border-radius:9px;background:var(--isb-field)}
+/* Shared identity, including the existing sign-in form. */
+:root{font-family:var(--isb-font);color:var(--isb-ink);background:var(--isb-page);--blue:var(--isb-blue)}
+body,input,button,textarea,select{font-family:var(--isb-font)}
+.shell .sidebar,.shell .topbar{background-image:url('/brand/assets/header-pattern-tile.svg');background-size:64px 64px;background-position:right top}
+.shell .topbar{border-bottom:4px solid var(--isb-gold);box-shadow:none;color:var(--isb-on-dark)}
+.shell .topbar p{color:var(--isb-on-dark-muted)}
+.shell .tabs button{color:var(--isb-on-dark-muted)}
+.shell .tabs button:hover{background:var(--isb-on-dark-pill);color:#fff}
+.shell .tabs button.active{background:var(--isb-surface);color:var(--isb-blue);box-shadow:var(--isb-card-shadow)}
+.shell .logout{background:transparent;border-color:rgba(255,255,255,.3);color:#fff}
+.shell .logout:hover,.shell .repository-badge:hover{background:rgba(255,255,255,.22)}
+.shell .brand strong{font-weight:600}
+.shell .new-chat{font-weight:600;box-shadow:none}
+.shell .new-chat:focus-visible{outline-color:var(--isb-gold)}
+.shell .message .label{color:var(--isb-slate)}
+.shell .bubble,.shell .status-card,.shell .scan-panel,.shell .doc{box-shadow:var(--isb-card-shadow)}
+.shell .report-body h3,.shell .section-title h2{border-inline-start:4px solid var(--isb-gold);padding-inline-start:12px;color:var(--isb-ink)}
+.shell .report-table tbody tr:nth-child(even){background:var(--isb-field)}
+.shell .report-table tbody tr:hover{background:var(--isb-tint)}
+.shell .report-table td{border-color:var(--isb-border-soft)}
+.shell .report-actions button,.shell .report-format,.shell .docs-toolbar button,.shell .docs-pager button,.shell .section-title button{color:var(--isb-blue);border-color:var(--isb-border);background:var(--isb-surface)}
+.shell .report-actions button:first-child,.shell .ingest button,.shell .scan-actions button:first-child{background:var(--isb-blue);border-color:var(--isb-blue);color:white}
+.shell .ingest button:hover,.shell .scan-actions button:first-child:hover,.shell .composer button:hover{background:var(--isb-blue-hover)}
+.shell .scan-actions button+button{background:var(--isb-tint);color:var(--isb-blue)}
+.shell .report-reference{background:var(--isb-tint);color:var(--isb-blue)}
+.shell .source,.shell .source-link,.shell .doc .tag{color:var(--isb-blue);border-color:var(--isb-border)}
+.shell .ingest input,.shell .docs-toolbar input{background:var(--isb-field);border-color:var(--isb-border);color:var(--isb-ink)}
+.shell .doc small,.shell .section-title p,.shell .feedback,.shell .scan-progress,.shell .docs-pager{color:var(--isb-slate)}
+.shell .ok{color:var(--isb-success)}.shell .bad,.shell .scan-errors{color:var(--isb-danger)}
+.shell .composer textarea{color:var(--isb-ink)}
+.shell .composer textarea:focus-visible{outline:none}
+.shell .composer textarea::placeholder{color:var(--isb-slate)}
+.shell button:disabled{opacity:.5}
+.login-layer{background:rgba(11,57,84,.88);overflow-y:auto;padding:24px}
+.login-card{padding:0 30px 28px;border:1px solid var(--isb-border);border-radius:var(--isb-radius-lg);box-shadow:var(--isb-shadow);color:var(--isb-ink)}
+.login-brand{display:flex;align-items:center;gap:14px;background:var(--isb-deep-sea) var(--isb-pattern) right top/64px 64px;border-bottom:4px solid var(--isb-gold);border-radius:17px 17px 0 0;margin:0 -30px 4px;padding:22px 26px;color:#fff;font-size:17px;font-weight:600;line-height:1.7}
+.login-brand-logo{width:70px;height:52px;object-fit:contain;background:white;border-radius:10px;padding:5px;flex:none}
+.login-card h2{color:var(--isb-ink);font-size:19px;line-height:1.7}
+.login-card p,.login-card label{color:var(--isb-slate);line-height:1.8}
+.login-card input{background:var(--isb-field);border-color:var(--isb-border);color:var(--isb-ink)}
+.login-card input:focus-visible{outline:2px solid var(--isb-blue);outline-offset:2px}
+.login-card button[type=submit]{background:var(--isb-blue);color:white}
+.login-card button[type=submit]:hover{background:var(--isb-blue-hover)}
+.login-card #discover-repositories{background:var(--isb-tint);color:var(--isb-blue);border:1px solid var(--isb-border)}
+.login-card #login-error{color:var(--isb-danger)}
+.login-card button:focus-visible{outline:3px solid var(--isb-gold);outline-offset:3px}
+@media(min-width:761px) and (max-width:1200px){.shell .sidebar{width:225px}.shell .topbar{padding:18px 22px}.shell .top-actions{width:100%}.shell .messages{padding:24px}.shell .suggestions{grid-template-columns:1fr}}
+@media(max-width:760px){.shell .sidebar{width:100%;padding:12px 16px;display:flex;flex-direction:row;align-items:center;justify-content:space-between;gap:12px}.shell .brand{margin:0}.shell .brand-logo{width:42px;height:37px}.shell .brand strong{font-size:13px}.shell .brand small{display:none}.shell .new-chat{width:auto;font-size:11px;padding:10px}.shell .topbar{min-height:0;padding:16px}.shell .topbar h1{font-size:19px}.shell .top-actions{gap:6px}.shell .tabs button{font-size:11px;padding:8px 10px}.shell .logout{font-size:11px;padding:8px}.shell .repository-badge{font-size:11px}.shell .messages{padding:20px 14px}.shell .message.user{max-width:92%}.shell .message.assistant .bubble{padding:16px}.shell .composer{width:calc(100% - 28px);min-height:64px}.shell .welcome{margin:4vh auto}.shell .welcome h2{font-size:23px}.shell .suggestions{grid-template-columns:1fr;margin-top:20px;gap:9px}.shell .suggestions button{padding:12px 16px}.shell #docs-view{padding:17px}}
+@media(prefers-reduced-motion:reduce){.shell *{transition:none!important}}
+@media print{.shell{background:white}.shell .message.assistant .bubble{box-shadow:none;border:0}.shell .report-table th{background:var(--isb-field)}.shell .report-table tbody tr:hover{background:transparent}}

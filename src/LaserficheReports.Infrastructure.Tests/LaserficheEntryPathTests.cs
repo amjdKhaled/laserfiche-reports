@@ -12,6 +12,21 @@ using Xunit;
 public class LaserficheEntryPathTests
 {
     [Fact]
+    public async Task V2MetadataUsesIdAndNameWhileRetainingActualValueAndType()
+    {
+        var http = new Responses("""
+            {"value":[{"id":71,"name":"تاريخ التسليم","fieldType":"DateTime","values":["2026-09-30"]},
+                      {"fieldId":72,"id":999,"fieldName":"القسم","fieldType":"String","values":[{"value":"قسم فعلي"}]}]}
+            """);
+        var fields = await Create(http).GetEntryFieldsAsync(42);
+        Assert.Equal(new[] { 71, 72 }, fields.Select(f => f.FieldDefinitionId));
+        Assert.Equal("تاريخ التسليم", fields[0].FieldName);
+        Assert.Equal("DateTime", fields[0].FieldType);
+        Assert.Equal("2026-09-30", fields[0].Value);
+        Assert.Equal("قسم فعلي", fields[1].Value);
+    }
+
+    [Fact]
     public async Task NullSearchPathsAreReconstructedFromLiveAncestorsAndSharedParentsAreReused()
     {
         var http = new Responses(

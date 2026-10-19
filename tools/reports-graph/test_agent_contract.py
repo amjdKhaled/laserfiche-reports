@@ -70,7 +70,7 @@ class AgentContractTests(unittest.TestCase):
             with self.subTest(plan=plan):
                 self.assertFalse(validator.is_valid({'reports': [plan]}))
         for selection in [{'requiresFilter': False}, {'requiresFilter': True, 'entryIds': [618]},
-                          {'requiresFilter': True, 'folderId': 10}, {'requiresFilter': True, 'template': 'عقود'},
+                          {'requiresFilter': True, 'folder': {'id': 10}}, {'requiresFilter': True, 'template': 'عقود'},
                           {'requiresFilter': True, 'filters': {'field': 'الموعد', 'operator': 'less_than', 'relative': {'unit': 'day'}}}]:
             self.assertTrue(validator.is_valid({'reports': [{**base, 'selection': selection}]}))
 
@@ -135,8 +135,9 @@ class AgentContractTests(unittest.TestCase):
         base = {'resultType': 'count', 'requiresFilter': True, 'operation': 'search', 'title': 'وثائق', 'question': 'مشروط', 'limit': 50}
         for changes in ({}, {'filters': {'field': 'حقل مخترع', 'operator': 'equals', 'value': 'أ'}}):
             model = FakeModel([json.dumps({'reports': [{**base, **changes}]})] * 2)
-            with self.assertRaises(ValueError):
-                plan_reports(model, {'question': 'طلب مشروط', 'catalog': {'fields': []}})
+            result = plan_reports(model, {'question': 'طلب مشروط', 'catalog': {'fields': []}})
+            self.assertTrue(all(p['operation'] == 'clarify' and p['filters'] is None for p in result['reports']))
+            self.assertTrue(result['clarification'])
 
     def test_real_ollama_client_transmits_schema_and_compact_catalog(self):
         import threading
@@ -161,12 +162,13 @@ class AgentContractTests(unittest.TestCase):
             result = plan_reports(model, {'question': 'وثائق', 'catalog': {'fields': [{'name': 'حقل فعلي', 'fieldType': 'Date'}]}})
             self.assertEqual(result['reports'][0]['operation'], 'search')
             self.assertEqual(len(requests), 1)
-            self.assertNotIn('resultType', requests[0]['format']['$defs']['RoutePlan']['anyOf'][0]['properties'])
-            self.assertIn('selection', requests[0]['format']['$defs']['RoutePlan']['anyOf'][0]['required'])
+            executable = requests[0]['format']['$defs']['ExecutablePlan']['anyOf'][0]
+            self.assertNotIn('resultType', executable['properties'])
+            self.assertIn('selection', executable['required'])
             self.assertEqual(requests[0]['options']['num_predict'], 1536)
             self.assertFalse(requests[0]['stream'])
             self.assertEqual(json.loads(requests[0]['messages'][1]['content'])['catalog']['fields'], [['حقل فعلي', 'Date', False]])
-            self.assertNotIn('JSON Schema:', requests[0]['messages'][0]['content'])
+            self.assertIn('JSON Schema:', requests[0]['messages'][0]['content'])
         finally:
             server.shutdown(); server.server_close(); thread.join()
 
@@ -179,7 +181,7 @@ class AgentContractTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             ReportRequest.model_validate({'reports': [{**plan, 'filters': {'field': 'اسم', 'operator': 'equals', 'value': 'أ'}}]})
 
-    def test_repair_keeps_draft_and_precise_error_instead_of_truncated_exception(self):
+    def test_repair_keeps_precise_error_and_original_request_without_rejected_draft(self):
         import io
         from contextlib import redirect_stdout
         good = {'resultType': 'documents', 'requiresFilter': False, 'operation': 'search', 'title': 'وثائق', 'question': 'وثائق', 'limit': 50}
@@ -189,7 +191,8 @@ class AgentContractTests(unittest.TestCase):
         with redirect_stdout(stream):
             plan_reports(model, {'question': 'وثائق', 'catalog': {'fields': []}})
         self.assertIn('reports.0.limit', stream.getvalue())
-        self.assertIn('300', model.calls[1][-2].content)
+        self.assertFalse(any(message.type == 'ai' for message in model.calls[1]))
+        self.assertEqual(json.loads(model.calls[1][1].content)['question'], 'وثائق')
         self.assertIn('reports.0.limit', model.calls[1][-1].content)
 
     def test_document_intent_cannot_execute_group_or_unfiltered_fallback(self):
@@ -204,8 +207,9 @@ class AgentContractTests(unittest.TestCase):
             self.assertEqual(result['reports'][0]['operation'], 'search')
             self.assertIsNotNone(result['reports'][0]['filters'])
             self.assertEqual(len(model.calls), 2)
-            with self.assertRaises(ValueError):
-                plan_reports(FakeModel([json.dumps({'reports': [bad]})] * 2), payload)
+            result = plan_reports(FakeModel([json.dumps({'reports': [bad]})] * 2), payload)
+            self.assertTrue(all(p['operation'] == 'clarify' and p['filters'] is None for p in result['reports']))
+            self.assertTrue(result['clarification'])
 
     def test_compact_contract_preserves_named_properties_and_bound_generation(self):
         from report_reasoning import compact_schema
@@ -223,8 +227,8 @@ class AgentContractTests(unittest.TestCase):
         model = BoundModel([json.dumps({'reports': [plan]})])
         plan_reports(model, {'question': 'كشف', 'catalog': {'fields': []}})
         self.assertEqual(model.options['options']['num_predict'], 1536)
-        self.assertEqual(model.options['options']['num_ctx'], 8192)
-        self.assertNotIn('JSON Schema:', model.calls[0][0].content)
+        self.assertGreaterEqual(model.options['options']['num_ctx'], 8192)
+        self.assertIn('JSON Schema:', model.calls[0][0].content)
         self.assertEqual(len(model.calls), 1)
 
     def test_listing_defaults_to_all_rows_but_explicit_limit_can_be_preserved(self):
@@ -264,8 +268,9 @@ class AgentContractTests(unittest.TestCase):
         model = FakeModel([json.dumps(bad), json.dumps(good)])
         self.assertEqual(plan_reports(model, payload)['reports'][0]['filters']['field'], 'أجل الإنجاز')
         self.assertEqual(len(model.calls), 2)
-        with self.assertRaises(ValueError):
-            plan_reports(FakeModel([json.dumps(bad), json.dumps(bad)]), payload)
+        result = plan_reports(FakeModel([json.dumps(bad), json.dumps(bad)]), payload)
+        self.assertTrue(all(p['operation'] == 'clarify' and p['filters'] is None for p in result['reports']))
+        self.assertTrue(result['clarification'])
 
     def test_aggregation_and_sort_fields_are_schema_validated(self):
         for changes in ({'sortField': 'fake'}, {'operation': 'group', 'groupFields': [{'field': 'fake'}]},

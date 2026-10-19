@@ -16,9 +16,11 @@ internal sealed record ChatResult(string Answer, IReadOnlyList<Evidence> Sources
     public ReportQuality? Quality { get; init; }
     public int[] RelatedEntryIds { get; init; } = [];
     public IReadOnlyList<ReportSection> Reports { get; init; } = [];
+    public bool IsClarification { get; init; }
+    public string? ClarificationQuestion { get; init; }
 }
 internal sealed record ReportSection(string Title, string Answer, IReadOnlyList<Evidence> Sources, AnswerScope? Scope,
-    int[] RelatedEntryIds, ReportQuality? Quality);
+    int[] RelatedEntryIds, ReportQuality? Quality, bool IsClarification = false, string? ClarificationQuestion = null);
 internal sealed record ReportQuality(string Status, bool QuoteVerification, string SemanticReview,
     string PromptVersion, int ModelCalls);
 internal sealed record IndexedDocument(int EntryId, string Name, string Path, string Status,
@@ -33,8 +35,19 @@ internal sealed class ReportsChatService(
     ILaserficheEntryService entries,
     IHttpClientFactory clients,
     LiveRepositoryReportService liveReports,
-    QuestionRouter router, ILaserficheSearchService searches, ILogger<ReportsChatService> logger)
+    QuestionRouter router, ILaserficheSearchService searches, ILogger<ReportsChatService> logger,
+    ILaserficheDocumentIngestionService? ingestion = null)
 {
+    internal static async Task RefreshContentAsync(ILaserficheDocumentIngestionService ingestion,
+        IEnumerable<int> entryIds, CancellationToken cancellationToken)
+    {
+        foreach (var entryId in entryIds.Distinct())
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            await ingestion.IngestMetadataAsync(entryId, cancellationToken);
+        }
+    }
+
     private string ConnectionString => configuration["Supabase:PostgresConnectionString"]
         ?? throw new InvalidOperationException("Supabase:PostgresConnectionString is missing.");
 
@@ -87,7 +100,8 @@ internal sealed class ReportsChatService(
         var requestTimeout = configuration.GetValue<int?>("Reports:RequestTimeoutSeconds") ?? 0;
         if (requestTimeout > 0) budget.CancelAfter(TimeSpan.FromSeconds(requestTimeout));
         cancellationToken = budget.Token;
-        if (history is { Length: > 8 } || (history?.Any(t => t is null || t.Role is not ("user" or "assistant") || t.Text is null || t.Text.Length > 3000) ?? false))
+        if (history is { Length: > 8 } || (history?.Any(t => t is null || t.Role is not ("user" or "assistant") || t.Text is null || t.Text.Length > 3000 ||
+            t.Kind is not (null or "answer" or "clarification" or "error") || t.ClarificationQuestion?.Length > 2000) ?? false))
             throw new ArgumentException("سياق المحادثة أكبر من الحد المسموح.");
         var schemaWatch = System.Diagnostics.Stopwatch.StartNew();
         var catalog = await liveReports.CatalogAsync(cancellationToken);
@@ -96,17 +110,19 @@ internal sealed class ReportsChatService(
         var request = await router.RouteAsync(question, catalog, cancellationToken, history);
         logger.LogInformation("Stage=AI_PLAN ReportCount={Count} DurationMs={DurationMs}", request.Reports.Length, watch.ElapsedMilliseconds);
         if (request.Reports.All(p => p.Operation == "clarify"))
-            return new ChatResult(request.Clarification ?? "وضح المعلومة المطلوبة أو معيار التقرير.", []);
+            return new ChatResult(request.Clarification ?? "وضح المعلومة المطلوبة أو معيار التقرير.", [])
+            { IsClarification = true, ClarificationQuestion = request.ClarificationQuestion ?? question };
         var sections = new List<ReportSection>();
         foreach (var plan in request.Reports)
         {
             ChatResult result;
             try { result = plan.Operation == "clarify"
                 ? new ChatResult(request.Clarification ?? "وضح معيار هذا التقرير.", [])
+                  { IsClarification = true, ClarificationQuestion = request.ClarificationQuestion ?? question }
                 : await ExecutePlanAsync(repository, plan, plan.Question ?? question, cancellationToken); }
             catch (RepositoryScopeClarificationException clarification)
             {
-                result = new ChatResult(clarification.Message, []);
+                result = new ChatResult(clarification.Message, []) { IsClarification = true, ClarificationQuestion = question };
             }
             catch (Exception error) when (request.Reports.Length > 1 && !cancellationToken.IsCancellationRequested &&
                 error is LaserficheException or NpgsqlException or HttpRequestException or InvalidOperationException or ArgumentException)
@@ -116,7 +132,7 @@ internal sealed class ReportsChatService(
                 result = new ChatResult(error is ArgumentException ? error.Message : "تعذر إكمال هذا التقرير؛ لم تُعرض نتائج أو أعداد غير مؤكدة.", []);
             }
             sections.Add(new ReportSection(plan.Title ?? "تقرير", result.Answer, result.Sources, result.Scope,
-                result.RelatedEntryIds, result.Quality));
+                result.RelatedEntryIds, result.Quality, result.IsClarification, result.ClarificationQuestion));
         }
         // Structured facts, counts and tables need no second model call.
         var allSources = new List<Evidence>();
@@ -131,7 +147,9 @@ internal sealed class ReportsChatService(
             allSources.AddRange(section.Sources);
         }
         return new ChatResult(string.Join("\n\n", combined), allSources, sections.Count == 1 ? sections[0].Scope : null)
-        { Reports = sections, RelatedEntryIds = sections.SelectMany(s => s.RelatedEntryIds).Distinct().ToArray() };
+        { Reports = sections, RelatedEntryIds = sections.SelectMany(s => s.RelatedEntryIds).Distinct().ToArray(),
+          IsClarification = sections.Count == 1 && sections[0].IsClarification,
+          ClarificationQuestion = sections.Count == 1 ? sections[0].ClarificationQuestion : null };
     }
 
     private async Task<ChatResult> ExecutePlanAsync(RepositoryDescriptor repository, QueryPlan plan, string question,
@@ -141,11 +159,11 @@ internal sealed class ReportsChatService(
         var watch = System.Diagnostics.Stopwatch.StartNew();
         if (plan.Operation == "clarify")
             return new ChatResult("حدد اسم الحقل وقيمته كما تظهر في Laserfiche، أو رقم الوثيقة المطلوب تحليلها.", []);
-        if (plan.Operation is not ("search" or "folders" or "metadata" or "templates" or "schema" or "folder_information" or "recent" or "latest_created" or "latest_modified" or "created" or "modified" or "group" or "content"))
+        if (plan.Operation is not ("search" or "folders" or "metadata" or "availability" or "templates" or "schema" or "folder_information" or "recent" or "latest_created" or "latest_modified" or "created" or "modified" or "group" or "content"))
             throw new ArgumentException("لم أتعرف على الطلب. حدد الحقل وقيمته أو رقم الوثيقة والمعلومة المطلوبة.");
         if (plan.Name != null && (plan.Operation == "metadata" || plan.RequireUnique || plan.Content))
         {
-            var lookup = await liveReports.SelectAsync(plan with { Operation = "search", Content = false, Limit = 50, CountOnly = false }, requestedEntries, false, cancellationToken);
+            var lookup = await liveReports.SelectAsync(plan with { Operation = "search", Content = false, ResultType = "documents", Limit = 50, CountOnly = false }, requestedEntries, false, cancellationToken);
             if (!lookup.IsTotalCountExact || lookup.TotalCount != 1)
                 return new ChatResult("لم أحدد وثيقة واحدة بالاسم؛ اختر رقم الوثيقة من النتائج أو وضح الاسم.\n\n" + string.Join("\n", lookup.Items.Select(i => $"- {i.EntryId}: {ReportSupport.Cell(i.Name)}")), []);
             requestedEntries = [lookup.Items[0].EntryId];
@@ -163,13 +181,33 @@ internal sealed class ReportsChatService(
             if (requestedEntries.Length == 0)
                 return new ChatResult("لم يتم العثور على نتائج مطابقة.", []);
         }
+        var contentScopeRestricted = requestedEntries.Length > 0;
+        // Discover from Laserfiche before consulting the content index: a new
+        // document cannot be discovered by querying an old vector index.
+        if (ingestion is null) throw new InvalidOperationException("Live content refresh is unavailable.");
+        if (requestedEntries.Length == 0)
+        {
+            var current = await liveReports.SelectAsync(plan with { Operation = "search", Content = false, ResultType = "documents", CountOnly = false,
+                AllResults = true, Page = 1, Limit = 200 }, [], true, cancellationToken);
+            if (current.HasNextPage || !current.IsTotalCountExact || current.TotalCount != current.Items.Count)
+                throw new ArgumentException("تعذر قراءة نطاق المحتوى كاملًا من المستودع؛ حدد نطاقًا أضيق.");
+            foreach (var item in current.Items.Where(i => i.EntryType == LFEntryType.Document))
+                liveSelected[item.EntryId] = new LFEntry { Id = item.EntryId, Name = item.Name,
+                    FullPath = item.FullPath, EntryType = item.EntryType };
+            requestedEntries = liveSelected.Keys.ToArray();
+            if (requestedEntries.Length == 0) return new ChatResult("لم يتم العثور على نتائج مطابقة.", []);
+        }
+        // Refresh before retrieval, not in the background after returning an old
+        // answer. Ingestion checks live access and writes document chunks atomically.
+        await RefreshContentAsync(ingestion, requestedEntries, cancellationToken);
+        logger.LogInformation("Stage=LIVE_CONTENT_REFRESH Documents={Documents}", requestedEntries.Length);
         var hasEntryFilter = requestedEntries.Length > 0;
         var candidateLimit = Math.Clamp(configuration.GetValue<int?>("Reports:CandidateLimit") ?? 240, 24, 1000);
         var evidenceLimit = Math.Clamp(configuration.GetValue<int?>("Reports:EvidenceLimit") ?? 24, 8, 32);
         var prefix = configuration["LocalAI:QueryEmbeddingPrefix"] ?? "search_query: ";
         string? literal = null;
         watch.Restart();
-        var rankedContent = !hasEntryFilter || plan.ContentMode == "search";
+        var rankedContent = !contentScopeRestricted || plan.ContentMode == "search";
         if (rankedContent) try
         {
             using var embeddingBudget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -234,11 +272,11 @@ internal sealed class ReportsChatService(
         var allowedCandidates = candidates.Where(c => authorized.ContainsKey(c.EntryId))
             .Select(c => c with { DocumentName = authorized[c.EntryId].Name, Path = authorized[c.EntryId].FullPath }).ToList();
         var evidence = ReportSupport.SelectEvidence(allowedCandidates, evidenceLimit);
-        var scope = new AnswerScope(hasEntryFilter ? "selected-documents" : "repository",
+        var scope = new AnswerScope(contentScopeRestricted ? "selected-documents" : "repository",
             repository.RepositoryId, evidence.Select(x => x.EntryId).Distinct().Count(), evidence.Count, false,
-            hasEntryFilter ? "التحليل مقيد بالوثائق التي حددتها؛ يعتمد على المقاطع المفهرسة المتاحة منها."
+            contentScopeRestricted ? "التحليل مقيد بالوثائق التي حددتها؛ يعتمد على المقاطع المفهرسة المتاحة منها."
                 : "البحث شمل فهرس المستودع المتاح؛ المقاطع المختارة أدلة للإجابة وليست حصرًا لجميع الوثائق.",
-            plan.Kind == QueryKind.HYBRID_QUERY ? [] : requestedEntries);
+            !contentScopeRestricted || plan.Kind == QueryKind.HYBRID_QUERY ? [] : requestedEntries);
         if (literal is null && rankedContent)
             scope = scope with { Detail = scope.Detail + " البحث بالكلمات فقط؛ تعذر استخدام نموذج البحث الدلالي المحلي." };
         if (evidence.Count == 0)

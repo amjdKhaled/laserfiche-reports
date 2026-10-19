@@ -7,6 +7,58 @@ namespace LaserficheReports.Web.Tests;
 
 public class StructuredRepositoryTests
 {
+    [Theory]
+    [InlineData("Long")]
+    [InlineData("Short")]
+    [InlineData("LongInteger")]
+    [InlineData("Integer")]
+    public void IntegerAliasesRejectFractionalFiltersBeforeSearch(string type)
+    {
+        LFFieldDefinition[] fields = [new() { Name = "عدد المعاملات", FieldType = type }];
+        Assert.Throws<ArgumentException>(() => StructuredRepositoryQuery.Compile(
+            new("عدد المعاملات", "equals", "1.5"), fields, Today));
+        Assert.Equal("{[]:[عدد المعاملات]=\"15\"}", StructuredRepositoryQuery.Compile(
+            new("عدد المعاملات", "equals", "15"), fields, Today));
+    }
+
+    [Fact]
+    public void CalendarPeriodsCoverTheWholeYearMonthAndLeapDay()
+    {
+        string Compile(string operation, CalendarPeriod period) => StructuredRepositoryQuery.Compile(
+            new RepositoryFilter(Field: "created", Operator: operation, Period: period), [], new DateOnly(2026, 10, 8));
+        Assert.Equal("({LF:Created>=\"2026-01-01\"} & {LF:Created<\"2027-01-01\"})", Compile("in_period", new(2026)));
+        Assert.Equal("{LF:Created<\"2043-01-01\"}", Compile("through_period", new(2042)));
+        Assert.Equal("{LF:Created<\"2042-01-01\"}", Compile("before_period", new(2042)));
+        Assert.Equal("{LF:Created>=\"2042-01-01\"}", Compile("from_period", new(2042)));
+        Assert.Equal("{LF:Created>=\"2043-01-01\"}", Compile("after_period", new(2042)));
+        Assert.Equal("({LF:Created>=\"2024-02-01\"} & {LF:Created<\"2024-03-01\"})", Compile("in_period", new(2024, 2)));
+        Assert.Equal("({LF:Created>=\"2024-02-29\"} & {LF:Created<\"2024-03-01\"})", Compile("in_period", new(2024, 2, 29)));
+        Assert.Throws<ArgumentException>(() => Compile("in_period", new(2023, 2, 29)));
+        Assert.Throws<ArgumentException>(() => Compile("in_period", new(2024, Day: 1)));
+        Assert.Throws<ArgumentException>(() => Compile("in_period", new(9999)));
+        Assert.Throws<ArgumentException>(() => StructuredRepositoryQuery.Compile(
+            new RepositoryFilter(Field: "name", Operator: "in_period", Period: new(2042)), [], new DateOnly(2026, 10, 8)));
+        Assert.Throws<ArgumentException>(() => StructuredRepositoryQuery.Compile(
+            new RepositoryFilter(Field: "created", Operator: "in_period", Period: new(2042), Value: "2042-01-01"), [], new DateOnly(2026, 10, 8)));
+    }
+    [Fact]
+    public void TagsCompileFromLiveDefinitionsWithAndOrAndExclusion()
+    {
+        string[] tags = ["قيد الفحص", "معتمد"];
+        var filter = new RepositoryFilter(Logic: "and", Conditions: [
+            new(Tag: "قيد الفحص", Operator: "has_tag"),
+            new(Tag: "معتمد", Operator: "not_tag"),
+            new("موعد الإنجاز", "less_than", "2042-01-01")]);
+        Assert.Equal("({LF:Tags=\"قيد الفحص\"} & ({LF:Name=\"*\", Type=DF} - {LF:Tags=\"معتمد\"}) & {[]:[موعد الإنجاز]<\"2042-01-01\"})",
+            StructuredRepositoryQuery.Compile(filter, Schema, Today, tags: tags));
+        Assert.Throws<ArgumentException>(() => StructuredRepositoryQuery.Compile(filter, Schema, Today));
+        Assert.Throws<ArgumentException>(() => StructuredRepositoryQuery.Compile(new(Tag: "غير معرف", Operator: "has_tag"), Schema, Today, tags: tags));
+        Assert.Throws<ArgumentException>(() => StructuredRepositoryQuery.Compile(new(Field: "القسم", Tag: "قيد الفحص", Operator: "has_tag"), Schema, Today, tags: tags));
+        Assert.Throws<ArgumentException>(() => StructuredRepositoryQuery.Compile(new(Tag: "قيد الفحص", Operator: "equals", Value: "نعم"), Schema, Today, tags: tags));
+        Assert.Equal("({LF:Tags=\"قيد الفحص\"} | {LF:Tags=\"معتمد\"})", StructuredRepositoryQuery.Compile(
+            new(Logic: "or", Conditions: [new(Tag: "قيد الفحص", Operator: "has_tag"), new(Tag: "معتمد", Operator: "has_tag")]), Schema, Today, tags: tags));
+    }
+
     [Fact]
     public void DocumentIntentRejectsAggregationAndMissingSelectionBeforeLiveExecution()
     {

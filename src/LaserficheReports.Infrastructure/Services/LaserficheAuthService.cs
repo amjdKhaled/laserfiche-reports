@@ -66,6 +66,7 @@ internal sealed class LaserficheAuthService : ILaserficheAuthService
     private readonly LaserficheOptions       _options;
     private readonly IHttpContextAccessor    _httpContextAccessor;
     private readonly ILogger<LaserficheAuthService> _logger;
+    private readonly ISessionCredentialStore? _sessionCredentials;
 
     // Per-cache-key semaphores that guarantee single-flight token acquisition.
     // A new SemaphoreSlim(1,1) is created on first use for each key and kept for
@@ -82,7 +83,8 @@ internal sealed class LaserficheAuthService : ILaserficheAuthService
         IMemoryCache cache,
         IOptions<LaserficheOptions> options,
         IHttpContextAccessor httpContextAccessor,
-        ILogger<LaserficheAuthService> logger)
+        ILogger<LaserficheAuthService> logger,
+        ISessionCredentialStore? sessionCredentials = null)
     {
         _httpClientFactory   = httpClientFactory;
         _credentialProvider  = credentialProvider;
@@ -91,6 +93,7 @@ internal sealed class LaserficheAuthService : ILaserficheAuthService
         _cache               = cache;
         _options             = options.Value;
         _logger              = logger;
+        _sessionCredentials  = sessionCredentials;
     }
 
     /// <summary>
@@ -103,7 +106,9 @@ internal sealed class LaserficheAuthService : ILaserficheAuthService
     private string CacheKeyFor(RepositoryDescriptor repository)
     {
         var scope = CurrentScope();
-        var key = $"{CacheKeyPrefix}{repository.Key}:{repository.RepositoryId}:{scope}:g{GenerationFor(scope)}";
+        var serverHash = Convert.ToHexString(SHA256.HashData(
+            Encoding.UTF8.GetBytes(repository.ServerUrl.TrimEnd('/').ToLowerInvariant())))[..16];
+        var key = $"{CacheKeyPrefix}{serverHash}:{repository.Key}:{repository.RepositoryId}:{scope}:g{GenerationFor(scope)}";
         _logger.LogInformation(
             "[LF AUTH] Token cache key used. Repository={RepositoryId}; Scope={Scope}; Key={CacheKey}.",
             repository.RepositoryId, scope, key);
@@ -225,14 +230,17 @@ internal sealed class LaserficheAuthService : ILaserficheAuthService
                     var renewed = await RequestRefreshTokenAsync(
                         _adapter.BuildTokenUrlV2(repository.RepositoryId), refreshToken, cancellationToken)
                         .ConfigureAwait(false);
-                    CacheTokenResponse(repository, cacheKey, renewed);
+                    CacheTokenResponse(repository, cacheKey, renewed, preserveRefreshToken: true);
                     return renewed.AccessToken;
                 }
                 catch (UnauthorizedAccessException)
                 {
                     _cache.Remove(RefreshKeyFor(repository));
                     _cache.Set("LFRefreshRejected:" + cacheKey, true, TimeSpan.FromHours(8));
-                    throw; // Never silently change accounts after a rejected refresh.
+                    // Only the selected reports session's own stored credentials
+                    // may recover a rejected refresh. Never use the disk provider.
+                    return await RecoverReportsSessionAsync(repository, cacheKey, cancellationToken)
+                        .ConfigureAwait(false);
                 }
             }
 
@@ -254,6 +262,9 @@ internal sealed class LaserficheAuthService : ILaserficheAuthService
                 throw new UnauthorizedAccessException(
                     "The External Share repository session has expired. Sign in again.");
             }
+
+            if (IsStoredReportsSession())
+                return await RecoverReportsSessionAsync(repository, cacheKey, cancellationToken).ConfigureAwait(false);
 
             // A browser identity established by either interactive login flow owns a
             // user-specific token. If that token disappears from the cache, never fall
@@ -305,6 +316,46 @@ internal sealed class LaserficheAuthService : ILaserficheAuthService
         }
     }
 
+    private bool IsStoredReportsSession()
+    {
+        try { return _httpContextAccessor.HttpContext?.Session.GetString("AuthenticationScopeMethod") == "Reports"; }
+        catch (InvalidOperationException) { return false; }
+    }
+
+    private async Task<string> RecoverReportsSessionAsync(RepositoryDescriptor repository,
+        string cacheKey, CancellationToken cancellationToken)
+    {
+        if (!IsStoredReportsSession())
+            throw new UnauthorizedAccessException("The Laserfiche session expired. Sign in again.");
+        var session = _httpContextAccessor.HttpContext?.Session;
+        if (_sessionCredentials is null || session?.GetString("AuthenticationScopeMethod") != "Reports" ||
+            !string.Equals(session.GetString("ActiveRepositoryId"), repository.RepositoryId, StringComparison.OrdinalIgnoreCase))
+            throw new UnauthorizedAccessException("The Laserfiche session expired. Sign in again.");
+        var credentials = await _sessionCredentials.TryGetAsync(cancellationToken).ConfigureAwait(false);
+        if (credentials is null)
+            throw new UnauthorizedAccessException("The Laserfiche session expired. Sign in again.");
+        _cache.Set("LFRefreshRejected:" + cacheKey, true, TimeSpan.FromHours(8));
+        try
+        {
+            var renewed = await RequestTokenAsync(_adapter.BuildTokenUrlV2(repository.RepositoryId),
+                credentials.Username, credentials.Password, cancellationToken, retryTooManyRequests: false)
+                .ConfigureAwait(false);
+            CacheTokenResponse(repository, cacheKey, renewed);
+            _logger.LogInformation("Stage=SESSION_RENEWAL Status=recovered Repository={Repository}", repository.RepositoryId);
+            return renewed.AccessToken;
+        }
+        catch (Domain.Exceptions.LaserficheException error) when (error.StatusCode is 400 or 401 or 403)
+        {
+            throw new UnauthorizedAccessException("The Laserfiche session credentials were rejected. Sign in again.");
+        }
+        catch
+        {
+            // A transient failure must allow a later retry, not poison the session.
+            _cache.Remove("LFRefreshRejected:" + cacheKey);
+            throw;
+        }
+    }
+
     private bool IsExternalShareSession()
     {
         try
@@ -343,6 +394,22 @@ internal sealed class LaserficheAuthService : ILaserficheAuthService
         _cache.Remove(cacheKey);
         _logger.LogDebug("Token cache invalidated for repository {Key}.", repository.Key);
         return Task.CompletedTask;
+    }
+
+    public async Task InvalidateTokenAsync(RepositoryDescriptor repository, string rejectedToken)
+    {
+        var cacheKey = CacheKeyFor(repository);
+        var gate = _keyLocks.GetOrAdd(cacheKey, static _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            // A delayed 401 for token A must never evict token B acquired by
+            // another request. Use the same gate as acquisition to avoid races.
+            if (_cache.TryGetValue(cacheKey, out string? current) &&
+                string.Equals(current, rejectedToken, StringComparison.Ordinal))
+                _cache.Remove(cacheKey);
+        }
+        finally { gate.Release(); }
     }
 
     /// <inheritdoc />
@@ -403,7 +470,7 @@ internal sealed class LaserficheAuthService : ILaserficheAuthService
             // and is the primary reason a single login can surface as HTTP 429.
             var tokenResponse = await RequestTokenAsync(
                     tokenUrl, username, password, cancellationToken,
-                    retryTooManyRequests: false)
+                    retryTooManyRequests: false, explicitLogin: true)
                 .ConfigureAwait(false);
 
             // Warm the token cache so subsequent GetTokenAsync calls skip re-authentication.
@@ -464,13 +531,19 @@ internal sealed class LaserficheAuthService : ILaserficheAuthService
     private void CacheTokenResponse(
         RepositoryDescriptor repository,
         string cacheKey,
-        TokenResponse response)
+        TokenResponse response,
+        bool preserveRefreshToken = false)
     {
         var expirySeconds = Math.Max(1, Math.Min(response.ExpiresIn, Math.Max(response.ExpiresIn - EarlyExpiryBufferSeconds, 30)));
         _cache.Remove("LFRefreshRejected:" + cacheKey);
         _cache.Set(cacheKey, response.AccessToken, TimeSpan.FromSeconds(expirySeconds));
         if (!string.IsNullOrWhiteSpace(response.RefreshToken))
             _cache.Set(RefreshKeyFor(repository), response.RefreshToken, TimeSpan.FromHours(8));
+        // A successful refresh may return only an access token. Keep the existing
+        // refresh token (and its original expiry) unless the server rotates it.
+        // A new password login must still discard the previous identity's token.
+        else if (!preserveRefreshToken)
+            _cache.Remove(RefreshKeyFor(repository));
     }
 
     /// <summary>
@@ -492,14 +565,15 @@ internal sealed class LaserficheAuthService : ILaserficheAuthService
         string username,
         string password,
         CancellationToken cancellationToken,
-        bool retryTooManyRequests = true)
+        bool retryTooManyRequests = true,
+        bool explicitLogin = false)
     {
         var cooldownKey = "LFLoginCooldown:" + tokenUrl + ":" +
             Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(username.ToUpperInvariant())));
         // 9030 is a session/license rejection, not transient request throttling.
         // Share its short cooldown across parallel reads for this account/repository.
         var sessionLimitKey = "LFSessionLimit:" + cooldownKey;
-        if (retryTooManyRequests && _cache.TryGetValue(sessionLimitKey, out Domain.Exceptions.LaserficheException? sessionLimit) && sessionLimit is not null)
+        if (!explicitLogin && _cache.TryGetValue(sessionLimitKey, out Domain.Exceptions.LaserficheException? sessionLimit) && sessionLimit is not null)
             throw sessionLimit;
         if (!retryTooManyRequests && _cache.TryGetValue(cooldownKey, out DateTimeOffset retryAt))
             throw new Domain.Exceptions.LaserficheException(

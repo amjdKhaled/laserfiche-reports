@@ -98,6 +98,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ITextEmbeddingService, OllamaTextEmbeddingService>();
         services.AddScoped<ILaserficheDocumentIngestionService, LaserficheDocumentIngestionService>();
         services.AddScoped<ILaserficheTemplateService, LaserficheTemplateService>();
+        services.AddScoped<ILaserficheTagDefinitionService, LaserficheTagDefinitionService>();
         services.AddScoped<LaserficheAnalyticsService>();
         services.AddScoped<ILaserficheAnalyticsService, CachedLaserficheAnalyticsService>();
 
@@ -167,6 +168,9 @@ public static class ServiceCollectionExtensions
         })
         .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
         {
+            // Factory handlers are pooled across browser sessions. Authentication
+            // is carried by each request's Bearer token, never a shared cookie jar.
+            UseCookies = false,
             AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate
         })
         .AddHttpMessageHandler<LaserficheRequestLoggingHandler>();
@@ -180,6 +184,7 @@ public static class ServiceCollectionExtensions
         })
         .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
         {
+            UseCookies = false,
             AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate
         })
         .AddHttpMessageHandler<BearerTokenHandler>()

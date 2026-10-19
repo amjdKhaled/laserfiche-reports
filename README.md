@@ -60,7 +60,7 @@ an existing document in this mode updates its metadata evidence without
 deleting its existing OCR page chunks.
 
 1. Run local Supabase and Ollama. Ensure `nomic-embed-text-v2-moe` and
-   `qwen2.5:7b` are installed in Ollama.
+   `gpt-oss:20b` are installed in Ollama.
 2. Copy `src/LaserficheReports.Web/appsettings.Local.example.json` to
    `src/LaserficheReports.Web/appsettings.Local.json` and enter your existing
    Laserfiche and local PostgreSQL details. Do not commit the private file.
@@ -75,7 +75,7 @@ powershell -ExecutionPolicy Bypass -File .\tools\reports-graph\setup.ps1
 5. In a dedicated PowerShell window start the answer graph:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\reports-graph\start.ps1 -Model qwen2.5:7b
+powershell -ExecutionPolicy Bypass -File .\tools\reports-graph\start.ps1 -Model gpt-oss:20b
 ```
 
 6. In another PowerShell window start .NET:
@@ -396,7 +396,7 @@ table headings, currency/units, workflow execution, filenames versus page conten
 incomplete multipart answers and comparisons across both requested documents.
 
 ```powershell
-.\tools\reports-graph\.venv\Scripts\python.exe .\tools\reports-graph\evaluate.py --model qwen2.5:7b
+.\tools\reports-graph\.venv\Scripts\python.exe .\tools\reports-graph\evaluate.py --model gpt-oss:20b
 ```
 
 The evaluator verifies expected status, required/allowed references and quotation contents;
@@ -558,3 +558,318 @@ columns, styling, model and unlimited timeouts remain unchanged. Tests exercise
 invalid grammar combinations, valid ranges, complete 73-document chat execution
 with live-service fixtures and one-column rendering. They do not replace acceptance
 against the deployed Qwen and Laserfiche services.
+
+### Planner v5.9: live field namespace and year bounds
+
+The planner now constrains sorting, grouping, metric fields and template names
+to the selected repository catalog, in addition to filter fields. API property
+aliases (`creationTime`, `lastModifiedTime`, `id`) are translated to their query
+properties (`created`, `modified`, `entryId`) before validation, only when the
+alias is not itself an actual metadata field. Sort expressions keep API names.
+The incomplete legacy `field` shortcut is no longer offered in the generation
+schema; structured filters carry both the field and its predicate.
+
+Arabic upper-bound phrases such as `2036 وما أقل` are explained to the model as
+one selection condition, not a request for a second oldest-document report.
+A single total uses `countOnly`; an inclusive Gregorian year bound on a date
+field uses `<2037-01-01`. Retention duration, retention year and creation time
+must not be substituted for one another. Ambiguous field meaning still needs
+clarification. These are planning instructions, not a guarantee of model accuracy.
+
+`PLANNER_VALIDATED` now logs the chosen field/operator tree and sort choices
+without logging filter values. Regression tests use simulated model responses;
+acceptance testing must also compare answers from the installed local model
+against the actual repository, especially expiry/retention questions.
+
+After updating, restart the graph process and confirm `planner=intent-v5.9`.
+
+### Planner v6.0: general semantic intent audit
+
+Normal `/route` requests now include an independent local-model intent audit
+after schema/type validation and before any Laserfiche query is returned. The
+audit checks output type, scope, all conditions and logical nesting, actual field
+meanings/types, and calendar/date boundaries against the original question,
+live catalog and conversation history. A rejected plan is repaired and audited
+again under the same overall planning deadline. Repeated semantic rejection
+never returns an executable plan; genuine ambiguity can return a precise
+clarification. Invalid model output and dependency failures remain explicit errors.
+
+The instructions cover general AND/OR conditions, negation, empty values,
+numeric and date ranges, units, follow-ups, counts versus lists, sorting and
+content analysis. They do not implement a hard-coded router for particular
+Arabic questions. Unsupported calculations/calendars/criteria must be clarified,
+not silently approximated. A general question uses the entire selected repository
+unless explicitly restricted; content evidence still has retrieval coverage limits.
+
+Confirm `planner=live-plan-v7.4; planIntentReview=True` on restart, and
+`planIntentReview: true` in `/health`. `PLAN_INTENT_REVIEW` logs the checks. The
+additional audit normally adds one model call, and failed plans can require
+two additional calls. On slow CPU-only installations this increases latency.
+The `--skip-plan-review` server flag explicitly opts out of this safeguard.
+
+The reviewer uses the same local model in a separate call; it is fallible. Unit
+and HTTP tests simulate responses to verify rejection, repair, safe clarification,
+context preservation and shared deadlines. They do not prove the installed
+model understands every future question or validate counts against a real
+Laserfiche repository. Live acceptance testing remains necessary.
+
+The planner and reviewer also receive a bounded live metadata sample (up to
+eight documents, three distinct values per field, 80 characters per value).
+It helps distinguish full field names, units and calendar variants without
+repository-specific field mappings or canned questions. Missing sample values
+never prove absence. Sampling has a 15-second budget; an unavailable sample
+does not prevent planning against the authoritative field definitions.
+No OCR or document-content samples are added to the catalog.
+
+Count answers retain the document table, source references and live-document
+links, alongside the exact server total when available. The displayed rows are
+bounded by the requested page size and are labelled as partial when more exist;
+the total is never inferred from those rows. No stylesheet or table component
+changes are required.
+
+Planner v6.2 generates an exclusive folder locator (`selection.folder.id` or
+`selection.folder.name`); the Python boundary translates it to the existing
+backend contract. The generation grammar cannot include both. Existing API
+clients with a single flat folder selector remain compatible. A generated
+clarification must contain one non-executable report and a non-empty specific
+question, rather than an incomplete query or a mixed report.
+
+The reviewer receives explicit repository/presentation defaults and complete
+relative date anchors. It must not invent a folder, ordering, grouping or state
+field absent from the original request/catalog. Instructions are shorter and
+contain no repository-specific field mapping. `PLANNER_DRAFT` logs operations
+and filter shapes before validation without field values, document contents or
+raw questions. Repository API v2 metadata `id` is preserved as the definition
+ID, alongside the older `fieldId`/`fieldDefinitionId` shapes.
+
+Planner v6.3 first interprets the requested outputs and condition shape in a
+small independent call, without catalog fields or a proposed plan. It then
+constrains the catalog-backed generation grammar: a simple count cannot become
+grouping, and a single one-sided bound cannot become a two-sided range. The
+same invariants are checked after parsing, even if the model bypasses the
+generation grammar. Explicit grouping, ranges, multiple reports and genuine
+clarifications remain supported. No question-specific field/year mappings
+are used. `QUESTION_INTENT` logs output types and condition shapes.
+
+Retries use the original question, catalog and independent interpretation,
+without replaying the rejected draft. The semantic reviewer still checks the
+actual selected field, calendar and dates against the original request. This
+adds one small interpretation call; it does not make the local model infallible.
+`evaluate_planner.py` exercises the same interpretation and review path as HTTP.
+The tests use scripted model responses and do not validate the user's live
+Qwen model or repository totals. The document-table UI is unchanged.
+
+Planner v6.4 corrects two shortcomings of v6.3: an interpretation could invent
+multiple outputs from one current request, and the multi-output grammar pooled
+comparison choices while the validator enforced them by report position.
+The interpreter now quotes distinct request evidence and explicit bound evidence
+from the current question. Invented, overlapping range bounds and duplicated
+requests are rejected and reinterpreted before catalog-backed planning. Exact
+repeated attempts and their responses are removed from planning history; other
+follow-up context remains. This is evidence validation, not a question-keyword
+router. Arabic instructions cover intent decomposition without repository field
+names, example years or question-specific handlers.
+
+Each output has its own indexed object/selection/filter schema, so the second
+output cannot decode the first output's comparison constraints. The transport
+normalizes indexed outputs into the unchanged backend reports array. If semantic
+review rejects the result, the interpreter can reconsider its initial reading
+instead of requiring the planner to preserve an incorrect intent forever.
+
+Timeout defaults remain zero/unlimited, including CPU-only use. To capture a
+real Qwen failure locally, add `-PlannerTracePath .\logs\planner-trace.jsonl`
+to `tools/reports-graph/start.ps1`. The opt-in file contains the original
+question/history/catalog, exact prompt messages, decoding schemas and model
+replies; no authentication headers or OCR are captured. Keep it local and review
+its metadata values before sharing. It resides under the ignored logs directory.
+`tools/reports-graph/replay_planner.py --trace logs/planner-trace.jsonl` can
+replay captured interpretation calls locally with no response timeout and no
+Laserfiche credentials. `--stage RepositoryPlannerSchema` replays planning calls.
+The trace allows diagnosing the actual model rather than inferring its reasoning
+from operation summaries. Tests still use scripted replies and cannot establish
+live model accuracy or repository totals. Table UI/formatting remain unchanged.
+
+Planner v6.5 fixes clarification replies being validated as independent questions.
+The web response marks a clarification and carries its original user question;
+the browser preserves that metadata in repository-scoped conversation history.
+The interpreter chooses current, followup or clarification_reply context. Evidence
+for a clarification reply can quote the original request and current answer, so a
+field/calendar choice need not repeat the count and year. An independent new
+question still grounds evidence in its own text. Legacy unmarked history can use
+followup context. Subsequent clarifications retain the original request.
+
+Failed exchanges are kept visible but excluded from planning history. Retrying
+an answer therefore preserves the earlier clarification rather than incorporating
+failure messages. The send control is restored when outstanding operations finish.
+HTTP 409 session_busy remains retryable in the current login; session_scope_changed
+and HTTP 401 require authentication. No table, stylesheet, export or document-link
+layout changes are made, and model/planner deadlines remain unlimited by default.
+
+This update includes C# and browser changes: stop both processes, pull the branch,
+restart the graph (confirm intent-v6.5), run the web project with a build, and refresh
+the browser with Ctrl+F5. Do not use --no-build until the new web assembly is built.
+The opt-in planner trace still records the original inputs and individual calls.
+Regression tests cover clarification replies, retry after failure in the same
+conversation/session, metadata round trips and repository-change authentication.
+They simulate model replies and do not certify the installed Qwen's semantics.
+
+
+### Live planner v7.0
+
+The HTTP route now plans directly from the current question, conversation and live
+catalog. The older independent intent experiment remains available to unit tests
+but no longer fixes report count/bound grammar before the planner has seen fields.
+This removes the exact-quotation extraction gate that produced the reported 503s.
+A valid clarification is delivered directly; it is not audited as a query missing
+filters. Executable plans still undergo live-name/type/date validation and semantic
+review; rejected queries are never executed. No repository field or year is mapped
+in code. The reduced, reachable tool schema is supplied both to Ollama's `format`
+and in the system prompt, with a context window sized for both plus output space.
+Model/planner response timeouts remain zero/unlimited by default. Tables are unchanged.
+
+Metadata/count reports already search the live repository on each request. Content
+reports now discover their current document scope from Laserfiche and await ingestion
+before index retrieval, including new documents. A refresh failure aborts retrieval;
+it does not return old indexed passages. Unrestricted content requests refresh every
+accessible document returned by the full live search; an incomplete search requires a
+narrower scope. This can be expensive, especially with local OCR enabled: freshness
+means waiting for extraction/embedding, not instantaneous OCR. Results are not a
+transactional snapshot during concurrent repository edits. This does not make sampled
+content retrieval an exact repository-wide count.
+
+Restart both services after pulling and confirm `planner=live-plan-v7.4`. Run the web
+project with a build (do not use `--no-build`). Keep `-PlannerTracePath` enabled for
+acceptance with the real model. `replay_planner.py` now defaults to `LivePlannerSchema`
+and preserves schema embedding when replaying new traces; old stages can be selected
+with `--stage QuestionIntent` or `--stage RepositoryPlannerSchema`.
+The automated tests exercise contracts, mock model failures and refresh ordering;
+they do not prove semantic correctness of Qwen or actual repository counts. Validate
+natural-language questions against known live entries and expected counts, and test
+adding/modifying a document then repeating the same report.
+
+### Live planner v7.1: current tag definitions and clarification ownership
+
+The catalog now reads every page of the active repository's `TagDefinitions`
+on each request, alongside live fields and templates. The typed filter grammar
+supports `has_tag` and `not_tag`, including AND/OR combinations with field filters.
+Tag names are validated against current definitions and compiled by the backend;
+the model cannot submit raw search syntax. No tag, field or question is mapped in
+code. A denied or unsupported tag-definition endpoint is marked `unavailable`,
+not represented as a complete empty catalog. Authentication failures still fail.
+
+The same planning call identifies whether the current message starts a question,
+continues a report or answers a pending clarification. A new question's clarification
+no longer inherits an unrelated old question. This does not add another model call.
+Table rendering and default unlimited AI deadlines are unchanged.
+
+Laserfiche's search UI includes capabilities not yet represented by these tools,
+including version-specific conditions, records-management disposition, digital
+signatures and business-process predicates. The planner is instructed to explain
+missing capabilities instead of substituting an unrelated metadata condition.
+Supporting tags does not establish correctness of date-field interpretation by
+the real model; automated tests use controlled catalogs and model responses.
+
+To capture a real failed request, restart **both** the web application (with a build)
+and the graph, reproduce the question, and collect the local planning diagnostic:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\reports-graph\start.ps1 -Model gpt-oss:20b -TimeoutSeconds 0 -PlannerTimeoutSeconds 0 -PlannerTracePath .\logs\planner-trace.jsonl
+# After reproducing the question, run in another terminal at the repository root:
+powershell -ExecutionPolicy Bypass -File .\tools\reports-graph\diagnose.ps1
+```
+
+`logs/planner-diagnostics.json` contains the latest request's question, conversation,
+live catalog, individual model calls and graph version. It does not collect API
+credentials, cookies or OCR. Its repository metadata and question text may be
+sensitive; share only with the person diagnosing the report. The authenticated
+read-only `/api/reports/planning-catalog` endpoint also exposes the current catalog
+from the same selected repository and session as chat.
+
+### Reports session recovery and Search Syntax
+
+Live repository queries already execute through `SearchAsync` using Laserfiche
+Search Syntax generated by `StructuredRepositoryQuery`. The planner chooses
+validated predicates, names and types; the backend emits the actual syntax,
+including field comparisons, tag predicates and AND/OR parentheses. Reference:
+https://doc.laserfiche.com/laserfiche.documentation/12/userguide/en-us/content/search-syntax.htm
+Sending unconstrained syntax from the model would not fix semantic mistakes;
+the current compiler makes name, type and operator validation possible before
+executing. The web log's `Stage=COMPILED_SEARCH` is available at Debug level.
+
+An expired reports-session token first uses refresh-token renewal. If renewal is
+rejected, or no refresh token exists, the service may restore the **same** user's
+selected repository using that session's encrypted stored credentials under the
+existing single-flight lock. It never uses the configured disk/service account
+for this recovery. Rejected credentials stop repeated automatic password attempts;
+temporary dependency failures allow retry. LFDS and External Share behavior is
+unchanged. A final authentication failure now returns `401 session_expired`,
+which opens the existing login dialog instead of an opaque `chat_failed` error.
+This restores sessions during long planning requests without keeping a live
+Laserfiche search running throughout model generation. It does not fix a rejected
+AI plan: planning and repository authentication are separate stages.
+
+### Live planner v7.2: backend calendar periods and compatible-service handshake
+
+Gregorian Date/DateTime predicates can use `period={year:Y, month:M?, day:D?}`.
+`in_period` compiles to `>=start AND <next-period-start`; `through_period` to
+`<next-period-start`; `before_period` to `<start`; `from_period` to `>=start`;
+`after_period` to `>=next-period-start`. The backend handles year/month rollover
+and leap days. Invalid calendar dates, numeric/text fields and mixed period/literal
+bounds are rejected. These work within the same AND/OR tree as other conditions.
+The model selects the requested period; it no longer needs to invent both dates
+for a year-only question. Numeric years remain numeric comparisons, and Hijri
+interpretation/conversion is not silently added. No repository field or year is
+configured in code. Existing literal and relative date filters remain supported.
+
+The planner instructions explain the built-in entry properties, so repository
+creation dates do not depend on a custom field literally named like the question.
+The authenticated web client now requires `/health` to advertise
+`planningProtocol=live-periods-v1`. Earlier intent-v6 servers used the same routing
+version and could pass the old handshake after a source pull. They are now rejected
+before sending the question, with an instruction to restart the graph. Restart
+**both services** and verify `planner=live-plan-v7.4` before testing this release.
+
+Regression tests cover the screenshot's year-only question through the graph HTTP
+contract, C# routing and live-search compilation to the existing document table,
+using controlled model/API responses. They cover compound period/tag/number counts,
+period boundaries and stale-service detection. They do not measure the installed
+Qwen model's interpretation or establish actual repository totals. Capture a
+failed real question with `-PlannerTracePath`, then run `diagnose.ps1` for acceptance.
+Direct-plan repairs also restart from the original question/catalog plus validation
+feedback, without replaying the invalid assistant draft as conversation history.
+
+
+### Native planner grammar compatibility (v7.3)
+
+The uploaded failing traces contained array filters and year-only date values
+outside the declared schema. The direct planner had combined `properties` and
+`anyOf` required-only alternatives in one selection object. llama.cpp does not
+support that intersection. Keep complete object alternatives and share property
+schemas through direct references instead. Numeric patterns now use ordinary
+capture groups, supported by the converter, rather than non-capturing groups.
+These changes do not encode field names, question words or years in production.
+
+Validation: the old captured contract failed llama.cpp's Python converter at
+`required: [filters]`; removing that defect exposed its unsupported numeric
+pattern. The corrected contract compiled using the captured live catalog.
+`test_live_planner.py` guards the schema structure and captured failure shapes.
+For the optional native conversion test, set `LLAMA_SCHEMA_CONVERTER` to
+`examples/json_schema_to_grammar.py` from ggml-org/llama.cpp commit `00681df`, then
+run `python -m unittest discover -s tools/reports-graph -p test_native_grammar.py`.
+The external converter is a test tool only, not a runtime dependency.
+
+This verifies schema compatibility, not Qwen semantic accuracy or the totals in
+an on-prem repository. Semantic review and live backend execution remain in
+place. Opt-in traces now include `plan_rejected` validation diagnostics as well
+as model responses. Restart the graph after pulling and check `live-plan-v7.4`.
+
+
+### التشغيل المستقل والتغليف المحلي
+
+دليل تثبيت Windows بدون Visual Studio، والبدء التلقائي، والتشغيل والنقل باستخدام Docker:
+[deployment/README.md](deployment/README.md). إصدار المخطط `live-plan-v7.4` يعرض اقتراحات توضيح من الكتالوج عند تعذر التخطيط بعد إعادة المحاولة، دون تنفيذ بديل غير مؤكد.
+
+
+### QA and clarification recovery (live-plan-v7.5)
+
+See [deployment/QA.md](deployment/QA.md) for the generated 100,000-case contract run, discovered fixes, and the separate resumable Qwen language evaluation. These are different test layers; contract passes are not language-accuracy scores.

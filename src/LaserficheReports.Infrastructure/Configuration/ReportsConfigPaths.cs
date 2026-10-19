@@ -20,9 +20,9 @@ namespace LaserficheReports.Infrastructure.Configuration;
 ///         ApiVersion, TimeoutSeconds, CredentialProvider).  NEVER contains repository
 ///         identifiers — repository selection is runtime session context.</item>
 ///   <item><c>%ProgramData%\LaserficheReports\laserfiche.runtime.json</c> — written by the runtime
-///         Settings page.  Administrator overrides entered after installation.  The installer
-///         never creates, modifies, or removes this file, so admin-entered settings survive
-///         repair, upgrade, and reinstall.</item>
+///         Settings page.  Administrator overrides entered after installation.  Passive repair/upgrade preserves this file. Explicit setup reconfiguration
+///         replaces only the selected Laserfiche connection overrides transactionally;
+///         unrelated runtime settings are retained.</item>
 /// </list>
 /// <para>
 /// The application never requires write access inside its install directory

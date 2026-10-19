@@ -100,6 +100,9 @@ public sealed class LaserficheApiAdapter : ILaserficheApiAdapter
     public string BuildTemplateDefinitionsUrl(string repositoryId) =>
         $"{RepoBase(repositoryId)}/TemplateDefinitions";
 
+    public string BuildTagDefinitionsUrl(string repositoryId) =>
+        $"{RepoBase(repositoryId)}/TagDefinitions";
+
     public string BuildFieldDefinitionsUrl(string repositoryId) =>
         $"{RepoBase(repositoryId)}/FieldDefinitions";
 

@@ -1,7 +1,7 @@
 name: Verify Reports
 on:
   push:
-    branches: [feature/reports-chat-langgraph]
+    branches: [feature/reports-chat-langgraph, fix/typed-semantic-repository-plans]
   pull_request:
 jobs:
   dotnet:
@@ -11,13 +11,57 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
       - run: dotnet test LaserficheReports.sln --configuration Release
       - shell: pwsh
         run: |
           $parseErrors = $null
           $tokens = $null
-          [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path scripts/configure-database.ps1), [ref]$tokens, [ref]$parseErrors) | Out-Null
-          if ($parseErrors.Count -gt 0) { throw ($parseErrors | Out-String) }
+          Get-ChildItem scripts,deployment/windows,tools/reports-graph,build,installer -Filter *.ps1 -Recurse | ForEach-Object {
+            [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$parseErrors) | Out-Null
+            if ($parseErrors.Count -gt 0) { throw ($parseErrors | Out-String) }
+          }
+      - shell: pwsh
+        run: ./deployment/windows/build-package.ps1
+      - name: Build EXE and MSI from the verified source
+        shell: pwsh
+        run: ./build/publish.ps1 -Version "1.0.$env:GITHUB_RUN_NUMBER"
+      - name: Test native install, repair, rollback, upgrade and removal
+        shell: pwsh
+        run: ./installer/Test-ReportsInstallation.ps1 -MsiPath "./artifacts/LaserficheReports-1.0.$env:GITHUB_RUN_NUMBER/LaserficheReports.msi"
+      - name: Collect Reports runtime diagnostics
+        if: always()
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts/acceptance/runtime | Out-Null
+          if (Test-Path "$env:ProgramData/LaserficheReports/logs") {
+            Copy-Item "$env:ProgramData/LaserficheReports/logs/*" artifacts/acceptance/runtime -Recurse -Force
+          }
+          Get-Service LaserficheReports -ErrorAction SilentlyContinue | Format-List * | Out-File artifacts/acceptance/service.txt
+          Get-WinEvent -FilterHashtable @{LogName='Application';StartTime=(Get-Date).AddMinutes(-20)} -ErrorAction SilentlyContinue |
+            Where-Object ProviderName -match 'Reports|\.NET Runtime|Application Error' |
+            Select-Object -First 20 TimeCreated,ProviderName,Message | Format-List | Out-File artifacts/acceptance/events.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Reports-Installer-Acceptance
+          path: artifacts/acceptance/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LaserficheReports-Setup
+          path: |
+            artifacts/LaserficheReports-*/LaserficheReports-Setup.exe
+            artifacts/LaserficheReports-*/LaserficheReports.msi
+            artifacts/LaserficheReports-*/build-info.json
+            artifacts/LaserficheReports-*/SHA256SUMS.txt
+            artifacts/LaserficheReports-*/python-dependencies.txt
+            artifacts/LaserficheReports-*/README.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LaserficheReports-Windows
+          path: artifacts/*.zip
   python:
     runs-on: ubuntu-latest
     steps:

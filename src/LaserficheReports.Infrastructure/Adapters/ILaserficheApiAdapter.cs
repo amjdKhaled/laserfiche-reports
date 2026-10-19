@@ -59,6 +59,11 @@ public interface ILaserficheApiAdapter
     /// <summary>Builds the repository-wide field-definitions endpoint URL.</summary>
     string BuildFieldDefinitionsUrl(string repositoryId);
 
+    /// <summary>Builds the repository-wide tag-definitions endpoint URL.</summary>
+    string BuildTagDefinitionsUrl(string repositoryId) =>
+        BuildTemplateDefinitionsUrl(repositoryId).Replace("/TemplateDefinitions", "/TagDefinitions", StringComparison.Ordinal);
+
+
     /// <summary>
     /// Builds the ByPath lookup endpoint. Passing <c>\</c> resolves the repository root.
     /// </summary>

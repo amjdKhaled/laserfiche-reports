@@ -376,6 +376,11 @@ internal sealed class LaserficheSearchService : ILaserficheSearchService
             return new ResultPage(items, null, items.Count);
         }
 
+        using var document = JsonDocument.Parse(body);
+        if (document.RootElement.ValueKind != JsonValueKind.Object ||
+            !TryGetPropertyIgnoreCase(document.RootElement, "value", out var rows) || rows.ValueKind != JsonValueKind.Array)
+            throw new JsonException("Search response did not contain a result array; cannot interpret it as zero matches.");
+
         var result = JsonSerializer.Deserialize<ODataPagedList<SearchResultResource>>(body, JsonOptions.Default)
             ?? throw new JsonException("Search result response could not be deserialized.");
 
@@ -517,7 +522,7 @@ internal sealed class LaserficheSearchService : ILaserficheSearchService
         public int PercentComplete { get; init; }
 
         [JsonPropertyName("errors")]
-        public List<string> Errors { get; init; } = [];
+        public List<JsonElement> Errors { get; init; } = [];
     }
 
     private sealed record ResultPage(List<SearchResultResource> Items, string? NextLink, int? TotalCount);
