@@ -15,7 +15,10 @@
     <InternalsVisibleTo Include="LaserficheReports.Web.Tests" />
   </ItemGroup>
   <Target Name="BuildRecycleBinReader" AfterTargets="Build" Condition="'$(OS)' == 'Windows_NT'">
-    <MSBuild Projects="$(MSBuildProjectDirectory)/../../tools/recycle-bin-reader/RecycleBin.Reader.csproj" Targets="Restore;Build" RemoveProperties="NoBuild;NoRestore;RuntimeIdentifier;SelfContained;PublishSingleFile;PublishTrimmed;TargetFramework;TargetFrameworks;PublishReadyToRun;OutputPath;PublishDir" Properties="Configuration=$(Configuration)" />
+    <!-- A first restore creates NuGet imports. Build must use a new project evaluation,
+         otherwise fresh checkouts lack package paths and the net48 reference assemblies. -->
+    <MSBuild Projects="$(MSBuildProjectDirectory)/../../tools/recycle-bin-reader/RecycleBin.Reader.csproj" Targets="Restore" RemoveProperties="NoBuild;NoRestore;RuntimeIdentifier;SelfContained;PublishSingleFile;PublishTrimmed;TargetFramework;TargetFrameworks;PublishReadyToRun;OutputPath;PublishDir" Properties="Configuration=$(Configuration);ReportsReaderPhase=Restore" />
+    <MSBuild Projects="$(MSBuildProjectDirectory)/../../tools/recycle-bin-reader/RecycleBin.Reader.csproj" Targets="Build" RemoveProperties="NoBuild;NoRestore;RuntimeIdentifier;SelfContained;PublishSingleFile;PublishTrimmed;TargetFramework;TargetFrameworks;PublishReadyToRun;OutputPath;PublishDir" Properties="Configuration=$(Configuration);ReportsReaderPhase=Build" />
     <ItemGroup><RecycleReaderFiles Include="$(MSBuildProjectDirectory)/../../tools/recycle-bin-reader/bin/$(Configuration)/net48/**/*" /></ItemGroup>
     <Copy SourceFiles="@(RecycleReaderFiles)" DestinationFiles="@(RecycleReaderFiles->'$(TargetDir)recycle-bin/%(RecursiveDir)%(Filename)%(Extension)')" />
   </Target>

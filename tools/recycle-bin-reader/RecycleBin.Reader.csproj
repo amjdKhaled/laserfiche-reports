@@ -10,6 +10,7 @@
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
   </ItemGroup>
   <Target Name="CopySdkLicense" AfterTargets="Build">
+    <Error Condition="'$(PkgLaserfiche_SDK_RepositoryAccess)' == ''" Text="SDK package path is missing. Restore packages and re-evaluate the reader project before building." />
     <Copy SourceFiles="$(PkgLaserfiche_SDK_RepositoryAccess)/EULA.md" DestinationFiles="$(TargetDir)Laserfiche-SDK-EULA.md" />
   </Target>
 </Project>
