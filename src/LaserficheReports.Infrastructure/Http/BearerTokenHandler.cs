@@ -56,11 +56,16 @@ internal sealed class BearerTokenHandler : DelegatingHandler
 
         var response = await base.SendAsync(request, cancellationToken).ConfigureAwait(false);
 
-        if (response.StatusCode == HttpStatusCode.Unauthorized)
+        // The Repository API closes Laserfiche sessions idle longer than its SessionIdleTimeout
+        // (15 minutes by default). It then answers 401, or 404 "noConnection" while the token
+        // still looks valid. Both mean: start a new session and repeat the request once.
+        if (response.StatusCode == HttpStatusCode.Unauthorized ||
+            await IsClosedSessionAsync(response, cancellationToken).ConfigureAwait(false))
         {
             _logger.LogWarning(
-                "Received 401 from Laserfiche API for {Method} {Uri}. " +
+                "Received {StatusCode} from Laserfiche API for {Method} {Uri}: the Laserfiche session expired. " +
                 "Invalidating cached token and retrying once.",
+                (int)response.StatusCode,
                 request.Method,
                 request.RequestUri);
 
@@ -78,6 +83,19 @@ internal sealed class BearerTokenHandler : DelegatingHandler
         }
 
         return response;
+    }
+
+    /// <summary>
+    /// True for the Repository API answer to a request on a Laserfiche session that the
+    /// server already closed: HTTP 404 with problem type <c>noConnection</c>. The body is
+    /// buffered so callers can still read it.
+    /// </summary>
+    internal static async Task<bool> IsClosedSessionAsync(HttpResponseMessage response, CancellationToken cancellationToken)
+    {
+        if (response.StatusCode != HttpStatusCode.NotFound) return false;
+        await response.Content.LoadIntoBufferAsync().ConfigureAwait(false);
+        var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+        return body.Contains("\"noConnection\"", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>

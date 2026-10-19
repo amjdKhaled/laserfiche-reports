@@ -1,7 +1,7 @@
 param([string]$InstallPath = "$env:LOCALAPPDATA\LaserficheReports")
 $ErrorActionPreference = 'Stop'
 $report = [ordered]@{ generatedAt = (Get-Date).ToUniversalTime().ToString('o'); graph = $null; services = @(); planner = @() }
-try { $report.graph = Invoke-RestMethod 'http://127.0.0.1:8766/health' -TimeoutSec 10 }
+try { $report.graph = Invoke-RestMethod 'http://127.0.0.1:5050/health' -TimeoutSec 10 }
 catch { $report.graph = @{ status = 'unavailable'; error = $_.Exception.Message } }
 $servicePath = Join-Path $InstallPath 'logs\services.log'
 $tracePath = Join-Path $InstallPath 'logs\planner-trace.jsonl'

@@ -262,10 +262,14 @@ internal sealed class LaserficheSearchService : ILaserficheSearchService
         var firstUrl = AddPagingQuery(
             _adapter.BuildSearchResultsUrl(repositoryId, operationToken), page, pageSize, sort, field, readAll, projectedFields);
         client.DefaultRequestHeaders.Remove("Prefer");
-        client.DefaultRequestHeaders.TryAddWithoutValidation("Prefer", $"odata.maxpagesize={pageSize}");
+        // A complete read uses large pages: fewer page boundaries means fewer chances for rows with
+        // equal sort keys (e.g. one bulk import) to move between pages while they are read.
+        client.DefaultRequestHeaders.TryAddWithoutValidation("Prefer", $"odata.maxpagesize={(readAll ? CompleteReadPageSize : pageSize)}");
         return await ReadRequestedPageAsync(client, null, firstUrl, 1, pageSize, cancellationToken, (page - 1) * pageSize, readAll)
             .ConfigureAwait(false);
     }
+
+    internal const int CompleteReadPageSize = 1000;
 
     private async Task<PagedResult<LFSearchResult>> ReadRequestedPageAsync(
         HttpClient client, string? initialBody, string initialUrl, int page, int pageSize,
@@ -348,7 +352,16 @@ internal sealed class LaserficheSearchService : ILaserficheSearchService
 
         var items = (readAll ? distinct : distinct.Skip(skip).Take(pageSize)).ToList().AsReadOnly();
         if (readAll && totalCount.HasValue && totalCount.Value != distinct.Count)
-            throw new JsonException("The complete search rows do not match the server count.");
+        {
+            _logger.LogWarning(
+                "Stage=LF_RESULTS_MISMATCH ServerCount={ServerCount} RowsRead={RowsRead} DistinctEntries={Distinct} " +
+                "DuplicateRows={Duplicates} Pages={Pages}",
+                totalCount.Value, received.Count, distinct.Count, received.Count - distinct.Count, visitedUrls.Count);
+            // The server counted every row and some rows were the same entry: the distinct list is complete.
+            if (received.Count != totalCount.Value)
+                throw new JsonException("The complete search rows do not match the server count.");
+            totalCount = distinct.Count;
+        }
         var exact = totalCount.HasValue || (serverSkip == 0 && nextUrl is null);
         if (totalCount is int count && count < serverSkip + distinct.Count)
             throw new JsonException("Search returned a total count smaller than its result rows.");

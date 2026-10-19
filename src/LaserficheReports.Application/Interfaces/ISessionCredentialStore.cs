@@ -34,6 +34,14 @@ public interface ISessionCredentialStore
     Task<LaserficheCredential?> TryGetAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Returns the signed-in Laserfiche user of the current session: the stored
+    /// password account, or the LFDS identity of a single sign-on session, which
+    /// stores no password. Returns <c>null</c> when nobody is signed in.
+    /// </summary>
+    async Task<string?> TryGetSignedInUserAsync(CancellationToken cancellationToken = default) =>
+        (await TryGetAsync(cancellationToken).ConfigureAwait(false))?.Username;
+
+    /// <summary>
     /// Removes the stored credentials from the current session.
     /// Does nothing when no session is available.
     /// </summary>

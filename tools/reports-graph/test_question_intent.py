@@ -122,7 +122,7 @@ class GroundedInterpretationRegressionTests(unittest.TestCase):
             trace = Path(folder) / 'trace.jsonl'
             result = plan_reports(model, {'question': question, 'catalog': CATALOG, 'history': history},
                                   review_intent=True, interpret_intent=True, trace_path=trace)
-            records = [json.loads(line) for line in trace.read_text().splitlines()]
+            records = [json.loads(line) for line in trace.read_text(encoding="utf-8").splitlines()]
             self.assertEqual(records[0]['payload']['history'], history)
             self.assertEqual(records[1]['stage'], 'QuestionIntent')
             self.assertEqual(records[1]['response'], json.dumps(bad))

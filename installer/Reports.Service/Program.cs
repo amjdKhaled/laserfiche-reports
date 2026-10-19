@@ -44,10 +44,11 @@ sealed class ReportsWorker(ILogger<ReportsWorker> logger) : BackgroundService
             Supervise("web", Path.Combine(root, "web", "LaserficheReports.Web.exe"), [],
                 new Dictionary<string, string> { ["ASPNETCORE_URLS"] = $"http://127.0.0.1:{port}",
                     ["ReportsGraph__BaseUrl"] = $"http://127.0.0.1:{graphPort}",
+                    ["Reports__RequestTimeoutSeconds"] = "3600", ["ReportsGraph__TimeoutSeconds"] = "3600",
                     ["LocalAI__ChatModel"] = model, ["LocalAI__BaseUrl"] = ollama }, data, stoppingToken),
             Supervise("planner", Path.Combine(root, "planner", "LaserficheReports.Planner.exe"),
                 ["--model", model, "--port", graphPort.ToString(), "--ollama-url", ollama,
-                 "--model-timeout-seconds", "0", "--planner-timeout-seconds", "0",
+                 "--model-timeout-seconds", "3600", "--planner-timeout-seconds", "3600",
                  "--planner-trace-path", Path.Combine(data, "logs", "planner-trace.jsonl")], [], data, stoppingToken));
     }
 
