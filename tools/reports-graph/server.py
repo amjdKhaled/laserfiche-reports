@@ -1101,7 +1101,7 @@ def plan_reports(model, payload, *, budget_seconds=None, max_tokens=1536, review
         "fieldSamples": {f["name"]: [str(value)[:80] for value in catalog.get("fieldSamples", {}).get(f["name"], [])[:3]]
                          for f in catalog.get("fields", []) if catalog.get("fieldSamples", {}).get(f["name"])},
         "sampleStatus": catalog.get("sampleStatus", "unavailable"),
-        "tools": catalog.get("tools", [])}
+        "tools": catalog.get("tools", []), "capabilities": catalog.get("capabilities", {})}
     descriptions = sum(bool(item.get("description")) for item in payload["catalog"]["fields"])
     description_limit = min(160, max(1, 2000 // max(1, descriptions)))
     for item in payload["catalog"]["fields"]:
@@ -1111,7 +1111,8 @@ def plan_reports(model, payload, *, budget_seconds=None, max_tokens=1536, review
         "fields": [[f["name"], f.get("fieldType", "String"), bool(f.get("isMultiValue"))] + ([str(f["description"])[:160]] if f.get("description") else []) for f in payload["catalog"]["fields"]],
         "tags": payload["catalog"]["tags"], "tagStatus": payload["catalog"]["tagStatus"],
         "templates": payload["catalog"]["templates"], "entryProperties": payload["catalog"]["entryProperties"],
-        "fieldSamples": payload["catalog"]["fieldSamples"], "sampleStatus": payload["catalog"]["sampleStatus"]}}
+        "fieldSamples": payload["catalog"]["fieldSamples"], "sampleStatus": payload["catalog"]["sampleStatus"],
+        "capabilities": payload["catalog"]["capabilities"]}}
     clarification_context = pending_clarification(payload.get("history", []))
     choice = selected_option(payload["question"], clarification_context)
     selection = catalog_selection(choice, payload['catalog'])

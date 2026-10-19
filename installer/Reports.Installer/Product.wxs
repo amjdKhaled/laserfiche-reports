@@ -51,6 +51,8 @@
     <Component Id="ReportsShortcut" Directory="STARTMENUFOLDER" Guid="{5F63BE33-A995-4CAC-B780-E170B919DB49}" Bitness="always64">
       <Shortcut Id="ReportsOpenShortcut" Name="Laserfiche Reports" Target="[System64Folder]WindowsPowerShell\v1.0\powershell.exe"
           Arguments="-NoProfile -ExecutionPolicy Bypass -File &quot;[INSTALLFOLDER]Open-Reports.ps1&quot;" WorkingDirectory="INSTALLFOLDER" />
+      <Shortcut Id="ReportsUninstallShortcut" Name="Uninstall Laserfiche Reports" Target="[System64Folder]msiexec.exe"
+          Arguments="/x [ProductCode]" WorkingDirectory="INSTALLFOLDER" />
       <RegistryValue Root="HKLM" Key="Software\ISB\LaserficheReports" Name="ShortcutInstalled" Type="integer" Value="1" KeyPath="yes" />
       <RemoveFolder Id="RemoveReportsMenu" On="uninstall" />
     </Component>
