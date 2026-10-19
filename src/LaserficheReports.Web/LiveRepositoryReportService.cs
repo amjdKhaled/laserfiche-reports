@@ -9,7 +9,7 @@ namespace LaserficheReports.Web;
 /// <summary>Validated, live tools. Search executes on the repository, never by walking its folders.</summary>
 internal sealed class LiveRepositoryReportService(ILaserficheEntryService entries,
     ILaserficheSearchService searches, ILaserficheFieldDefinitionService fields,
-    ILaserficheTemplateService templates, ILogger<LiveRepositoryReportService> logger, ILaserficheTagDefinitionService? tagDefinitions = null)
+    ILaserficheTemplateService templates, ILogger<LiveRepositoryReportService> logger, ILaserficheTagDefinitionService? tagDefinitions = null, AuditTrailSource? auditTrail = null)
 {
     internal const string Documents = "{LF:Name=\"*\", Type=D}";
     internal static string Term(string value, bool field = false)
@@ -384,17 +384,20 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
         {
             logger.LogWarning("Stage=FIELD_SAMPLE Status=unavailable ErrorType={ErrorType}", error.GetType().Name);
         }
-        return new { tool = "GetRepositorySchema", fields = definitions.Values.Select(f => new { f.Name, f.FieldType, f.IsMultiValue, f.IsRequired, description = string.IsNullOrWhiteSpace(f.Description) ? null : f.Description[..Math.Min(f.Description.Length, 160)] }).Distinct().ToArray(),
+        var auditCatalog = auditTrail == null ? (object)new { status = "disabled" } : await auditTrail.CatalogAsync(ct);
+        return new { auditTrail = auditCatalog, tool = "GetRepositorySchema", fields = definitions.Values.Select(f => new { f.Name, f.FieldType, f.IsMultiValue, f.IsRequired, description = string.IsNullOrWhiteSpace(f.Description) ? null : f.Description[..Math.Min(f.Description.Length, 160)] }).Distinct().ToArray(),
             capabilities = new { deletedEntries = "unavailable_requires_recycle_bin_or_audit_source", volumeIntegrity = "requires_native_volume_verification_report",
                 availability = "explicit_entry_ids_only_current_user_rights_404_does_not_prove_deletion" },
             fieldSamples = samples, sampleStatus, tags = currentTags.Select(t => new { t.Name, t.Description }).ToArray(), tagStatus,
             templates = templateDefinitions.Select(t => t.Name).ToArray(), entryProperties = StructuredRepositoryQuery.Builtins,
-            tools = new[] { "SearchEntries", "AggregateEntries", "GetEntry", "GetEntryMetadata", "GetFolderContents", "GetTemplates", "GetRepositorySchema", "GetFolderInformation", "GetEntryAvailability", "GetOcrContent" } };
+            tools = new[] { "SearchEntries", "AggregateEntries", "GetEntry", "GetEntryMetadata", "GetFolderContents", "GetTemplates", "GetRepositorySchema", "GetFolderInformation", "GetEntryAvailability", "GetAuditEvents", "GetOcrContent" } };
     }
 
     public async Task<ChatResult> CreateAsync(string repositoryId, QueryPlan plan, IReadOnlyList<int> ids,
         CancellationToken ct)
     {
+        if (plan.Operation == "audit")
+            return await AuditTrailReport.CreateAsync(auditTrail ?? throw new AuditTrailException("ربط Audit Trail غير مهيأ."), repositoryId, plan, ct);
         if (plan.Operation == "availability")
             return await EntryAvailabilityReport.CreateAsync(entries, repositoryId, plan, ids, ct);
         if (plan.Operation == "schema")

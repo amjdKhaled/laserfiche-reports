@@ -56,6 +56,7 @@ builder.Services.AddSession(options =>
 builder.Services.AddLaserficheInfrastructure(builder.Configuration);
 builder.Services.AddScoped<ReportsChatService>();
 builder.Services.AddScoped<LiveRepositoryReportService>();
+builder.Services.AddScoped<AuditTrailSource>();
 builder.Services.AddScoped<QuestionRouter>();
 builder.Services.AddTransient<GraphCorrelationHandler>();
 builder.Services.AddHttpClient("ReportsGraph", client =>
@@ -191,6 +192,11 @@ app.Use(async (context, next) =>
         context.Response.StatusCode = error.StatusCode is 401 or 403 or 404 ? error.StatusCode : 502;
         await context.Response.WriteAsJsonAsync(new { error = RepositoryReadError.Message(error), upstreamStatus = error.StatusCode, requestId = context.TraceIdentifier });
     }
+    catch (AuditTrailException error) when (!context.Response.HasStarted)
+    {
+        context.Response.StatusCode = 503;
+        await context.Response.WriteAsJsonAsync(new { error = "audit_trail_unavailable", message = error.Message });
+    }
     catch (ArgumentException error) when (!context.Response.HasStarted)
     {
         context.Response.StatusCode = 400;
@@ -268,6 +274,16 @@ app.MapGet("/api/reports/planning-catalog", async (LiveRepositoryReportService r
         catalog = await reports.CatalogAsync(cancellationToken) });
 });
 
+app.MapPost("/api/reports/audit", async (QueryPlan plan, LiveRepositoryReportService reports,
+    IRepositoryContext repositories, ISessionCredentialStore sessions, CancellationToken ct) =>
+{
+    if (await sessions.TryGetAsync(ct) is null) return Results.Unauthorized();
+    if (plan.Operation != "audit") return Results.BadRequest(new { error = "استخدم عملية audit فقط." });
+    plan.ValidateIntent();
+    var repository = await repositories.GetActiveRepositoryAsync(ct);
+    return Results.Ok(await reports.CreateAsync(repository.RepositoryId, plan, plan.EntryIds ?? [], ct));
+});
+
 app.MapPost("/api/reports/availability", async (AvailabilityRequest request, LiveRepositoryReportService reports,
     IRepositoryContext repositories, ISessionCredentialStore sessions, CancellationToken ct) =>
 {
@@ -323,6 +339,10 @@ app.MapPost("/api/reports/chat", async (ChatQuestion request, ReportsChatService
     catch (UnauthorizedAccessException)
     {
         return Results.Json(new { error = "session_expired", message = "تعذر تجديد جلسة Laserfiche. سجّل الدخول مرة أخرى." }, statusCode: 401);
+    }
+    catch (AuditTrailException exception)
+    {
+        return Results.Json(new { error = "audit_trail_unavailable", message = exception.Message }, statusCode: 503);
     }
     catch (GraphServiceException exception)
     {
