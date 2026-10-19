@@ -1,0 +1,17 @@
+diff --git a/src/LaserficheReports.Web/appsettings.Local.example.json b/src/LaserficheReports.Web/appsettings.Local.example.json
+index bfd3a20..57e0b70 100644
+--- a/src/LaserficheReports.Web/appsettings.Local.example.json
++++ b/src/LaserficheReports.Web/appsettings.Local.example.json
+@@ -16,10 +16,10 @@
+   },
+   "LocalAI": {
+     "Provider": "Ollama",
+-    "ChatModel": "gpt-oss:20b",
++    "ChatModel": "qwen3-vl:8b-instruct",
+     "BaseUrl": "http://localhost:11434",
+     "OcrCorrectionEnabled": false,
+-    "OcrCorrectionModel": "qwen2.5vl:3b",
++    "OcrCorrectionModel": "qwen3-vl:8b-instruct",
+     "OcrCorrectionMaxTokens": 8192,
+     "TimeoutSeconds": 600,
+     "EmbeddingModel": "nomic-embed-text-v2-moe",

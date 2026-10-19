@@ -1,0 +1,13 @@
+diff --git a/docs/REPOSITORY_REPORTS.md b/docs/REPOSITORY_REPORTS.md
+index 97e2c65..e05adda 100644
+--- a/docs/REPOSITORY_REPORTS.md
++++ b/docs/REPOSITORY_REPORTS.md
+@@ -105,7 +105,7 @@ powershell -ExecutionPolicy Bypass -File .\tools\reports-graph\start.ps1 -Model
+ In another terminal, run the web project. Verify the graph health in a third terminal:
+ 
+ ```powershell
+-Invoke-RestMethod http://127.0.0.1:8766/health
++Invoke-RestMethod http://127.0.0.1:5050/health
+ ```
+ 
+ It should report `status: ready`, `model: qwen2.5:7b`, `modelTimeoutSeconds: 600` and `routingVersion: ai-multi-report-v3`. A 503 body specifies whether Ollama is stopped or the model is absent. `ReportsGraph:TimeoutSeconds` and `Reports:RequestTimeoutSeconds` are configurable in local settings. Keep the graph HTTP timeout above the combined model calls and the total chat timeout above its stages. Restarting is required because the model client and HTTP client settings are created at startup.
