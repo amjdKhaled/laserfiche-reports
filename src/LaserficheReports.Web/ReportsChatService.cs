@@ -159,7 +159,7 @@ internal sealed class ReportsChatService(
         var watch = System.Diagnostics.Stopwatch.StartNew();
         if (plan.Operation == "clarify")
             return new ChatResult("حدد اسم الحقل وقيمته كما تظهر في Laserfiche، أو رقم الوثيقة المطلوب تحليلها.", []);
-        if (plan.Operation is not ("search" or "folders" or "metadata" or "templates" or "schema" or "folder_information" or "recent" or "latest_created" or "latest_modified" or "created" or "modified" or "group" or "content"))
+        if (plan.Operation is not ("search" or "folders" or "metadata" or "availability" or "templates" or "schema" or "folder_information" or "recent" or "latest_created" or "latest_modified" or "created" or "modified" or "group" or "content"))
             throw new ArgumentException("لم أتعرف على الطلب. حدد الحقل وقيمته أو رقم الوثيقة والمعلومة المطلوبة.");
         if (plan.Name != null && (plan.Operation == "metadata" || plan.RequireUnique || plan.Content))
         {

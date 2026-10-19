@@ -268,6 +268,16 @@ app.MapGet("/api/reports/planning-catalog", async (LiveRepositoryReportService r
         catalog = await reports.CatalogAsync(cancellationToken) });
 });
 
+app.MapPost("/api/reports/availability", async (AvailabilityRequest request, LiveRepositoryReportService reports,
+    IRepositoryContext repositories, ISessionCredentialStore sessions, CancellationToken ct) =>
+{
+    if (await sessions.TryGetAsync(ct) is null) return Results.Unauthorized();
+    var repository = await repositories.GetActiveRepositoryAsync(ct);
+    var ids = request.EntryIds ?? [];
+    return Results.Ok(await reports.CreateAsync(repository.RepositoryId,
+        new QueryPlan("availability", EntryIds: ids, ResultType: "details"), ids, ct));
+});
+
 app.MapGet("/api/reports/documents", async (int? page, string? search, ReportsChatService chat,
     ISessionCredentialStore sessions, CancellationToken cancellationToken) =>
 {

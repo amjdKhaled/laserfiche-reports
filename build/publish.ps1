@@ -75,7 +75,7 @@ try {
         }
     }
     Invoke-Checked dotnet @('tool','restore')
-    foreach ($extension in @('WixToolset.Util.wixext','WixToolset.Bal.wixext')) {
+    foreach ($extension in @('WixToolset.Util.wixext','WixToolset.Bal.wixext','WixToolset.UI.wixext')) {
         & dotnet tool run wix extension add "$extension/4.0.5"
         if ($LASTEXITCODE -ne 0) {
             $cached = & dotnet tool run wix extension list
@@ -123,8 +123,8 @@ try {
     $actions = "$source\installer\Reports.SafetyActions\bin\Release\net48\Reports.SafetyActions.CA.dll"
     if (!(Test-Path $actions)) { throw 'Missing native custom action package.' }
     $msi = Join-Path $release 'LaserficheReports.msi'
-    Invoke-Checked dotnet @('tool','run','wix','build',"$source\installer\Reports.Installer\Product.wxs",$harvest,'-arch','x64',
-        '-ext','WixToolset.Util.wixext/4.0.5','-d',"ProductVersion=$Version",'-d',"PayloadRoot=$payload",'-d',"SafetyActionsPath=$actions",'-o',$msi)
+    Invoke-Checked dotnet @('tool','run','wix','build',"$source\installer\Reports.Installer\Product.wxs","$source\installer\Reports.Installer\ReportsUI.wxs",$harvest,'-arch','x64',
+        '-ext','WixToolset.Util.wixext/4.0.5','-ext','WixToolset.UI.wixext/4.0.5','-d',"ProductVersion=$Version",'-d',"PayloadRoot=$payload",'-d',"SafetyActionsPath=$actions",'-o',$msi)
     $setup = Join-Path $release 'LaserficheReports-Setup.exe'
     $netfx = Join-Path $stage 'ndp48-web.exe'
     Invoke-WebRequest 'https://go.microsoft.com/fwlink/?LinkId=2085155' -OutFile $netfx -UseBasicParsing

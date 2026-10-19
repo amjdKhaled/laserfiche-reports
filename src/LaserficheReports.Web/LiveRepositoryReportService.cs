@@ -385,14 +385,18 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
             logger.LogWarning("Stage=FIELD_SAMPLE Status=unavailable ErrorType={ErrorType}", error.GetType().Name);
         }
         return new { tool = "GetRepositorySchema", fields = definitions.Values.Select(f => new { f.Name, f.FieldType, f.IsMultiValue, f.IsRequired, description = string.IsNullOrWhiteSpace(f.Description) ? null : f.Description[..Math.Min(f.Description.Length, 160)] }).Distinct().ToArray(),
+            capabilities = new { deletedEntries = "unavailable_requires_recycle_bin_or_audit_source", volumeIntegrity = "requires_native_volume_verification_report",
+                availability = "explicit_entry_ids_only_current_user_rights_404_does_not_prove_deletion" },
             fieldSamples = samples, sampleStatus, tags = currentTags.Select(t => new { t.Name, t.Description }).ToArray(), tagStatus,
             templates = templateDefinitions.Select(t => t.Name).ToArray(), entryProperties = StructuredRepositoryQuery.Builtins,
-            tools = new[] { "SearchEntries", "AggregateEntries", "GetEntry", "GetEntryMetadata", "GetFolderContents", "GetTemplates", "GetRepositorySchema", "GetFolderInformation", "GetOcrContent" } };
+            tools = new[] { "SearchEntries", "AggregateEntries", "GetEntry", "GetEntryMetadata", "GetFolderContents", "GetTemplates", "GetRepositorySchema", "GetFolderInformation", "GetEntryAvailability", "GetOcrContent" } };
     }
 
     public async Task<ChatResult> CreateAsync(string repositoryId, QueryPlan plan, IReadOnlyList<int> ids,
         CancellationToken ct)
     {
+        if (plan.Operation == "availability")
+            return await EntryAvailabilityReport.CreateAsync(entries, repositoryId, plan, ids, ct);
         if (plan.Operation == "schema")
         {
             if (plan.Template != null) throw new ArgumentException("هذه الأداة تعرض تعريفات حقول المستودع؛ ربط الحقول بتعريف قالب بعينه غير متاح من عقد الخدمة الحالي.");

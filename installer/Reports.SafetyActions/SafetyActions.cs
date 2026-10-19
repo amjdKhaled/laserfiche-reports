@@ -16,6 +16,67 @@ namespace LaserficheReports.Setup
         private static readonly JavaScriptSerializer Json = new JavaScriptSerializer();
         internal static string DataRoot => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "LaserficheReports");
 
+        internal static readonly Dictionary<string, string> MsiProperties = new Dictionary<string, string>
+        {
+            { "ServerUrl", "REPORTS_SERVER" }, { "ApiBasePath", "REPORTS_API_PATH" },
+            { "ApiVersion", "REPORTS_API_VERSION" }, { "RepositoryId", "REPORTS_REPOSITORY" },
+            { "WebClientBaseUrl", "REPORTS_WEBCLIENT" }, { "Port", "REPORTS_PORT" },
+            { "GraphPort", "REPORTS_GRAPH_PORT" }, { "Model", "REPORTS_MODEL" }, { "OllamaUrl", "REPORTS_OLLAMA" }
+        };
+
+        [CustomAction]
+        public static ActionResult LoadMsiSettings(Session session)
+        {
+            try
+            {
+                var values = new Dictionary<string, object> {
+                    { "ServerUrl", "https://localhost" }, { "ApiBasePath", "/LFRepositoryAPI" },
+                    { "ApiVersion", "v2" }, { "RepositoryId", "" }, { "WebClientBaseUrl", "" },
+                    { "Port", 5187 }, { "GraphPort", 8766 }, { "Model", "qwen2.5:14b" }, { "OllamaUrl", "http://127.0.0.1:11434" }
+                };
+                // Only Reports-owned configuration is read. Never modify Laserfiche settings.
+                var connection = ReadObject(Path.Combine(DataRoot, "laserfiche.config.json"));
+                if (connection.TryGetValue("Laserfiche", out var nested) && nested is Dictionary<string, object> lf)
+                    foreach (var key in MsiProperties.Keys.Where(k => lf.ContainsKey(k))) values[key] = lf[key];
+                var runtime = ReadObject(Path.Combine(DataRoot, "laserfiche.runtime.json"));
+                if (runtime.TryGetValue("Laserfiche", out var runtimeNested) && runtimeNested is Dictionary<string, object> runtimeLf)
+                    foreach (var key in MsiProperties.Keys.Where(k => runtimeLf.ContainsKey(k))) values[key] = runtimeLf[key];
+                var hosting = ReadObject(Path.Combine(DataRoot, "hosting.config.json"));
+                foreach (var key in new[] { "Port", "GraphPort", "Model", "OllamaUrl" })
+                    if (hosting.ContainsKey(key)) values[key] = hosting[key];
+                if (!string.IsNullOrWhiteSpace(session["REPORTS_PROFILE"]))
+                    foreach (var item in ValidateProfile(session["REPORTS_PROFILE"])) values[item.Key] = item.Value;
+                foreach (var item in MsiProperties)
+                    if (string.IsNullOrEmpty(session[item.Value])) session[item.Value] = Text(values, item.Key);
+                return ActionResult.Success;
+            }
+            catch (Exception error) { session.Log("Reports setup settings could not be read: {0}", error.Message); return ActionResult.Failure; }
+        }
+
+        internal static string EncodeMsiSettings(Session session)
+        {
+            var profile = MsiProperties.ToDictionary(item => item.Key, item => (object)session[item.Value].Trim());
+            var encoded = Convert.ToBase64String(Encoding.UTF8.GetBytes(Json.Serialize(profile)));
+            ValidateProfile(encoded);
+            return encoded;
+        }
+
+        [CustomAction]
+        public static ActionResult PrepareMsiSettings(Session session)
+        {
+            session["REPORTS_SETTINGS_VALID"] = "";
+            session["REPORTS_SETTINGS_ERROR"] = "";
+            try
+            {
+                session["REPORTS_PROFILE"] = EncodeMsiSettings(session);
+                session["REPORTS_CONFIGURE"] = "1";
+                session["REPORTS_SETTINGS_VALID"] = "1";
+            }
+            catch (Exception error) { session["REPORTS_SETTINGS_ERROR"] = error.Message; }
+            // Validation errors remain on the settings page; execution validates again.
+            return ActionResult.Success;
+        }
+
         [CustomAction]
         public static ActionResult ValidateIsolation(Session session)
         {
@@ -67,9 +128,10 @@ namespace LaserficheReports.Setup
                     using (var tasks = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\TaskCache\Tree"))
                         if (tasks != null && tasks.GetSubKeyNames().Any(n => n.StartsWith("LaserficheReports-", StringComparison.Ordinal)))
                             throw new IOException("Stop the legacy Reports installation using deployment\\windows\\unregister.ps1 before migrating. Settings are preserved; never run both hosts.");
+                    if (session["REPORTS_CONFIGURE"] == "1") session["REPORTS_PROFILE"] = EncodeMsiSettings(session);
                     if (!string.IsNullOrWhiteSpace(session["REPORTS_PROFILE"])) ValidateProfile(session["REPORTS_PROFILE"]);
                     else if (!File.Exists(Path.Combine(DataRoot, "hosting.config.json")))
-                        throw new IOException("Connection settings are required. Run LaserficheReports-Setup.exe.");
+                        throw new IOException("Connection settings are required. Open the MSI settings wizard or run LaserficheReports-Setup.exe.");
                 }
                 session["REPORTS_TRANSACTION"] = Guid.NewGuid().ToString("N");
                 return ActionResult.Success;
@@ -92,6 +154,7 @@ namespace LaserficheReports.Setup
             if (!new[] { "Auto", "v1", "v2" }.Contains(Text(profile, "ApiVersion"))) throw new ArgumentException("Invalid API version.");
             var port = Port(profile, "Port"); var graphPort = Port(profile, "GraphPort");
             if (port == graphPort) throw new ArgumentException("Web and planner ports must differ.");
+            profile["Port"] = port; profile["GraphPort"] = graphPort;
             Uri ollama;
             if (!Uri.TryCreate(Text(profile, "OllamaUrl"), UriKind.Absolute, out ollama) || ollama.Scheme != "http" || !ollama.IsLoopback || !string.IsNullOrEmpty(ollama.UserInfo) || !string.IsNullOrEmpty(ollama.Query) || !string.IsNullOrEmpty(ollama.Fragment))
                 throw new ArgumentException("Ollama must use a local HTTP address.");
@@ -125,7 +188,22 @@ namespace LaserficheReports.Setup
                 connection["Laserfiche"] = laserfiche;
                 var hosting = ReadObject(hostingPath);
                 foreach (var key in new[] { "Port", "GraphPort", "Model", "OllamaUrl" }) hosting[key] = profile[key];
-                var writes = new[] { Tuple.Create(connectionPath, Json.Serialize(connection)), Tuple.Create(hostingPath, Json.Serialize(hosting)) }
+                var pending = new List<Tuple<string, string>> { Tuple.Create(connectionPath, Json.Serialize(connection)), Tuple.Create(hostingPath, Json.Serialize(hosting)) };
+                // Runtime settings load after installer settings. Remove only explicitly
+                // replaced connection keys, otherwise stale settings silently override
+                // the server/repository entered in this wizard. Keep all other data.
+                var runtimePath = Path.Combine(DataRoot, "laserfiche.runtime.json");
+                if (File.Exists(runtimePath))
+                {
+                    var runtime = ReadObject(runtimePath);
+                    if (runtime.TryGetValue("Laserfiche", out var value) && value is Dictionary<string, object> runtimeLf)
+                    {
+                        foreach (var key in new[] { "ServerUrl", "ApiBasePath", "ApiVersion", "RepositoryId", "WebClientBaseUrl", "DetectedApiVersion" })
+                            if (profile.ContainsKey(key) || key == "DetectedApiVersion") runtimeLf.Remove(key);
+                        pending.Add(Tuple.Create(runtimePath, Json.Serialize(runtime)));
+                    }
+                }
+                var writes = pending
                     .Where(item => !File.Exists(item.Item1) || !File.ReadAllBytes(item.Item1).SequenceEqual(Encoding.UTF8.GetBytes(item.Item2))).ToArray();
                 var journal = new Dictionary<string, object>();
                 foreach (var item in writes)
@@ -151,7 +229,7 @@ namespace LaserficheReports.Setup
                 var journal = ReadObject(path);
                 foreach (var item in journal)
                 {
-                    if (item.Key != Path.Combine(DataRoot, "laserfiche.config.json") && item.Key != Path.Combine(DataRoot, "hosting.config.json")) throw new IOException("Journal path outside allowlist.");
+                    if (item.Key != Path.Combine(DataRoot, "laserfiche.config.json") && item.Key != Path.Combine(DataRoot, "hosting.config.json") && item.Key != Path.Combine(DataRoot, "laserfiche.runtime.json")) throw new IOException("Journal path outside allowlist.");
                     InstallerFileSafety.EnsureNoReparsePoints(item.Key);
                     var entry = (Dictionary<string, object>)item.Value;
                     // Preserve configuration changed concurrently by an administrator.

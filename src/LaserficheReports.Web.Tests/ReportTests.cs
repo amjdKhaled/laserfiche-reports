@@ -12,6 +12,42 @@ namespace LaserficheReports.Web.Tests;
 public class ReportTests
 {
     [Fact]
+    public async Task AvailabilityChecksOnlyRequestedIdsAndDistinguishes403From404()
+    {
+        var entries = new Entries(0) { DeniedId = 620, MissingId = 621 };
+        var search = new Searches();
+        var result = await Create(entries, search).CreateAsync("repo",
+            new QueryPlan("availability", EntryIds: [619, 620, 621], ResultType: "details"), [619, 620, 621], default);
+        Assert.Contains("| 619 | وثيقة 619 | متاح |", result.Answer);
+        Assert.Contains("رفض الصلاحية (403)", result.Answer);
+        Assert.Contains("تعذر العثور عليه أو إظهاره (404)", result.Answer);
+        Assert.Contains("لا يمكن تمييز الحذف", result.Answer);
+        Assert.Equal(new[] { 619 }, result.RelatedEntryIds);
+        Assert.Equal(new[] { 619, 620, 621 }, entries.EntryCalls.Order());
+        Assert.Empty(search.Calls);
+        Assert.False(entries.Enumerated);
+    }
+
+    [Theory]
+    [InlineData(401)]
+    [InlineData(503)]
+    public async Task AvailabilityNeverLabelsAuthenticationOrServerFailureAsMissing(int status)
+    {
+        var entries = new Entries(0) { CustomError = status };
+        var error = await Assert.ThrowsAsync<LaserficheException>(() => Create(entries, new Searches()).CreateAsync("repo",
+            new QueryPlan("availability", EntryIds: [619], ResultType: "details"), [619], default));
+        Assert.Equal(status, error.StatusCode);
+    }
+
+    [Fact]
+    public void AvailabilityRejectsFiltersAndUnboundedRequests()
+    {
+        Assert.Throws<ArgumentException>(() => new QueryPlan("availability", ResultType: "details").ValidateIntent());
+        Assert.Throws<ArgumentException>(() => new QueryPlan("availability", EntryIds: [619], Name: "other", ResultType: "details").ValidateIntent());
+        Assert.Throws<ArgumentException>(() => new QueryPlan("availability", EntryIds: [619], CountOnly: true, ResultType: "count").ValidateIntent());
+    }
+
+    [Fact]
     public async Task ConfirmedEmptySelectionKeepsZeroTableAndOffersClarificationWithoutExtraQuery()
     {
         var query = new Searches { Response = (_, _, _) => PagedResult<LFSearchResult>.Empty };
@@ -94,6 +130,8 @@ public class ReportTests
     {
         public List<int> Calls { get; } = [];
         public int? FailureId { get; init; }
+        public int? MissingId { get; init; }
+        public int? CustomError { get; init; }
         public async Task<DocumentIngestionResult> IngestMetadataAsync(int entryId,
             CancellationToken cancellationToken = default)
         {
@@ -717,6 +755,8 @@ public class ReportTests
         public bool Enumerated { get; private set; }
         public int? DeniedId { get; init; }
         public int? FailureId { get; init; }
+        public int? MissingId { get; init; }
+        public int? CustomError { get; init; }
         public int? PageCount { get; init; }
         public int? Folder { get; init; }
         public List<int> EntryCalls { get; } = [];
@@ -724,6 +764,8 @@ public class ReportTests
         public Task<LFEntry> GetEntryAsync(int entryId, CancellationToken cancellationToken = default)
         {
             lock (EntryCalls) EntryCalls.Add(entryId);
+            if (CustomError is int status) throw new LaserficheException("fixture", status);
+            if (entryId == MissingId) throw new LaserficheException("not visible", 404);
             if (entryId == DeniedId) throw new LaserficheException("denied", 403);
             if (entryId == FailureId) throw new LaserficheException("outage", 503);
             return Task.FromResult(Document(entryId) with { PageCount = PageCount,

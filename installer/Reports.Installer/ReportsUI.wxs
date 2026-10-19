@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Fragment>
+    <UI Id="ReportsSetupUI">
+      <TextStyle Id="WixUI_Font_Normal" FaceName="Segoe UI" Size="9" />
+      <TextStyle Id="WixUI_Font_Bigger" FaceName="Segoe UI" Size="12" />
+      <TextStyle Id="WixUI_Font_Title" FaceName="Segoe UI" Size="10" Bold="yes" />
+      <Property Id="DefaultUIFont" Value="WixUI_Font_Normal" />
+      <DialogRef Id="ErrorDlg" />
+      <DialogRef Id="FatalError" />
+      <DialogRef Id="FilesInUse" />
+      <DialogRef Id="MsiRMFilesInUse" />
+      <DialogRef Id="PrepareDlg" />
+      <DialogRef Id="ProgressDlg" />
+      <DialogRef Id="ResumeDlg" />
+      <DialogRef Id="UserExit" />
+      <Publish Dialog="ExitDialog" Control="Finish" Event="EndDialog" Value="Return" Order="999" />
+      <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="ReportsConnectionDlg" />
+      <Publish Dialog="MaintenanceWelcomeDlg" Control="Next" Event="NewDialog" Value="MaintenanceTypeDlg" />
+      <Publish Dialog="MaintenanceTypeDlg" Control="RepairButton" Event="NewDialog" Value="ReportsConnectionDlg" />
+      <Publish Dialog="MaintenanceTypeDlg" Control="RemoveButton" Event="NewDialog" Value="VerifyReadyDlg" />
+      <Publish Dialog="MaintenanceTypeDlg" Control="Back" Event="NewDialog" Value="MaintenanceWelcomeDlg" />
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="ReportsAiDlg" Condition="NOT REMOVE~=&quot;ALL&quot;" />
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="MaintenanceTypeDlg" Condition="REMOVE~=&quot;ALL&quot;" />
+      <Dialog Id="ReportsConnectionDlg" Width="390" Height="310" Title="Laserfiche Reports Setup">
+        <Control Id="Title" Type="Text" X="18" Y="12" Width="355" Height="25" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Title}Laserfiche connection" />
+        <Control Id="Label0" Type="Text" X="18" Y="48" Width="350" Height="12" Text="API server URL (use the actual server name)" />
+        <Control Id="Input0" Type="Edit" X="18" Y="61" Width="350" Height="18" Property="REPORTS_SERVER" />
+        <Control Id="Label1" Type="Text" X="18" Y="84" Width="350" Height="12" Text="API base path" />
+        <Control Id="Input1" Type="Edit" X="18" Y="97" Width="350" Height="18" Property="REPORTS_API_PATH" />
+        <Control Id="Label2" Type="Text" X="18" Y="120" Width="350" Height="12" Text="API version: Auto, v1 or v2" />
+        <Control Id="Input2" Type="Edit" X="18" Y="133" Width="350" Height="18" Property="REPORTS_API_VERSION" />
+        <Control Id="Label3" Type="Text" X="18" Y="156" Width="350" Height="12" Text="Default repository (optional)" />
+        <Control Id="Input3" Type="Edit" X="18" Y="169" Width="350" Height="18" Property="REPORTS_REPOSITORY" />
+        <Control Id="Label4" Type="Text" X="18" Y="192" Width="350" Height="12" Text="Web Client URL (optional)" />
+        <Control Id="Input4" Type="Edit" X="18" Y="205" Width="350" Height="18" Property="REPORTS_WEBCLIENT" />
+        <Control Id="Rule" Type="Line" X="0" Y="269" Width="390" Height="1" />
+        <Control Id="Back" Type="PushButton" X="142" Y="280" Width="66" Height="19" Text="Back">
+          <Publish Event="NewDialog" Value="WelcomeDlg" Condition="NOT Installed" />
+          <Publish Event="NewDialog" Value="MaintenanceTypeDlg" Condition="Installed" />
+        </Control>
+        <Control Id="Next" Type="PushButton" X="213" Y="280" Width="66" Height="19" Default="yes" Text="Next">
+          <Publish Event="NewDialog" Value="ReportsAiDlg" Order="3" />
+        </Control>
+        <Control Id="Cancel" Type="PushButton" X="301" Y="280" Width="66" Height="19" Cancel="yes" Text="Cancel"><Publish Event="SpawnDialog" Value="CancelDlg" /></Control>
+      </Dialog>
+      <Dialog Id="ReportsAiDlg" Width="390" Height="310" Title="Laserfiche Reports Setup">
+        <Control Id="Title" Type="Text" X="18" Y="12" Width="355" Height="25" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Title}Local AI model and application ports" />
+        <Control Id="Label0" Type="Text" X="18" Y="48" Width="350" Height="12" Text="Ollama model name (must already exist locally)" />
+        <Control Id="Input0" Type="ComboBox" X="18" Y="61" Width="350" Height="70" Property="REPORTS_MODEL" />
+        <Control Id="Label1" Type="Text" X="18" Y="84" Width="350" Height="12" Text="Local Ollama URL" />
+        <Control Id="Input1" Type="Edit" X="18" Y="97" Width="350" Height="18" Property="REPORTS_OLLAMA" />
+        <Control Id="Label2" Type="Text" X="18" Y="120" Width="350" Height="12" Text="Reports web port" />
+        <Control Id="Input2" Type="Edit" X="18" Y="133" Width="350" Height="18" Property="REPORTS_PORT" />
+        <Control Id="Label3" Type="Text" X="18" Y="156" Width="350" Height="12" Text="Planner port (different from web port)" />
+        <Control Id="Input3" Type="Edit" X="18" Y="169" Width="350" Height="18" Property="REPORTS_GRAPH_PORT" />
+        <Control Id="Rule" Type="Line" X="0" Y="269" Width="390" Height="1" />
+        <Control Id="Back" Type="PushButton" X="142" Y="280" Width="66" Height="19" Text="Back">
+          <Publish Event="NewDialog" Value="ReportsConnectionDlg" />
+        </Control>
+        <Control Id="Next" Type="PushButton" X="213" Y="280" Width="66" Height="19" Default="yes" Text="Next">
+          <Publish Event="DoAction" Value="PrepareReportsMsiSettings" Order="1" />
+          <Publish Event="SpawnDialog" Value="ReportsSettingsErrorDlg" Order="2" Condition="NOT REPORTS_SETTINGS_VALID" />
+          <Publish Event="NewDialog" Value="VerifyReadyDlg" Order="3" Condition="REPORTS_SETTINGS_VALID = &quot;1&quot;" />
+        </Control>
+        <Control Id="Cancel" Type="PushButton" X="301" Y="280" Width="66" Height="19" Cancel="yes" Text="Cancel"><Publish Event="SpawnDialog" Value="CancelDlg" /></Control>
+      </Dialog>
+      <Dialog Id="ReportsSettingsErrorDlg" Width="300" Height="125" Title="Check Reports settings">
+        <Control Id="Error" Type="Text" X="15" Y="15" Width="270" Height="65" Text="[REPORTS_SETTINGS_ERROR]" />
+        <Control Id="OK" Type="PushButton" X="117" Y="96" Width="66" Height="19" Default="yes" Cancel="yes" Text="OK"><Publish Event="EndDialog" Value="Return" /></Control>
+      </Dialog>
+      <ComboBox Property="REPORTS_MODEL">
+        <ListItem Value="qwen2.5:7b" Text="qwen2.5:7b" />
+        <ListItem Value="qwen2.5:14b" Text="qwen2.5:14b" />
+        <ListItem Value="qwen2.5:32b" Text="qwen2.5:32b" />
+        <ListItem Value="gpt-oss:20b" Text="gpt-oss:20b" />
+      </ComboBox>
+    </UI>
+    <UIRef Id="WixUI_Common" />
+  </Fragment>
+</Wix>
