@@ -1,0 +1,22 @@
+diff --git a/src/LaserficheReports.Web/appsettings.json b/src/LaserficheReports.Web/appsettings.json
+index ca3140e..06450c1 100644
+--- a/src/LaserficheReports.Web/appsettings.json
++++ b/src/LaserficheReports.Web/appsettings.json
+@@ -18,7 +18,7 @@
+     "RequestTimeoutSeconds": 0
+   },
+   "ReportsGraph": {
+-    "BaseUrl": "http://127.0.0.1:8766",
++    "BaseUrl": "http://127.0.0.1:5050",
+     "TimeoutSeconds": 0
+   },
+   "Ocr": {
+@@ -32,7 +32,7 @@
+   "LocalAI": {
+     "Provider": "Ollama",
+     "BaseUrl": "http://localhost:11434",
+-    "ChatModel": "gpt-oss:20b",
++    "ChatModel": "qwen3-vl:8b-instruct",
+     "OcrCorrectionEnabled": false,
+     "OcrCorrectionModel": "qwen2.5vl:3b",
+     "OcrCorrectionMaxTokens": 8192,

@@ -1,0 +1,47 @@
+diff --git a/deployment/windows/install-package.ps1 b/deployment/windows/install-package.ps1
+index 1e36e8c..4ecc408 100644
+--- a/deployment/windows/install-package.ps1
++++ b/deployment/windows/install-package.ps1
+@@ -1,13 +1,21 @@
+ param(
+     [string]$InstallPath = "$env:LOCALAPPDATA\LaserficheReports",
+-    [string]$Model = 'gpt-oss:20b',
++    [string]$Model = "qwen3-vl:8b-instruct",
+     [ValidateRange(1024, 65535)][int]$Port = 5187,
++    [ValidateRange(1024, 65535)][int]$GraphPort = 5050,
++    [string]$PythonVersion = '',
+     [string]$LaserficheServerUrl = ''
+ )
+ $ErrorActionPreference = 'Stop'
+ $InstallPath = [IO.Path]::GetFullPath($InstallPath)
+ if ($InstallPath.Contains('"') -or $Model.Contains('"')) { throw 'Invalid installation arguments.' }
+ Get-Command py -ErrorAction Stop | Out-Null
++if ($GraphPort -eq $Port) { throw 'GraphPort must differ from Port.' }
++if (!$PythonVersion) {
++    $installedPythons = (& py -0p) -join "`n"
++    $PythonVersion = @('3.11', '3.12', '3.13') | Where-Object { $installedPythons -match "(?m)^\s*-(V:)?$([regex]::Escape($_))\b" } | Select-Object -First 1
++    if (!$PythonVersion) { throw 'Python 3.11, 3.12 or 3.13 (64-bit) is required.' }
++}
+ $ollama = (Get-Command ollama -ErrorAction Stop).Source
+ if (!(Test-Path "$PSScriptRoot\web\LaserficheReports.Web.exe")) { throw 'Extract the entire transfer archive first.' }
+ $taskName = 'LaserficheReports-' + [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+@@ -27,8 +35,8 @@ if (!(Test-Path "$InstallPath\web\appsettings.Local.json")) {
+ Copy-Item "$PSScriptRoot\web\*" "$InstallPath\web" -Recurse -Force
+ Copy-Item "$PSScriptRoot\graph\*" "$InstallPath\graph" -Recurse -Force
+ Copy-Item "$PSScriptRoot\supervise.py" $InstallPath -Force
+-& py -3.11 -m venv "$InstallPath\python"
+-if ($LASTEXITCODE -ne 0) { throw 'Install Python 3.11 x64, then run Install.cmd again.' }
++& py "-$PythonVersion" -m venv "$InstallPath\python"
++if ($LASTEXITCODE -ne 0) { throw "Python $PythonVersion x64 virtual environment creation failed. Install Python 3.11-3.13 x64, then run Install.cmd again." }
+ & "$InstallPath\python\Scripts\python.exe" -m pip install -r "$InstallPath\graph\requirements.txt"
+ if ($LASTEXITCODE -ne 0) { throw 'Python dependency installation failed.' }
+ # Reuse Ollama when available; start it without taking ownership of other apps.
+@@ -52,7 +60,7 @@ if ($Model -notlike 'gpt-oss:*') { $body = ($body | ConvertFrom-Json); $body.PSO
+ $response = Invoke-RestMethod 'http://127.0.0.1:11434/api/chat' -Method Post -ContentType 'application/json' -Body $body -TimeoutSec 0
+ if (!(($response.message.content | ConvertFrom-Json).ready)) { throw 'The model did not return valid final JSON.' }
+ $userId = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+-$action = New-ScheduledTaskAction -Execute "$InstallPath\python\Scripts\pythonw.exe" -Argument "`"$InstallPath\supervise.py`" --root `"$InstallPath`" --ollama `"$ollama`" --model `"$Model`" --port $Port" -WorkingDirectory $InstallPath
++$action = New-ScheduledTaskAction -Execute "$InstallPath\python\Scripts\pythonw.exe" -Argument "`"$InstallPath\supervise.py`" --root `"$InstallPath`" --ollama `"$ollama`" --model `"$Model`" --port $Port --graph-port $GraphPort" -WorkingDirectory $InstallPath
+ $trigger = New-ScheduledTaskTrigger -AtLogOn -User $userId
+ $principal = New-ScheduledTaskPrincipal -UserId $userId -LogonType Interactive -RunLevel Limited
+ $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew

@@ -8,10 +8,12 @@ internal sealed record QueryPlan(string Operation, string? Field = null, string?
     bool Content = false, string? GroupBy = null, string? From = null, string? To = null, string? Title = null, string? Sort = null, int[]? EntryIds = null, string? Question = null,
     RepositoryFilter? Filters = null, string EntryType = "document", int Page = 1, bool CountOnly = false,
     GroupDimension[]? GroupFields = null, AggregateMetric[]? Metrics = null, string? AggregateSort = null,
-    string? SortField = null, string SortDirection = "asc", bool RequireUnique = false, string ContentMode = "summary", AggregateHaving? Having = null, string? Rollup = null, bool AllResults = false, string? ResultType = null, bool RequiresFilter = false, string? FolderName = null, bool IncludeSubfolders = false)
+    string? SortField = null, string SortDirection = "asc", bool RequireUnique = false, string ContentMode = "summary", AggregateHaving? Having = null, string? Rollup = null, bool AllResults = false, string? ResultType = null, bool RequiresFilter = false, string? FolderName = null, bool IncludeSubfolders = false, AuditQuery? Audit = null)
 {
     public void ValidateIntent()
     {
+        if (Operation == "audit") { AuditTrailReport.Validate(this); return; }
+        if (Audit != null) throw new ArgumentException("شروط التدقيق لا تنفذ بحثًا في المستودع.");
         if (Operation == "clarify")
         {
             if (Filters != null || Field != null || Template != null || FolderId != null || FolderName != null || Name != null || EntryIds?.Length > 0 || GroupFields?.Length > 0 || Metrics?.Length > 0 || Having != null || Rollup != null)
@@ -78,7 +80,7 @@ internal sealed class QuestionRouter(IHttpClientFactory clients)
             if (plan.ResultType is not ("documents" or "count" or "statistics" or "content" or "details" or "schema" or "clarification"))
                 throw new ArgumentException("خدمة التخطيط لم تحدد نوع النتيجة المطلوبة؛ أعد تشغيل أحدث خدمة reports-graph.");
             plan.ValidateIntent();
-            if (plan.Operation is not ("search" or "folders" or "metadata" or "availability" or "templates" or "schema" or "folder_information" or "recent" or "latest_created" or "latest_modified" or "created" or "modified" or "group" or "content" or "clarify") ||
+            if (plan.Operation is not ("audit" or "search" or "folders" or "metadata" or "availability" or "templates" or "schema" or "folder_information" or "recent" or "latest_created" or "latest_modified" or "created" or "modified" or "group" or "content" or "clarify") ||
                 plan.Limit is < 1 or > 200 || plan.Page is < 1 or > 1000000 ||
                 plan.Sort is not (null or "creationTime desc" or "creationTime asc" or "lastModifiedTime desc" or "lastModifiedTime asc" or "name asc" or "name desc" or "id asc" or "id desc") ||
                 plan.ContentMode is not ("summary" or "search") || plan.SortDirection is not ("asc" or "desc") || plan.EntryType is not ("document" or "folder" or "all") ||

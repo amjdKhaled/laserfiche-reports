@@ -1,0 +1,10 @@
+{
+  "BuiltAtUtc": "2026-10-19T05:59:21.7690097Z",
+  "Hosting": "WindowsService",
+  "Version": "1.0.99",
+  "Python": "frozen-3.11",
+  "Branch": "fix/typed-semantic-repository-plans",
+  "Dirty": false,
+  "SourceCommit": "777723d174552d8905c34185d25c366e6009e769",
+  "DetachedHead": true
+}

@@ -1,0 +1,13 @@
+diff --git a/deployment/README.md b/deployment/README.md
+index fe8887f..3c3a602 100644
+--- a/deployment/README.md
++++ b/deployment/README.md
+@@ -11,7 +11,7 @@ Visual Studio على الجهاز الثاني، استخدم [حزمة النق
+ بعده يعمل البرنامج المنشور بدون Visual Studio أو dotnet run، ويبدأ تلقائيًا
+ عند دخول **نفس مستخدم Windows**. هذه مهمة بدء دخول، وليست خدمة تعمل قبل تسجيل الدخول.
+ 
+-1. أوقف تشغيل الويب و`start.ps1` القديمين بـ Ctrl+C لتفريغ المنافذ 5187 و8766.
++1. أوقف تشغيل الويب و`start.ps1` القديمين بـ Ctrl+C لتفريغ المنافذ 5187 و5050.
+ 2. تأكد أن نماذج Ollama التي تستخدمها موجودة وأن Laserfiche وSupabase يعملان.
+ 3. من مجلد المشروع:
+ 
