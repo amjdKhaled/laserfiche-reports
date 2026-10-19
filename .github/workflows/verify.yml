@@ -1,13 +1,16 @@
 name: Verify Reports
 on:
   push:
-    branches: [feature/reports-chat-langgraph, fix/typed-semantic-repository-plans]
+    branches: [main, feature/reports-chat-langgraph, fix/typed-semantic-repository-plans]
   pull_request:
 jobs:
   dotnet:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Exercise the same detached checkout used by pull_request builds.
+          ref: ${{ github.sha }}
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
@@ -23,6 +26,9 @@ jobs:
             [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$parseErrors) | Out-Null
             if ($parseErrors.Count -gt 0) { throw ($parseErrors | Out-String) }
           }
+      - name: Test Git identity for attached and detached checkouts
+        shell: pwsh
+        run: ./build/Test-SourceInfo.ps1
       - shell: pwsh
         run: ./deployment/windows/build-package.ps1
       - name: Build EXE and MSI from the verified source

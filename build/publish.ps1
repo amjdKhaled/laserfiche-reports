@@ -55,15 +55,16 @@ function New-PayloadFragment([string]$Root, [string]$Destination) {
     [IO.File]::WriteAllText($Destination,$xml.ToString(),(New-Object Text.UTF8Encoding($false)))
     [xml](Get-Content $Destination -Raw) | Out-Null
 }
+. (Join-Path $PSScriptRoot 'source-info.ps1')
 Push-Location $source
 try {
     Get-Command dotnet,git,$PythonExecutable -ErrorAction Stop | Out-Null
     Invoke-Checked $PythonExecutable @('-c','import sys; assert sys.version_info[:2] == (3,11) and sys.maxsize > 2**32, "Build requires Python 3.11 x64"')
-    $commit = (& git rev-parse HEAD).Trim()
-    if ($LASTEXITCODE -ne 0) { throw 'Cannot identify SourceCommit.' }
-    $dirty = [bool](& git status --porcelain)
+    $identity = Get-ReportsSourceInformation
+    $commit = $identity.SourceCommit
+    $dirty = $identity.Dirty
     if ($dirty -and !$AllowDirty) { throw 'Commit changes before building a release, or use -AllowDirty for testing.' }
-    $branch = (& git branch --show-current).Trim()
+    $branch = $identity.Branch
     $stage = Join-Path $source ('.build-cache\reports-' + [Guid]::NewGuid().ToString('N'))
     $payload = Join-Path $stage 'payload'; $baStage = Join-Path $stage 'BA'
     New-Item -ItemType Directory -Force -Path "$payload\web","$payload\planner",$baStage,$release | Out-Null
@@ -111,7 +112,7 @@ try {
         if (Test-Path $private) { Remove-Item $private -Recurse -Force }
     }
     Copy-Item "$source\installer\Open-Reports.ps1" $payload
-    $manifest = @{ Version=$Version; SourceCommit=$commit; Branch=$branch; Dirty=$dirty; BuiltAtUtc=[DateTime]::UtcNow.ToString('O'); Hosting='WindowsService'; Python='frozen-3.11' }
+    $manifest = @{ Version=$Version; SourceCommit=$commit; Branch=$branch; DetachedHead=$identity.DetachedHead; Dirty=$dirty; BuiltAtUtc=[DateTime]::UtcNow.ToString('O'); Hosting='WindowsService'; Python='frozen-3.11' }
     $manifest | ConvertTo-Json | Set-Content "$payload\web\build-info.json" -Encoding UTF8
     Copy-Item "$payload\web\build-info.json" "$release\build-info.json"
     foreach ($required in @('LaserficheReports.Service.exe','web\LaserficheReports.Web.exe','web\appsettings.json','web\wwwroot\brand\font\ReadexPro-Regular.ttf','planner\LaserficheReports.Planner.exe')) {
