@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text.Json;
 using LaserficheReports.Application.DTOs;
 using LaserficheReports.Application.Interfaces;
 using LaserficheReports.Domain.Common;
@@ -38,10 +39,13 @@ public class AuditTrailTests
         Assert.Throws<AuditTrailException>(() => AuditCsv.Parse(Csv.Replace("2026-10-18T21:00:00Z", "not-a-date"), Mapping(), 10));
         Assert.Throws<AuditTrailException>(() => AuditCsv.Parse("When,Event,User,ID,Name,Result\n\"unfinished", Mapping(), 10));
     }
-    [Fact]
-    public async Task ExportUsesEncodedRawProtocolFreshFilenameAndCurrentSessionWindowsIdentity()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ExportUsesEncodedRawProtocolFreshFilenameAndCurrentSessionWindowsIdentity(bool pascalCase)
     {
         using var fixture = new Fixture();
+        fixture.PascalCase = pascalCase;
         var source = fixture.Source();
         var first = await source.ReadAsync(default);
         Assert.Equal(2, first.Events.Count);
@@ -121,7 +125,7 @@ public class AuditTrailTests
         public LaserficheCredential? Credentials = new("ACME\\alice", "secret");
         public NetworkCredential? Identity;
         public int Exports, StatusChecks;
-        public bool FailExport, WriteFile = true;
+        public bool FailExport, PascalCase, WriteFile = true;
         public HttpStatusCode ResponseCode = HttpStatusCode.OK;
         public List<HttpRequestMessage> Requests = [];
         public Fixture() => Directory.CreateDirectory(Root);
@@ -162,7 +166,7 @@ public class AuditTrailTests
                     if (state == 2 && fixture.WriteFile) File.WriteAllText(Path.Combine(fixture.Root, filename!), Csv);
                     body = new { State = state, Completion = state == 2 ? 100 : 50 };
                 }
-                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = JsonContent.Create(body, body.GetType()) });
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = JsonContent.Create(body, body.GetType(), options: new JsonSerializerOptions { PropertyNamingPolicy = fixture.PascalCase ? null : JsonNamingPolicy.CamelCase }) });
             }
         }
         public void Dispose() => Directory.Delete(Root, true);

@@ -126,7 +126,9 @@ internal sealed class AuditTrailSource(IConfiguration configuration, IRepository
                 using var statusResponse = await client.GetAsync($"api/SavedReport/raw/{E(token)}/status", budget.Token);
                 await EnsureAsync(statusResponse);
                 var status = await statusResponse.Content.ReadFromJsonAsync<JsonElement>(budget.Token);
-                if (!status.TryGetProperty("State", out var state) || !state.TryGetInt32(out var code))
+                if (status.ValueKind != JsonValueKind.Object ||
+                    !(status.TryGetProperty("State", out var state) || status.TryGetProperty("state", out state)) ||
+                    state.ValueKind != JsonValueKind.Number || !state.TryGetInt32(out var code))
                     throw new AuditTrailException("تعذر تفسير حالة تصدير Audit Trail.");
                 if (code == 2) { completed = true; break; }
                 if (code is 5 or 6) throw new AuditTrailException("فشل تصدير تقرير التدقيق أو أُلغي؛ لم تُعتبر النتائج فارغة.");
