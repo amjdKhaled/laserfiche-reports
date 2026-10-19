@@ -1,14 +1,21 @@
 param(
     [string]$InstallPath = "$env:LOCALAPPDATA\LaserficheReports",
-    [string]$Model = 'gpt-oss:20b',
-    [int]$Port = 5187
+    [string]$Model = "qwen3-vl:8b-instruct",
+    [int]$Port = 5187,
+    [int]$GraphPort = 5050,
+    [string]$PythonVersion = ''
 )
 $ErrorActionPreference = 'Stop'
 $source = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $InstallPath = [IO.Path]::GetFullPath($InstallPath)
-if ($InstallPath.Contains('"') -or $Model.Contains('"') -or $Port -lt 1024 -or $Port -gt 65535) { throw 'Invalid installation arguments.' }
+if ($InstallPath.Contains('"') -or $Model.Contains('"') -or $Port -lt 1024 -or $Port -gt 65535 -or $GraphPort -lt 1024 -or $GraphPort -gt 65535 -or $GraphPort -eq $Port) { throw 'Invalid installation arguments.' }
 Get-Command dotnet -ErrorAction Stop | Out-Null
 Get-Command py -ErrorAction Stop | Out-Null
+if (!$PythonVersion) {
+    $installedPythons = (& py -0p) -join "`n"
+    $PythonVersion = @('3.11', '3.12', '3.13') | Where-Object { $installedPythons -match "(?m)^\s*-(V:)?$([regex]::Escape($_))\b" } | Select-Object -First 1
+    if (!$PythonVersion) { throw 'Python 3.11, 3.12 or 3.13 (64-bit) is required.' }
+}
 $ollama = (Get-Command ollama -ErrorAction Stop).Source
 $taskName = 'LaserficheReports-' + [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $existing = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
@@ -19,8 +26,8 @@ if ($LASTEXITCODE -ne 0) { throw 'Web publish failed; nothing was registered for
 Copy-Item "$source\tools\reports-graph\*.py" "$InstallPath\graph" -Force
 Copy-Item "$source\tools\reports-graph\requirements.txt" "$InstallPath\graph" -Force
 Copy-Item "$source\deployment\supervise.py" $InstallPath -Force
-& py -3.11 -m venv "$InstallPath\python"
-if ($LASTEXITCODE -ne 0) { throw 'Python 3.11 x64 is required for installation.' }
+& py "-$PythonVersion" -m venv "$InstallPath\python"
+if ($LASTEXITCODE -ne 0) { throw "Python $PythonVersion x64 virtual environment creation failed." }
 & "$InstallPath\python\Scripts\python.exe" -m pip install -r "$InstallPath\graph\requirements.txt"
 if ($LASTEXITCODE -ne 0) { throw 'Python dependencies failed to install.' }
 $localConfig = "$source\src\LaserficheReports.Web\appsettings.Local.json"
@@ -28,7 +35,7 @@ if ((Test-Path $localConfig) -and !(Test-Path "$InstallPath\web\appsettings.Loca
 & $ollama pull $Model
 if ($LASTEXITCODE -ne 0) { throw 'Model download failed. Open Ollama, check internet access and retry; startup has not been registered.' }
 $userId = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-$action = New-ScheduledTaskAction -Execute "$InstallPath\python\Scripts\pythonw.exe" -Argument "`"$InstallPath\supervise.py`" --root `"$InstallPath`" --ollama `"$ollama`" --model `"$Model`" --port $Port" -WorkingDirectory $InstallPath
+$action = New-ScheduledTaskAction -Execute "$InstallPath\python\Scripts\pythonw.exe" -Argument "`"$InstallPath\supervise.py`" --root `"$InstallPath`" --ollama `"$ollama`" --model `"$Model`" --port $Port --graph-port $GraphPort" -WorkingDirectory $InstallPath
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $userId
 $principal = New-ScheduledTaskPrincipal -UserId $userId -LogonType Interactive -RunLevel Limited
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew

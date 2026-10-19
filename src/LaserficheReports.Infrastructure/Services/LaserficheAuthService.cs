@@ -233,8 +233,16 @@ internal sealed class LaserficheAuthService : ILaserficheAuthService
                     CacheTokenResponse(repository, cacheKey, renewed);
                     return renewed.AccessToken;
                 }
-                catch (UnauthorizedAccessException)
+                // After the Repository API closes an idle Laserfiche session, renewing it fails with
+                // 401 or with HTTP 500 (LF error 999). Either way the refresh token is unusable;
+                // keeping it would fail every later request until it expires. Gateway failures
+                // (502-504) keep the refresh token: the same session can still be renewed later.
+                catch (Exception error) when (error is UnauthorizedAccessException ||
+                    error is Domain.Exceptions.LaserficheException { StatusCode: 500 })
                 {
+                    _logger.LogWarning("[LF AUTH] Session renewal failed ({Reason}) for repository {RepoId}; starting a new session.",
+                        error is Domain.Exceptions.LaserficheException failure ? "HTTP " + failure.StatusCode : "rejected",
+                        repository.RepositoryId);
                     _cache.Remove(RefreshKeyFor(repository));
                     _cache.Set("LFRefreshRejected:" + cacheKey, true, TimeSpan.FromHours(8));
                     // Only the selected reports session's own stored credentials
@@ -262,6 +270,12 @@ internal sealed class LaserficheAuthService : ILaserficheAuthService
                 throw new UnauthorizedAccessException(
                     "The External Share repository session has expired. Sign in again.");
             }
+
+            // An LFDS single sign-on session has no stored password. Once its token and
+            // refresh token are gone the user signs in through LFDS again; never fall
+            // through to the configured service account.
+            if (IsLfdsReportsSession())
+                throw new UnauthorizedAccessException("The LFDS sign-in expired. Sign in again.");
 
             if (IsStoredReportsSession())
                 return await RecoverReportsSessionAsync(repository, cacheKey, cancellationToken).ConfigureAwait(false);
@@ -319,6 +333,12 @@ internal sealed class LaserficheAuthService : ILaserficheAuthService
     private bool IsStoredReportsSession()
     {
         try { return _httpContextAccessor.HttpContext?.Session.GetString("AuthenticationScopeMethod") == "Reports"; }
+        catch (InvalidOperationException) { return false; }
+    }
+
+    private bool IsLfdsReportsSession()
+    {
+        try { return _httpContextAccessor.HttpContext?.Session.GetString("AuthenticationScopeMethod") == "LFDS"; }
         catch (InvalidOperationException) { return false; }
     }
 

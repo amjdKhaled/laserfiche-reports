@@ -16,10 +16,12 @@ namespace LaserficheReports.Infrastructure.Tests;
 public sealed class ReportsSessionRenewalTests
 {
     private static readonly RepositoryDescriptor Repo = new("TestRepo", "http://lf.test", "TestRepo", "TestRepo");
-    private static (LaserficheAuthService, Handler) Create(params HttpResponseMessage[] responses)
+    private static (LaserficheAuthService, Handler) Create(params HttpResponseMessage[] responses) =>
+        Create("Reports", responses);
+    private static (LaserficheAuthService, Handler) Create(string method, params HttpResponseMessage[] responses)
     {
         var session = new Session();
-        session.SetString("AuthenticationScopeMethod", "Reports");
+        session.SetString("AuthenticationScopeMethod", method);
         session.SetString("ActiveRepositoryId", Repo.RepositoryId);
         var options = new LaserficheOptions { ServerUrl = Repo.ServerUrl, ApiBasePath = "/LFRepositoryAPI", ApiVersion = "v2", RepositoryId = Repo.RepositoryId };
         var handler = new Handler(responses);
@@ -116,6 +118,40 @@ public sealed class ReportsSessionRenewalTests
         Assert.Equal("server-two", await service.GetTokenAsync(anotherServer));
         Assert.Equal("server-one", await service.GetTokenAsync(Repo));
         Assert.Equal(2, handler.Bodies.Count);
+    }
+
+    [Fact]
+    public async Task RenewalOfAClosedSession_StartsANewSessionForTheSameUser()
+    {
+        // The Repository API answers 500 (LF error 999) when the refreshed session was closed for idleness.
+        var (service, handler) = Create(Token("old", true), Response(HttpStatusCode.InternalServerError, "{\"errorCode\":999}"), Token("new"));
+        await service.TryAuthenticateAsync(Repo, "same-user", "same-password");
+        await service.InvalidateTokenAsync(Repo);
+        Assert.Equal("new", await service.GetTokenAsync(Repo));
+        Assert.Contains("grant_type=refresh_token", handler.Bodies[1]);
+        Assert.Contains("username=same-user", handler.Bodies[2]);
+        Assert.Equal("new", await service.GetTokenAsync(Repo));
+        Assert.Equal(3, handler.Bodies.Count);
+    }
+
+    [Fact]
+    public async Task RenewalOfAClosedLfdsSession_AsksForSignInInsteadOfFailingEveryRequest()
+    {
+        var (service, handler) = Create("LFDS", Token("sso", true), Response(HttpStatusCode.InternalServerError, "{\"errorCode\":999}"));
+        Assert.True(await service.ExchangeAuthorizationCodeAsync(Repo, "code", "verifier", "https://reports/login/Callback", "client"));
+        await service.InvalidateTokenAsync(Repo);
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => service.GetTokenAsync(Repo));
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => service.GetTokenAsync(Repo));
+        Assert.Equal(2, handler.Bodies.Count); // One failed renewal; later reads ask for sign-in without retrying it.
+    }
+
+    [Fact]
+    public async Task ExpiredLfdsSession_NeverFallsBackToStoredOrDiskCredentials()
+    {
+        var (service, handler) = Create("LFDS");
+        var error = await Assert.ThrowsAsync<UnauthorizedAccessException>(() => service.GetTokenAsync(Repo));
+        Assert.Contains("LFDS", error.Message);
+        Assert.Empty(handler.Bodies);
     }
 
     [Fact]

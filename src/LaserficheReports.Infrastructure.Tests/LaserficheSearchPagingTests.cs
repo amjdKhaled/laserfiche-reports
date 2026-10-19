@@ -93,6 +93,29 @@ public sealed class LaserficheSearchPagingTests
     }
 
     [Fact]
+    public async Task CompleteReadAcceptsRowsTheServerCountedTwiceForOneEntry()
+    {
+        var http = new Responses("{\"taskId\":\"task\",\"status\":\"Completed\"}",
+            "{\"@odata.count\":3,\"value\":[{\"id\":1},{\"id\":2}],\"@odata.nextLink\":\"?next=1\"}",
+            "{\"value\":[{\"id\":2}]}");
+        var result = await Create(http).QueryAsync("trusted", 1, 20, readAll: true);
+        Assert.Equal(new[] { 1, 2 }, result.Items.Select(i => i.EntryId));
+        Assert.Equal(2, result.TotalCount);
+        Assert.True(result.IsTotalCountExact);
+    }
+
+    [Fact]
+    public async Task CompleteReadRequestsLargePagesAndPagedReadKeepsItsPageSize()
+    {
+        var complete = new Responses("{\"taskId\":\"task\",\"status\":\"Completed\"}", "{\"@odata.count\":1,\"value\":[{\"id\":1}]}");
+        await Create(complete).QueryAsync("trusted", 1, 20, readAll: true);
+        Assert.Contains("odata.maxpagesize=1000", complete.Prefers);
+        var paged = new Responses("{\"taskId\":\"task\",\"status\":\"Completed\"}", "{\"@odata.count\":1,\"value\":[{\"id\":1}]}");
+        await Create(paged).QueryAsync("trusted", 1, 20);
+        Assert.Contains("odata.maxpagesize=20", paged.Prefers);
+    }
+
+    [Fact]
     public async Task MultipleFieldProjectionUsesRepeatedParametersAndAscendingSort()
     {
         var http = new Responses("{\"taskId\":\"task\",\"status\":\"Completed\"}", "{\"@odata.count\":0,\"value\":[]}");
@@ -119,6 +142,7 @@ public sealed class LaserficheSearchPagingTests
     private sealed class Responses(params string[] bodies) : HttpMessageHandler, IHttpClientFactory
     {
         public List<string> Urls { get; } = [];
+        public List<string> Prefers { get; } = [];
         public string? Body { get; private set; }
         public int Posts { get; private set; }
         private readonly Queue<string> remaining = new(bodies);
@@ -126,6 +150,7 @@ public sealed class LaserficheSearchPagingTests
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
         {
             Urls.Add(request.RequestUri!.ToString());
+            if (request.Headers.TryGetValues("Prefer", out var prefer)) Prefers.AddRange(prefer);
             if (request.Method == HttpMethod.Post) { Posts++; Body = await request.Content!.ReadAsStringAsync(ct); }
             return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(remaining.Dequeue()) };
         }

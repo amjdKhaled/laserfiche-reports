@@ -615,16 +615,42 @@ public class ReportTests
         Assert.Equal(50, query.Limits[1]);
     }
 
-    [Theory]
-    [InlineData(0)]
-    [InlineData(2)]
-    public async Task MissingOrAmbiguousFolderNeverBecomesZeroDocumentCount(int found)
+    [Fact]
+    public async Task MissingFolderNeverBecomesZeroDocumentCount()
     {
-        var query = new Searches { Response = (_, _, _) => new PagedResult<LFSearchResult>
-            { Items = Enumerable.Range(1, found).Select(id => new LFSearchResult { EntryId = id }).ToArray(), TotalCount = found } };
+        var query = new Searches { Response = (_, _, _) => PagedResult<LFSearchResult>.Empty };
         await Assert.ThrowsAsync<RepositoryScopeClarificationException>(() => Create(new Entries(73), query).CreateAsync("repo",
             new QueryPlan("search", FolderName: "الأرشيف", CountOnly: true, RequiresFilter: true), [], default));
-        Assert.Single(query.Calls);
+        // The spelling-tolerant name search, then the exact name; no document count is attempted.
+        Assert.Equal(2, query.Calls.Count);
+        Assert.All(query.Calls, call => Assert.Contains("Type=F}", call));
+    }
+
+    [Fact]
+    public async Task EveryFolderWithTheRequestedNameIsSearched()
+    {
+        var query = new Searches { Response = (expression, _, _) => expression.Contains("Type=F}")
+            ? new PagedResult<LFSearchResult> { Items = [
+                new() { EntryId = 90, Name = "الأرشيف", EntryType = LFEntryType.Folder },
+                new() { EntryId = 91, Name = "الارشيف", EntryType = LFEntryType.Folder },
+                new() { EntryId = 92, Name = "الأرشيف القديم", EntryType = LFEntryType.Folder }], TotalCount = 3 }
+            : new PagedResult<LFSearchResult> { Items = [new() { EntryId = 618 }], TotalCount = 12 } };
+        var result = await Create(new Entries(73), query).CreateAsync("repo",
+            new QueryPlan("search", FolderName: "الأرشيف", CountOnly: true, RequiresFilter: true, ResultType: "count"), [], default);
+        Assert.Contains("**12**", result.Answer);
+        Assert.Equal("{LF:Name=\"?ل?رش?ف\", Type=F}", query.Calls[0]);
+        // Entries fake paths are \قسم\وثيقة {id}; the search syntax doubles each backslash.
+        Assert.Contains("({LF:Lookin=\"" + Escaped(90) + "\", Subfolders=N} | {LF:Lookin=\"" + Escaped(91) + "\", Subfolders=N})", query.Calls[1]);
+        Assert.DoesNotContain("وثيقة 92", query.Calls[1]);
+        static string Escaped(int id) => $"\\قسم\\وثيقة {id}".Replace("\\", "\\\\");
+    }
+
+    [Fact]
+    public void FolderNamePatternAbsorbsArabicSpellingVariants()
+    {
+        Assert.Equal("?لو?رد", LiveRepositoryReportService.FolderNamePattern("الوارد"));
+        Assert.Equal("مدرس? ?لمستقبل", LiveRepositoryReportService.FolderNamePattern("مدرسة المستقبل"));
+        Assert.Equal(ReportSupport.MatchKey("مدرسة الإدارة العليا"), ReportSupport.MatchKey("مدرسه الاداره العلىا"));
     }
 
     [Fact]
@@ -638,7 +664,7 @@ public class ReportTests
         var answer = await chat.AskAsync("كم وثيقة في مجلد الأرشيف؟", default);
         Assert.Contains("اسم المجلد الصحيح أو رقمه", answer.Answer);
         Assert.DoesNotContain("عدد النتائج المطابقة: **0**", answer.Answer);
-        Assert.Equal(2, queries.Calls.Count);
+        Assert.Equal(3, queries.Calls.Count); // Spelling-tolerant and exact folder lookups, then suggestions.
     }
 
     [Fact]

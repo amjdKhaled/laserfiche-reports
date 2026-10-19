@@ -1,4 +1,6 @@
 using LaserficheReports.Application.Interfaces;
+using LaserficheReports.Infrastructure.Options;
+using Microsoft.Extensions.Options;
 
 namespace LaserficheReports.Web;
 
@@ -9,14 +11,7 @@ internal static class ReportSessionEndpoints
 
     internal static void MapReportSessions(this WebApplication app)
     {
-        app.MapGet("/api/session/status", async (ISessionCredentialStore sessions, IRepositoryContext repositories,
-            HttpContext http, CancellationToken ct) =>
-        {
-            var credential = await sessions.TryGetAsync(ct);
-            var repository = await repositories.GetActiveRepositoryAsync(ct);
-            return Results.Ok(new { authenticated = credential is not null, username = credential?.Username,
-                repository = repository.RepositoryId, server = repository.ServerUrl, generation = http.Session.GetString("ReportsGeneration") });
-        });
+        app.MapGet("/api/session/status", StatusAsync);
         app.MapPost("/api/session/repositories", async (LoginRequest request, IRepositoryContext context,
             ILaserficheRepositoryService service, CancellationToken ct) =>
         {
@@ -28,6 +23,15 @@ internal static class ReportSessionEndpoints
             return Results.Ok(found.Select(r => new { id = r.RepositoryId, name = r.RepositoryName }));
         });
         app.MapPost("/api/session/login", LoginAsync);
+        // Keeps the Laserfiche session open while the Reports tab is in use: the Repository API
+        // closes sessions idle longer than its SessionIdleTimeout (15 minutes by default).
+        app.MapPost("/api/session/keepalive", async (ISessionCredentialStore sessions, ILaserficheEntryService entries,
+            CancellationToken ct) =>
+        {
+            if (await sessions.TryGetSignedInUserAsync(ct) is null) return Results.Unauthorized();
+            await entries.GetEntryAsync(await entries.GetRootEntryIdAsync(ct), ct);
+            return Results.Ok(new { alive = true });
+        });
         app.MapPost("/api/session/logout", async (ISessionCredentialStore sessions, ILaserficheAuthService auth,
             HttpContext http, CancellationToken ct) =>
         {
@@ -36,9 +40,21 @@ internal static class ReportSessionEndpoints
             http.Session.SetString("ReportsGeneration", Guid.NewGuid().ToString("N"));
             http.Session.Remove("AuthenticationScopeMethod");
             http.Session.Remove("AuthenticationScopeSubject");
+            http.Session.Remove("LfdsUser");
+            http.Session.Remove("AuthenticatedLaserficheUser");
             return Results.Ok(new { authenticated = false });
         });
     }
+    internal static async Task<IResult> StatusAsync(ISessionCredentialStore sessions, IRepositoryContext repositories,
+        IOptionsMonitor<LaserficheOptions> options, HttpContext http, CancellationToken ct)
+    {
+        var username = await sessions.TryGetSignedInUserAsync(ct);
+        var repository = await repositories.GetActiveRepositoryAsync(ct);
+        return Results.Ok(new { authenticated = username is not null, username,
+            repository = repository.RepositoryId, server = repository.ServerUrl, generation = http.Session.GetString("ReportsGeneration"),
+            sso = ReportSso.Enabled(options.CurrentValue) });
+    }
+
     internal static async Task<IResult> LoginAsync(LoginRequest request, IRepositoryContext repositories,
         ILaserficheAuthService auth, ISessionCredentialStore sessions, HttpContext http, CancellationToken ct)
     {

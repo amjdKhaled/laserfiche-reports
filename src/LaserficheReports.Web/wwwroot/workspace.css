@@ -102,6 +102,7 @@ body,input,button,textarea,select{font-family:var(--isb-font)}
 .login-card input{background:var(--isb-field);border-color:var(--isb-border);color:var(--isb-ink)}
 .login-card input:focus-visible{outline:2px solid var(--isb-blue);outline-offset:2px}
 .login-card button[type=submit]{background:var(--isb-blue);color:white}
+.login-card #sso-other-account{color:var(--isb-blue);border-color:var(--isb-border)}
 .login-card button[type=submit]:hover{background:var(--isb-blue-hover)}
 .login-card #discover-repositories{background:var(--isb-tint);color:var(--isb-blue);border:1px solid var(--isb-border)}
 .login-card #login-error{color:var(--isb-danger)}

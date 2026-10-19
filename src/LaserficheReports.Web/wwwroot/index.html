@@ -60,12 +60,18 @@
       <label for="repository-id">المستودع</label>
       <input id="repository-id" list="repository-options" maxlength="256" required placeholder="اسم المستودع في Laserfiche">
       <datalist id="repository-options"></datalist>
-      <label for="username">اسم المستخدم</label>
-      <input id="username" type="text" autocomplete="username" required>
-      <label for="password">كلمة المرور</label>
-      <input id="password" type="password" autocomplete="current-password" required>
-      <button id="discover-repositories" type="button">اكتشاف المستودعات</button>
-      <button id="login-submit" type="submit">تسجيل الدخول</button>
+      <div id="sso-panel" class="sso-panel hidden">
+        <button id="sso-login" type="submit">الدخول بحساب Laserfiche</button>
+        <button id="sso-other-account" type="button">الدخول بحساب آخر</button>
+      </div>
+      <div id="password-panel" class="password-panel">
+        <label for="username">اسم المستخدم</label>
+        <input id="username" type="text" autocomplete="username" required>
+        <label for="password">كلمة المرور</label>
+        <input id="password" type="password" autocomplete="current-password" required>
+        <button id="discover-repositories" type="button">اكتشاف المستودعات</button>
+        <button id="login-submit" type="submit">تسجيل الدخول</button>
+      </div>
       <div id="login-error" role="alert"></div>
     </form>
   </div>

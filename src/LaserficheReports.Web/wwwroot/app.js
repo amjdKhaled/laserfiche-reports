@@ -69,8 +69,36 @@ function openSession(username, repository, server, generation) {
   renderMessages();
   renderScan();
 }
+// LFDS single sign-on: the server redirects through the Repository API and back.
+let ssoEnabled = false;
+const ssoErrors = {
+  provider: 'رفض Laserfiche طلب الدخول الموحد. حاول مرة أخرى أو ادخل بحساب آخر.',
+  state: 'انتهت صلاحية محاولة الدخول. اضغط زر الدخول مرة أخرى.',
+  exchange: 'تعذر إكمال الدخول الموحد مع Laserfiche. راجع سجل التطبيق.',
+  configuration: 'إعدادات الدخول الموحد غير مكتملة. راجع appsettings.Local.json.',
+  repository: 'اسم المستودع غير صالح.'
+};
+function startSso(otherAccount) {
+  location.href = '/login/StartSso?repository=' + encodeURIComponent($('repository-id').value.trim()) +
+    (otherAccount ? '&forceLogin=true' : '');
+}
+// At most one automatic sign-in a minute, so a failing sign-in cannot loop.
+function allowAutoSso() {
+  let last = 0;
+  try { last = Number(sessionStorage.getItem('reports-sso-auto')) || 0; } catch {}
+  if (Date.now() - last <= 60000) return false;
+  try { sessionStorage.setItem('reports-sso-auto', String(Date.now())); } catch {}
+  return true;
+}
+function applyLoginMode() {
+  $('sso-panel').classList.toggle('hidden', !ssoEnabled);
+  $('password-panel').classList.toggle('hidden', ssoEnabled);
+  $('username').required = $('password').required = !ssoEnabled;
+}
+$('sso-other-account').onclick = () => startSso(true);
 $('login-form').onsubmit = async event => {
   event.preventDefault();
+  if (ssoEnabled) { startSso(false); return; }
   $('login-submit').disabled = true;
   $('login-error').textContent = '';
   try {
@@ -279,6 +307,136 @@ function conversationHistory(messages) {
     ...(message.kind ? { kind: message.kind } : {}),
     ...(message.clarificationQuestion ? { clarificationQuestion: message.clarificationQuestion.slice(0, 2000) } : {}) }));
 }
+// ── Deleted documents ──────────────────────────────────────────────────────
+// The Repository API cannot read the Recycle Bin, and the model must never guess deletions
+// (it once answered with the documents modified today). Reports opened by the Web Client
+// button asks that Web Client tab, which reads the Recycle Bin with the user's own session:
+// each user gets their own deletions, administrators everything (see lf-reports-button.js).
+function arabicKey(text) {
+  return String(text || '').normalize('NFC').replace(/[ؐ-ًؚ-ٰٟـ]/g, '')
+    .replace(/[أإآ]/g, 'ا').replace(/ة/g, 'ه').replace(/ى/g, 'ي')
+    .replace(/[٠-٩]/g, digit => '٠١٢٣٤٥٦٧٨٩'.indexOf(digit)).replace(/\s+/g, ' ').trim().toLowerCase();
+}
+const WORD_START = '(?<![\\p{L}\\p{N}])[وفبل]{0,2}', WORD_END = '(?![\\p{L}\\p{N}])';
+function isDeletedQuestion(question) {
+  return new RegExp(WORD_START + '(?:ال)?(?:محذوف|حذف|تحذف|يحذف|انحذف|اتحذف|اتمسح|سله المحذوفات)', 'u').test(arabicKey(question)) ||
+    /\b(?:deleted|recycle bin)\b/i.test(question);
+}
+// One deletion period named in the question: null when none, undefined when several.
+function deletedPeriod(question, today = new Date()) {
+  const text = arabicKey(question);
+  const y = today.getFullYear(), m = today.getMonth(), d = today.getDate();
+  const day = offset => [new Date(y, m, d + offset), new Date(y, m, d + offset + 1)];
+  const week = offset => [new Date(y, m, d - today.getDay() + 7 * offset), new Date(y, m, d - today.getDay() + 7 * offset + 7)];
+  const month = offset => [new Date(y, m + offset, 1), new Date(y, m + offset + 1, 1)];
+  const year = offset => [new Date(y + offset, 0, 1), new Date(y + offset + 1, 0, 1)];
+  const phrases = [
+    ['أول أمس', day(-2), '(?:اول (?:من )?(?:امس|امبارح)|قبل امس)'],
+    ['أمس', day(-1), '(?:(?:ال)?(?:امس|بارحه)|امبارح)'],
+    ['اليوم', day(0), '(?:اليوم|النهارده|انهارده)'],
+    ['الأسبوع الماضي', week(-1), 'الاسبوع (?:الماضي|السابق|الفائت|اللي فات)'],
+    ['هذا الأسبوع', week(0), '(?:(?:هذا|هاذا) الاسبوع|الاسبوع (?:الحالي|الجاري|ده))'],
+    ['الشهر الماضي', month(-1), 'الشهر (?:الماضي|السابق|الفائت|اللي فات)'],
+    ['هذا الشهر', month(0), '(?:(?:هذا|هاذا) الشهر|الشهر (?:الحالي|الجاري|ده))'],
+    ['السنة الماضية', year(-1), '(?:السنه|العام) (?:الماضي|الماضيه|السابق|السابقه|الفائت|الفائته|اللي فاتت)'],
+    ['هذه السنة', year(0), '(?:(?:هذه|هذي|هاذي) السنه|(?:هذا|هاذا) العام|(?:السنه|العام) (?:الحالي|الحاليه|الجاري|الجاريه|دي))'],
+  ];
+  let rest = text;
+  const found = [];
+  for (const [label, bounds, pattern] of phrases) {
+    const phrase = new RegExp(WORD_START + pattern + WORD_END, 'u');
+    if (phrase.test(rest)) { found.push({ label, bounds }); rest = rest.replace(phrase, ' '); }
+  }
+  // An explicit date is day/month/year, or ISO year-month-day.
+  const explicit = /(?<!\d)(\d{1,2})\/(\d{1,2})\/(\d{4})(?!\d)|(?<!\d)(\d{4})-(\d{1,2})-(\d{1,2})(?!\d)/.exec(rest);
+  if (explicit) {
+    const [dd, mm, yyyy] = explicit[1] ? [+explicit[1], +explicit[2], +explicit[3]] : [+explicit[6], +explicit[5], +explicit[4]];
+    const start = new Date(yyyy, mm - 1, dd);
+    if (start.getMonth() === mm - 1 && start.getDate() === dd)
+      found.push({ label: `${yyyy}-${String(mm).padStart(2, '0')}-${String(dd).padStart(2, '0')}`, bounds: [start, new Date(yyyy, mm - 1, dd + 1)] });
+  }
+  if (found.length > 1) return undefined;
+  return found.length ? { label: found[0].label, start: found[0].bounds[0], end: found[0].bounds[1] } : null;
+}
+// Recycle Bin dates arrive as M/D/YYYY h:mm AM/PM (the bridge requests the en-US locale).
+function parseRecycleDate(text) {
+  const match = /^(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?$/i.exec(String(text || '').trim());
+  if (!match) return null;
+  const hour = match[7] ? +match[4] % 12 + (/pm/i.test(match[7]) ? 12 : 0) : +match[4];
+  return new Date(+match[3], +match[1] - 1, +match[2], hour, +match[5], +(match[6] || 0));
+}
+function formatRecycleDate(date) {
+  const two = value => String(value).padStart(2, '0');
+  return date ? `${date.getFullYear()}-${two(date.getMonth() + 1)}-${two(date.getDate())} ${two(date.getHours())}:${two(date.getMinutes())}` : '';
+}
+function requestRecycleBin() {
+  return new Promise((resolve, reject) => {
+    const source = window.opener;
+    if (!source || source.closed)
+      return reject(new Error('لعرض الوثائق المحذوفة افتح التقارير من زر Reports في Laserfiche Web Client، وأبقِ نافذة Web Client مفتوحة؛ سلة المحذوفات تُقرأ من خلالها فقط.'));
+    // Web Client and Reports run on the same server; only that window may answer.
+    const webClientOrigin = `${location.protocol}//${location.hostname}`;
+    const requestId = crypto.randomUUID();
+    const timer = setTimeout(() => { window.removeEventListener('message', listener);
+      reject(new Error('لم تستجب نافذة Laserfiche Web Client. تأكد أنها ما زالت مفتوحة على المستودع ثم أعد السؤال.')); }, 60000);
+    function listener(event) {
+      if (event.source !== source || event.origin !== webClientOrigin || event.data?.type !== 'lf-reports:recycle-bin-result' ||
+          event.data.requestId !== requestId) return;
+      clearTimeout(timer);
+      window.removeEventListener('message', listener);
+      if (event.data.ok) { resolve(event.data); return; }
+      const errors = {
+        unauthorized: 'انتهت جلسة Laserfiche Web Client. سجّل الدخول فيها ثم أعد السؤال.',
+        repository_mismatch: `نافذة Web Client مفتوحة على المستودع «${event.data.repository}». افتح المستودع نفسه ثم أعد السؤال.`,
+        no_repository: 'افتح المستودع في Laserfiche Web Client ثم أعد السؤال.',
+        too_many: 'سلة المحذوفات تحتوي أكثر من 10000 عنصر؛ حدد فترة أو اسم من حذفها.'
+      };
+      reject(new Error(errors[event.data.error] || `تعذر قراءة سلة المحذوفات من Web Client (${event.data.error})، فلم تُعرض نتائج غير مؤكدة.`));
+    }
+    window.addEventListener('message', listener);
+    source.postMessage({ type: 'lf-reports:recycle-bin', requestId, repository: sessionRepository }, webClientOrigin);
+  });
+}
+async function deletedDocumentsReport(question) {
+  const period = deletedPeriod(question);
+  if (period === undefined) throw new Error('حدد فترة واحدة للحذف، مثل اليوم أو هذا الأسبوع أو هذا الشهر.');
+  const listing = await requestRecycleBin();
+  const text = arabicKey(question);
+  const escaped = value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  // «من مجلد الوارد» names an original location; any folder of that name, at any depth.
+  const segments = [...new Set(listing.rows.flatMap(row => String(row.location || '').split('\\').filter(Boolean)))];
+  const folderMention = name => new RegExp('مجلد\\s+' + escaped(arabicKey(name)) + WORD_END, 'u');
+  const folder = segments.sort((a, b) => b.length - a.length).find(name => folderMention(name).test(text));
+  const typeText = folder ? text.replace(folderMention(folder), ' ') : text;
+  const documents = /(?:وثيق|وثائق|مستند|ملف|معامل)/.test(typeText), folders = /مجلد/.test(typeText);
+  const type = folders && !documents ? 'Folder' : documents && !folders ? 'Document' : null;
+  const deleter = [...new Set(listing.rows.map(row => row.deletedBy).filter(Boolean))]
+    .find(name => new RegExp(WORD_START + escaped(arabicKey(name)) + WORD_END, 'u').test(text));
+  const rows = [];
+  for (const row of listing.rows) {
+    if (type && row.type !== type) continue;
+    if (deleter && arabicKey(row.deletedBy) !== arabicKey(deleter)) continue;
+    if (folder && !String(row.location || '').split('\\').some(part => arabicKey(part) === arabicKey(folder))) continue;
+    const deletedAt = parseRecycleDate(row.deleted);
+    if (period) {
+      if (!deletedAt) throw new Error('تعذر قراءة تاريخ الحذف من سلة المحذوفات، فلم تُعرض نتائج غير مؤكدة.');
+      if (deletedAt < period.start || deletedAt >= period.end) continue;
+    }
+    rows.push({ ...row, deletedAt });
+  }
+  rows.sort((a, b) => (b.deletedAt?.getTime() || 0) - (a.deletedAt?.getTime() || 0));
+  const title = [type === 'Folder' ? 'المجلدات المحذوفة' : type === 'Document' ? 'الوثائق المحذوفة' : 'العناصر المحذوفة',
+    folder ? 'من مجلد ' + folder : null, period?.label, deleter ? 'حذفها ' + deleter : null].filter(Boolean).join(' — ');
+  const detail = `عدد النتائج المطابقة: **${rows.length}**.`;
+  const cell = value => String(value ?? '').trim()
+    ? String(value).replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/\r?\n/g, ' ') : '—';
+  const table = '| رقم الوثيقة | الاسم | النوع | المكان الأصلي | تاريخ الحذف | حذفها | تاريخ الإنشاء |\n| --- | --- | --- | --- | --- | --- | --- |\n' +
+    (rows.length ? rows.map(row => `| ${cell(row.id)} | ${cell(row.name)} | ${row.type === 'Folder' ? 'مجلد' : 'وثيقة'} | ${cell(row.location)} | ` +
+      `${cell(formatRecycleDate(row.deletedAt) || row.deleted)} | ${cell(row.deletedBy)} | ${cell(formatRecycleDate(parseRecycleDate(row.created)) || row.created)} |`).join('\n')
+      : '| — | لا توجد عناصر محذوفة مطابقة | — | — | — | — | — |');
+  return { role: 'assistant', kind: 'answer', repositoryId: sessionRepository, generatedAt: new Date().toISOString(),
+    scope: { detail }, text: `# ${title}\n\n${detail}\n\n${table}` };
+}
 $('ask-form').onsubmit = async event => {
   event.preventDefault();
   if ($('send').disabled) return;
@@ -297,13 +455,42 @@ $('ask-form').onsubmit = async event => {
   chat.messages.push({ role: 'assistant', text: 'جاري البحث في الوثائق وتحضير الإجابة...' });
   renderHistory(); renderMessages();
   try {
+    if (isDeletedQuestion(question)) {
+      const report = await deletedDocumentsReport(question);
+      if (epoch === sessionEpoch && chats.includes(chat)) chat.messages[chat.messages.length - 1] = report;
+      return;
+    }
     const result = await api('/api/reports/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question, history: conversationHistory(chat.messages.slice(0, -2)) }) });
     if (epoch !== sessionEpoch || !chats.includes(chat)) return;
     chat.messages[chat.messages.length - 1] = { role: 'assistant', kind: result.isClarification ? 'clarification' : 'answer', clarificationQuestion: result.clarificationQuestion, repositoryId: sessionRepository, relatedEntryIds: result.relatedEntryIds, reports: result.reports, text: result.answer, sources: result.sources, scope: result.scope, generatedAt: result.generatedAt, quality: result.quality };
   } catch (error) {
+    // An expired LFDS session signs in again silently, then this question is sent again.
+    if (error.status === 401 && ssoEnabled && epoch === sessionEpoch && allowAutoSso()) {
+      chat.messages.splice(-2, 2);
+      try { sessionStorage.setItem('reports-pending-question', JSON.stringify({ chat: chat.id, question })); } catch {}
+      save();
+      startSso(false);
+      return;
+    }
     chat.messages[chat.messages.length - 1] = { role: 'assistant', kind: 'error', errorCode: error.code, text: `تعذر إكمال السؤال: ${error.message}` };
   } finally { pendingOperations--; $('send').disabled = pendingOperations > 0; if (epoch === sessionEpoch) { save(); renderMessages(); } }
 };
+function resendPendingQuestion() {
+  let pending = null;
+  try { pending = JSON.parse(sessionStorage.getItem('reports-pending-question') || 'null'); sessionStorage.removeItem('reports-pending-question'); } catch {}
+  if (!pending?.question) return;
+  if (chats.some(c => c.id === pending.chat)) { active = pending.chat; renderHistory(); renderMessages(); }
+  $('question').value = pending.question;
+  $('ask-form').requestSubmit();
+}
+// Keep the Laserfiche session open while Reports is in use: the Repository API closes
+// sessions idle for 15 minutes. Stops after an hour without activity, freeing the license.
+let lastActivity = Date.now();
+['pointerdown', 'keydown'].forEach(type => document.addEventListener(type, () => { lastActivity = Date.now(); }, { passive: true }));
+setInterval(() => {
+  if (!$('login-layer').classList.contains('hidden') || Date.now() - lastActivity > 3600000) return;
+  api('/api/session/keepalive', { method: 'POST' }).catch(() => {});
+}, 300000);
 $('question').onkeydown = event => {
   if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); $('ask-form').requestSubmit(); }
 };
@@ -492,10 +679,22 @@ $('scan-start').onclick = async () => {
     loadDocuments();
   }
 };
+const launch = new URLSearchParams(location.search);
+const ssoError = launch.get('sso_error');
+if (ssoError || launch.has('repository')) history.replaceState(null, '', '/');
 api('/api/session/status').then(session => {
-  $('repository-id').value = session.repository || '';
-  if (session.authenticated && session.username) openSession(session.username, session.repository, session.server, session.generation);
-  else $('login-layer').classList.remove('hidden');
+  ssoEnabled = session.sso === true;
+  applyLoginMode();
+  $('repository-id').value = launch.get('repository') || session.repository || '';
+  if (session.authenticated && session.username) {
+    openSession(session.username, session.repository, session.server, session.generation);
+    resendPendingQuestion();
+    return;
+  }
+  $('login-layer').classList.remove('hidden');
+  if (ssoError) { $('login-error').textContent = ssoErrors[ssoError] || ssoErrors.exchange; return; }
+  // Sign in automatically like the Dashboard.
+  if (ssoEnabled && allowAutoSso()) startSso(false);
 }).catch(() => $('login-layer').classList.remove('hidden'));
 
 $('switch-repository').onclick = () => {

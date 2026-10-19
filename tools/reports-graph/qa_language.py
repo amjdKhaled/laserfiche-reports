@@ -130,7 +130,7 @@ def verify(result, expected):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--count', type=int, default=100000)
-    parser.add_argument('--url', default='http://127.0.0.1:8766')
+    parser.add_argument('--url', default='http://127.0.0.1:5050')
     parser.add_argument('--output', default='qa-language.jsonl')
     parser.add_argument('--resume', action='store_true')
     parser.add_argument('--timeout', type=float, default=0, help='0: unlimited model response wait')

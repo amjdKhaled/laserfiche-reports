@@ -70,6 +70,32 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
             candidates.Select(n => Term(n, true)).ToArray());
     }
 
+    internal const int MaxNamedFolders = 50;
+
+    /// <summary>
+    /// Folders whose name matches <paramref name="name"/> after Arabic spelling normalization
+    /// (أ/ا، ة/ه، ى/ي). The search uses a single-character wildcard for those letters, then
+    /// keeps only names that are equal after normalization.
+    /// </summary>
+    private async Task<IReadOnlyList<LFSearchResult>> FoldersNamedAsync(string name, CancellationToken ct)
+    {
+        var exact = Term(name.Trim());
+        var pattern = FolderNamePattern(exact);
+        var key = ReportSupport.MatchKey(name);
+        async Task<IReadOnlyList<LFSearchResult>> FindAsync(string term)
+        {
+            var found = await searches.QueryAsync($"{{LF:Name=\"{term}\", Type=F}}", 1, MaxNamedFolders, cancellationToken: ct);
+            if (found.TotalCount > MaxNamedFolders)
+                throw new RepositoryScopeClarificationException($"يوجد أكثر من {MaxNamedFolders} مجلدًا بالاسم «{name}». حدد المسار أو اسمًا أدق.");
+            return found.Items.Where(i => ReportSupport.MatchKey(i.Name) == key).ToArray();
+        }
+        var folders = await FindAsync(pattern);
+        return folders.Count > 0 || pattern == exact ? folders : await FindAsync(exact);
+    }
+
+    internal static string FolderNamePattern(string term) =>
+        string.Concat(term.Select(c => c is 'ا' or 'أ' or 'إ' or 'آ' or 'ة' or 'ه' or 'ى' or 'ي' ? '?' : c));
+
     public async Task<PagedResult<LFSearchResult>> SelectAsync(QueryPlan plan, IReadOnlyList<int> ids,
         bool readAll, CancellationToken ct)
     {
@@ -106,13 +132,15 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
         if (plan.FolderName is not null)
         {
             if (plan.FolderId is not null) throw new ArgumentException("حدد المجلد بالاسم أو الرقم، لا بالاثنين.");
-            var found = await searches.QueryAsync($"{{LF:Name=\"{Term(plan.FolderName)}\", Type=F}}",
-                1, 20, cancellationToken: ct);
-            if (!found.IsTotalCountExact || found.TotalCount != 1 || found.Items.Count != 1)
-                throw new RepositoryScopeClarificationException(found.IsTotalCountExact && found.TotalCount == 0
-                    ? RepositorySuggestions.MissingFolder(plan.FolderName, (await SchemaAsync(ct)).Values.Select(f => f.Name))
-                    : "اسم المجلد غير محدد بشكل فريد؛ اختر رقم المجلد: " + string.Join("، ", found.Items.Select(i => $"{i.EntryId}: {i.Name}")));
-            plan = plan with { FolderId = found.Items[0].EntryId, FolderName = null };
+            // A folder name covers every folder with that name (e.g. a "الوارد" folder per department).
+            var folders = await FoldersNamedAsync(plan.FolderName, ct);
+            if (folders.Count == 0)
+                throw new RepositoryScopeClarificationException(
+                    RepositorySuggestions.MissingFolder(plan.FolderName, (await SchemaAsync(ct)).Values.Select(f => f.Name)));
+            var scopes = new List<string>();
+            foreach (var folder in folders)
+                scopes.Add($"{{LF:Lookin=\"{Term(await entries.GetEntryPathAsync(folder.EntryId, ct))}\", Subfolders={(plan.IncludeSubfolders ? "Y" : "N")}}}");
+            expression += " & " + (scopes.Count == 1 ? scopes[0] : "(" + string.Join(" | ", scopes) + ")");
         }
         if (plan.FolderId is int folderId)
         {

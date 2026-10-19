@@ -8,5 +8,7 @@
 .login-card input{padding:12px;border:1px solid #d4e0ea;border-radius:9px;font:inherit}
 .login-card button{margin-top:22px;padding:12px;border:0;border-radius:10px;background:#148f7e;color:white;font:inherit;cursor:pointer}
 .login-card button:disabled{opacity:.6}
+.sso-panel,.password-panel{display:flex;flex-direction:column}
+.login-card #sso-other-account{margin-top:10px;background:transparent;color:#4b6a80;border:1px solid #d4e0ea}
 .login-card #login-error{min-height:24px;font-size:12px;color:#b44442;margin-top:7px}
 @media(max-width:760px){.top-actions{margin-top:10px;flex-wrap:wrap}}

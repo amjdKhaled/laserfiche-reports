@@ -5,6 +5,7 @@ import argparse
 import json
 import os
 import re
+import sys
 import threading
 import time
 from datetime import date
@@ -27,9 +28,15 @@ from clarification_options import (clarification as unresolved_clarification, se
 from request_body import RequestBodyError, read_request_body
 from context_windows import focused_window
 from search_reference import SEARCH_REFERENCE, SEMANTIC_FIELDS
+from calendar_grounding import ground_report_filters
+from scope_grounding import ground_folder_scope
 from report_reasoning import (PROMPT_VERSION, Extraction, Draft, Review, COMPOSE_SYSTEM,
                               REVIEW_SYSTEM, invoke_structured, compact_schema, validate_draft, apply_review, StrictModel, Quotation, Finding, REQUEST_ID)
 
+# Arabic log lines must not fail planning on Windows hosts whose console code page is not Arabic (e.g. cp1252).
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
 
 class State(TypedDict, total=False):
     question: str
@@ -267,7 +274,7 @@ class CombinedDraft(StrictModel):
     findings: list[Finding] = Field(max_length=8)
 
 
-DEFAULT_CHAT_MODEL = os.environ.get("REPORTS_CHAT_MODEL", "gpt-oss:20b")
+DEFAULT_CHAT_MODEL = os.environ.get("REPORTS_CHAT_MODEL", "qwen3-vl:8b-instruct")
 
 
 class RelativeDate(StrictModel):
@@ -462,6 +469,39 @@ If the catalog/context cannot resolve the criterion, output ONE clarify report w
 """
 
 PROPERTY_ALIASES = {"creationTime": "created", "lastModifiedTime": "modified", "id": "entryId"}
+
+
+def ground_calendar_periods(request, question, today, catalog):
+    """Replace the planned date condition of a fixed relative phrase («هذا الشهر»، «أمس») by its exact period."""
+    date_fields = {"created", "modified"} | {f["name"] for f in catalog.get("fields", [])
+                                             if (f.get("fieldType") or "").lower() in ("date", "datetime")}
+    for report in request.reports:
+        if report.filters is None:
+            continue
+        planned = report.filters.model_dump(exclude_none=True)
+        grounded = ground_report_filters(planned, question, today, date_fields)
+        if grounded is not planned:
+            report.filters = RepositoryFilter.model_validate(grounded)
+            print("Stage=PERIOD_GROUNDED RequestId=" + REQUEST_ID.get() + " Planned=" + json.dumps(planned, ensure_ascii=False) +
+                  " Grounded=" + json.dumps(grounded, ensure_ascii=False), flush=True)
+    return request
+
+
+def ground_folder_scopes(request, question):
+    """Apply an explicit «مجلد X»: every folder named X, never an invented template or name filter."""
+    for report in request.reports:
+        planned = {"operation": report.operation, "folderName": report.folderName, "folderId": report.folderId,
+                   "includeSubfolders": report.includeSubfolders, "template": report.template, "name": report.name,
+                   "filters": report.filters.model_dump(exclude_none=True) if report.filters is not None else None}
+        grounded = ground_folder_scope(planned, question)
+        if grounded is planned:
+            continue
+        report.folderName, report.folderId = grounded["folderName"], None
+        report.includeSubfolders, report.template, report.name = grounded["includeSubfolders"], grounded["template"], grounded["name"]
+        report.filters = RepositoryFilter.model_validate(grounded["filters"]) if grounded["filters"] else None
+        print("Stage=FOLDER_GROUNDED RequestId=" + REQUEST_ID.get() + " Planned=" + json.dumps(planned, ensure_ascii=False) +
+              " Folder=" + json.dumps(grounded["folderName"], ensure_ascii=False) + " Subfolders=" + str(grounded["includeSubfolders"]), flush=True)
+    return request
 
 
 def canonicalize_property_names(request, catalog):
@@ -1212,6 +1252,8 @@ If clarificationContext.selectedOption exists, it is the exact displayed option 
                     raise ValueError("No pending clarification exists for this reply")
                 model_payload["contextMode"] = context_mode
             request = canonicalize_property_names(planner_request(content, model_payload["question"]), payload["catalog"])
+            request = ground_calendar_periods(request, model_payload["question"], payload.get("today"), payload["catalog"])
+            request = ground_folder_scopes(request, model_payload["question"])
             print("Stage=PLANNER_DRAFT RequestId=" + REQUEST_ID.get() + " Attempt=" + str(attempt + 1) +
                   " Plans=" + json.dumps([{"operation": p.operation, "resultType": p.resultType,
                     "countOnly": p.countOnly, "hasFilter": bool(p.filters),
@@ -1597,7 +1639,7 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--planner-trace-path", help="Opt-in local JSONL planning inputs, schemas and model replies")
-    parser.add_argument("--port", type=int, default=8766)
+    parser.add_argument("--port", type=int, default=5050)
     parser.add_argument("--model", default=DEFAULT_CHAT_MODEL)
     parser.add_argument("--ollama-url", default=os.environ.get("REPORTS_OLLAMA_URL", "http://127.0.0.1:11434"))
     parser.add_argument("--review-content", action="store_true", help="Optional extra semantic review call for OCR answers")
