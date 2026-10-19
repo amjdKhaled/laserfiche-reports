@@ -77,8 +77,8 @@ public class AuditTrailTests
         Assert.Contains("2026-10-19 00:00:00", day.Answer);
         var grouped = await AuditTrailReport.CreateAsync(fixture.Source(), "Repo",
             new QueryPlan("audit", ResultType: "statistics", Audit: new(GroupBy: "userName")), default);
-        Assert.Contains("ACME\\alice", grouped.Answer);
-        Assert.Contains("ACME\\bob", grouped.Answer);
+        Assert.Contains("| " + ReportSupport.Cell("ACME\\alice") + " | 1 |", grouped.Answer);
+        Assert.Contains("| " + ReportSupport.Cell("ACME\\bob") + " | 1 |", grouped.Answer);
     }
     [Fact]
     public async Task DeniedFailedAndMissingExportsDoNotReturnEmptySuccess()
