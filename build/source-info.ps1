@@ -6,7 +6,8 @@ function Get-ReportsSourceInformation {
 
     $commitOutput = & git rev-parse --verify HEAD
     if ($LASTEXITCODE -ne 0) { throw 'Cannot identify SourceCommit from this checkout.' }
-    $commit = ([string]$commitOutput).Trim()
+    if ([string]::IsNullOrWhiteSpace($commitOutput)) { throw 'Git returned an empty SourceCommit.' }
+    $commit = $commitOutput.Trim()
     if ($commit -notmatch '^[0-9a-fA-F]{40,64}$') { throw 'Git returned an invalid SourceCommit.' }
 
     $statusOutput = @(& git status --porcelain)
@@ -16,7 +17,8 @@ function Get-ReportsSourceInformation {
     $branchOutput = & git branch --show-current
     if ($LASTEXITCODE -ne 0) { throw 'Cannot read Git checkout information.' }
     # A successful git command with no stdout becomes $null in PowerShell.
-    $branch = ([string]$branchOutput).Trim()
+    $branch = ''
+    if (![string]::IsNullOrWhiteSpace($branchOutput)) { $branch = $branchOutput.Trim() }
     $detached = [string]::IsNullOrWhiteSpace($branch)
     if ($detached) {
         $branch = if (![string]::IsNullOrWhiteSpace($env:GITHUB_HEAD_REF)) { $env:GITHUB_HEAD_REF }

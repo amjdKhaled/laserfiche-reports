@@ -37,6 +37,9 @@ try {
     'uncommitted' | Add-Content source.txt
     if (!(Get-ReportsSourceInformation).Dirty) { throw 'Dirty source was not detected.' }
     Write-Host 'Passed: attached, detached, pull request, explicit commit and dirty Git source identity.'
+} catch {
+    Write-Host $_.ScriptStackTrace
+    throw
 } finally {
     $env:GITHUB_HEAD_REF = $previousHeadRef; $env:GITHUB_REF_NAME = $previousRefName
     Pop-Location
