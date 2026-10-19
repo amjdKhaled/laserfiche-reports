@@ -70,6 +70,8 @@ public class AuditTrailTests
             new QueryPlan("audit", CountOnly: true, ResultType: "count", Audit: new()), default);
         Assert.Contains("| 2 |", result.Answer);
         Assert.Empty(result.RelatedEntryIds);
+        Assert.Equal(0, result.Scope!.DocumentCount);
+        Assert.Equal(2, result.Scope.EventCount);
         var day = await AuditTrailReport.CreateAsync(fixture.Source(), "Repo",
             new QueryPlan("audit", Audit: new(From: "2026-10-19", To: "2026-10-20")), default);
         Assert.Contains("Recycle", day.Answer);

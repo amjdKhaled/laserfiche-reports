@@ -5,7 +5,10 @@ using LaserficheReports.Domain.Entities;
 namespace LaserficheReports.Web;
 
 internal sealed record AnswerScope(string Mode, string RepositoryId, int DocumentCount,
-    int EvidenceCount, bool Exhaustive, string Detail, IReadOnlyList<int> RequestedEntryIds);
+    int EvidenceCount, bool Exhaustive, string Detail, IReadOnlyList<int> RequestedEntryIds)
+{
+    public int? EventCount { get; init; }
+}
 internal sealed record FieldCondition(string FieldQuestion, string ExpectedValue);
 
 internal static class ReportSupport

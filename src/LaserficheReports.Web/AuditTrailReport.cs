@@ -87,6 +87,6 @@ internal static class AuditTrailReport
             "| حدود النتيجة | أحداث التقرير المحفوظ وفلاتره وفترة الاحتفاظ والتدقيق المفعّل فقط؛ لا تثبت حالة الحذف الحالية أو سلامة الملف الفعلي |\n";
         // Historical IDs must not turn into accessible-document links or follow-up document scopes.
         return new ChatResult(table, [], new AnswerScope("audit-saved-report", repositoryId,
-            selected.Length, 0, false, data.ScopeDescription, []));
+            0, 0, false, data.ScopeDescription, []) { EventCount = selected.Length });
     }
 }
