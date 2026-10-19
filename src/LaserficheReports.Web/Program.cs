@@ -57,6 +57,8 @@ builder.Services.AddLaserficheInfrastructure(builder.Configuration);
 builder.Services.AddScoped<ReportsChatService>();
 builder.Services.AddScoped<LiveRepositoryReportService>();
 builder.Services.AddScoped<AuditTrailSource>();
+builder.Services.AddScoped<AuditSessionCredentials>();
+builder.Services.AddSingleton<AuditTrailConfiguration>();
 builder.Services.AddScoped<QuestionRouter>();
 builder.Services.AddTransient<GraphCorrelationHandler>();
 builder.Services.AddHttpClient("ReportsGraph", client =>
@@ -67,7 +69,7 @@ builder.Services.AddHttpClient("ReportsGraph", client =>
         uri.Host is not ("127.0.0.1" or "localhost" or "::1"))
         throw new InvalidOperationException("ReportsGraph:BaseUrl must be local HTTP.");
     client.BaseAddress = new Uri(uri.AbsoluteUri.TrimEnd('/') + "/");
-    var graphTimeout = builder.Configuration.GetValue<int?>("ReportsGraph:TimeoutSeconds") ?? 0;
+    var graphTimeout = builder.Configuration.GetValue<int?>("ReportsGraph:TimeoutSeconds") ?? 3600;
     client.Timeout = graphTimeout <= 0 ? Timeout.InfiniteTimeSpan : TimeSpan.FromSeconds(graphTimeout);
 }).AddHttpMessageHandler<GraphCorrelationHandler>().ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
 {
@@ -86,7 +88,7 @@ app.Use(async (context, next) =>
     var original = context.RequestAborted;
     using var budget = CancellationTokenSource.CreateLinkedTokenSource(original);
     var path = context.Request.Path;
-    var requestTimeout = path.StartsWithSegments("/api/reports/chat") ? builder.Configuration.GetValue<int?>("Reports:RequestTimeoutSeconds") ?? 0 :
+    var requestTimeout = ReportTimeouts.IsReportRequest(path) ? builder.Configuration.GetValue<int?>("Reports:RequestTimeoutSeconds") ?? 3600 :
         path.StartsWithSegments("/api/ingestion") ? 1800 : path.Value?.EndsWith("/status") == true ? 10 : 60;
     if (requestTimeout > 0) budget.CancelAfter(TimeSpan.FromSeconds(requestTimeout));
     context.RequestAborted = budget.Token;
@@ -151,6 +153,8 @@ app.Use(async (context, next) =>
     var cookie = context.Request.Cookies[".LaserficheReports.Session"] ?? "new-session";
     var gate = sessionGates[(StringComparer.Ordinal.GetHashCode(cookie) & int.MaxValue) % sessionGates.Length];
     var acquired = false;
+    var mutatesSession = context.Request.Path.StartsWithSegments("/api/session") ||
+        context.Request.Path.Equals(new PathString("/api/audit-trail/credentials"));
     if (!await gate.WaitAsync(TimeSpan.FromSeconds(5), context.RequestAborted))
     {
         context.Response.StatusCode = 409;
@@ -175,7 +179,7 @@ app.Use(async (context, next) =>
             await context.Response.WriteAsJsonAsync(new { error = "session_scope_changed", message = "تغيّر المستودع في جلسة أخرى. أعد تسجيل الدخول إلى المستودع المطلوب." });
             return;
         }
-        if (!context.Request.Path.StartsWithSegments("/api/session"))
+        if (!mutatesSession)
         {
             gate.Release();
             acquired = false;
@@ -211,6 +215,7 @@ app.Use(async (context, next) =>
         }
     }
 });
+app.MapAuditTrailSetup();
 app.UseDefaultFiles();
 app.UseStaticFiles(new StaticFileOptions
 {

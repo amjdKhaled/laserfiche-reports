@@ -43,7 +43,8 @@ def main():
         signal.signal(sig, lambda *_: stopped.set())
     env = dict(os.environ)
     env.update(ASPNETCORE_URLS=f'http://{args.bind}:{args.port}', PYTHONUNBUFFERED='1',
-               REPORTS_CHAT_MODEL=args.model, LocalAI__ChatModel=args.model)
+               REPORTS_CHAT_MODEL=args.model, LocalAI__ChatModel=args.model,
+               Reports__RequestTimeoutSeconds="3600", ReportsGraph__TimeoutSeconds="3600")
     commands = {}
     # Reuse a user's existing Ollama; only processes created here are stopped.
     if not reachable('http://127.0.0.1:11434/api/tags'):
@@ -52,7 +53,7 @@ def main():
     if reachable('http://127.0.0.1:8766/health'):
         raise RuntimeError('Port 8766 is already in use. Stop the manually started graph before starting the installed app.')
     commands['graph'] = [sys.executable, str(root / 'graph/server.py'), '--model', args.model,
-                         '--model-timeout-seconds', '0', '--planner-timeout-seconds', '0',
+                         '--model-timeout-seconds', '3600', '--planner-timeout-seconds', '3600',
                          '--planner-trace-path', str(logs / 'planner-trace.jsonl')]
     executable = root / 'web' / ('LaserficheReports.Web.exe' if os.name == 'nt' else 'LaserficheReports.Web')
     commands['web'] = [str(executable)] if executable.exists() else ['dotnet', str(root / 'web/LaserficheReports.Web.dll')]

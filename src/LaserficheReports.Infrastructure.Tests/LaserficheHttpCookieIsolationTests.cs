@@ -36,6 +36,7 @@ public sealed class LaserficheHttpCookieIsolationTests
                 .Features.Get<IServerAddressesFeature>()!.Addresses.Single();
             var services = new ServiceCollection();
             services.AddLogging();
+            services.AddSingleton<Microsoft.Extensions.Hosting.IHostEnvironment>(server.Environment);
             services.AddDataProtection();
             services.AddHttpContextAccessor();
             services.AddLaserficheInfrastructure(new ConfigurationBuilder().AddInMemoryCollection(

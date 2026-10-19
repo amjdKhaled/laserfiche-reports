@@ -373,3 +373,34 @@ test('session busy is retryable without showing login but changed repository req
   }
   await window.happyDOM.abort();
 });
+
+test('logout cancels an in-flight report, clears visible results and closes the page', async()=>{
+  const window=setup();let closed=0,aborted=false,logouts=0;
+  window.document.write(readFileSync(root+'index.html','utf8').replace(/<script[^>]*>[\s\S]*?<\/script>/g,''));
+  window.close=()=>{closed++;};window.location.replace=()=>{};
+  window.fetch=async(url,options)=>{
+    if(url==='/api/session/status') return {ok:true,status:200,json:async()=>({authenticated:true,username:'tester',repository:'RepoA',generation:'one'})};
+    if(url==='/api/session/logout'){logouts++;return {ok:true,status:200,json:async()=>({authenticated:false})};}
+    return new Promise((resolve,reject)=>{options.signal.addEventListener('abort',()=>{aborted=true;reject(new Error('aborted'));});});
+  };
+  window.eval(readFileSync(root+'app.js','utf8'));await new Promise(r=>setTimeout(r,20));
+  window.document.getElementById('question').value='PRIVATE QUESTION';
+  window.document.getElementById('ask-form').dispatchEvent(new window.Event('submit',{cancelable:true}));
+  window.document.getElementById('logout').click();await new Promise(r=>setTimeout(r,25));
+  assert(aborted);assert.equal(logouts,1);assert.equal(closed,1);
+  assert(!window.document.getElementById('messages').textContent.includes('PRIVATE QUESTION'));
+  await window.happyDOM.abort();
+});
+test('a failed logout stays open and shows the error instead of pretending success', async()=>{
+  const window=setup();let closed=false;
+  window.document.write(readFileSync(root+'index.html','utf8').replace(/<script[^>]*>[\s\S]*?<\/script>/g,''));
+  window.close=()=>{closed=true;};
+  window.fetch=async(url)=>url==='/api/session/status'
+    ? {ok:true,status:200,json:async()=>({authenticated:true,username:'tester',repository:'RepoA'})}
+    : {ok:false,status:503,json:async()=>({message:'fixture connection failure'})};
+  window.eval(readFileSync(root+'app.js','utf8'));await new Promise(r=>setTimeout(r,20));
+  window.document.getElementById('logout').click();await new Promise(r=>setTimeout(r,20));
+  assert.equal(closed,false);assert(window.document.getElementById('login-error').textContent.includes('fixture connection failure'));
+  assert.equal(window.document.getElementById('logout').disabled,false);
+  await window.happyDOM.abort();
+});

@@ -21,7 +21,7 @@
     </aside>
     <main class="main">
       <header class="topbar">
-        <div><h1>اسأل وثائقك</h1><p>ابحث في حقول Laserfiche ومحتوى الصفحات، مع مصدر لكل إجابة</p></div>
+        <div><h1>اسأل عن وثائقك</h1><p>ابحث في حقول Laserfiche ومحتوى الصفحات، مع مصدر لكل إجابة</p></div>
         <div class="top-actions"><button type="button" id="switch-repository" class="repository-badge" title="تغيير المستودع"><span>المستودع</span> <strong id="active-repository">—</strong> ▾</button><div class="tabs"><button id="tab-chat" class="active">المحادثة</button><button id="tab-docs">الوثائق والنظام</button></div><button id="logout" class="logout">تسجيل الخروج</button></div>
       </header>
       <section id="chat-view" class="view">
@@ -36,6 +36,28 @@
       <section id="docs-view" class="view hidden">
         <div class="section-title"><div><h2>حالة الخدمات</h2><p>تأكد من اتصال الخدمات المحلية قبل الفهرسة أو السؤال.</p></div><button id="refresh">تحديث</button></div>
         <div class="status-grid" id="statuses"></div>
+        <details class="audit-setup" id="audit-setup">
+          <summary>إعدادات سجل التدقيق <span id="audit-state">—</span></summary>
+          <p>اربط تقريرًا محفوظًا في Audit Trail لقراءة عمليات الحذف والاستعادة وبقية الأحداث المسجّلة. تُعرض الأحداث التاريخية ضمن نطاق التقرير، وليست قائمة بما يوجد حاليًا في سلة المحذوفات.</p>
+          <form id="audit-form">
+            <label class="audit-toggle"><input id="audit-enabled" type="checkbox"> تفعيل ربط سجل التدقيق</label>
+            <div class="audit-fields">
+              <label>عنوان Audit Trail<input id="audit-url" type="url" dir="ltr" placeholder="https://server/AuditTrail"></label>
+              <label>مصدر البيانات في التقرير<input id="audit-source" type="text" dir="ltr" placeholder="Repository(Server)"></label>
+              <label>معرّف التقرير المحفوظ<input id="audit-report-id" type="text" dir="ltr" placeholder=""></label>
+              <label>مجلد التصدير المقروء من جهاز Reports<input id="audit-export" type="text" dir="ltr" placeholder="C:\ProgramData\Laserfiche\AuditAnalytics\Export"></label>
+              <label>نطاق التقرير المحفوظ<input id="audit-scope" type="text" dir="ltr" placeholder="الفترة والفلاتر التي يغطيها التقرير"></label>
+              <label>صيغة التاريخ، عند الحاجة<input id="audit-date-format" type="text" dir="ltr" placeholder="yyyy-MM-dd HH:mm:ss"></label>
+              <label>أسماء أعمدة CSV الفعلية<textarea id="audit-columns" rows="5" dir="ltr" spellcheck="false" placeholder='{"eventTime":"…","eventType":"…","userName":"…"}'></textarea><small>المفاتيح الإلزامية: eventTime وeventType وuserName. اختياري: entryId وentryName وoutcome.</small></label>
+              <label>أسماء الأحداث<textarea id="audit-labels" rows="5" dir="ltr" spellcheck="false" placeholder='{"RAW_EVENT_CODE":"اسم الحدث"}'></textarea><small>إذا كانت الأحداث أرقامًا أو رموزًا، أضف أسماءها الفعلية حتى يفهمها الذكاء الاصطناعي.</small></label>
+            </div>
+            <div class="audit-identity"><strong>حساب Windows للتدقيق</strong><p>اختياري إذا كان دخولك الحالي بحساب Windows له صلاحية التقرير. تُحفظ بيانات هذا الحساب مشفّرة في جلستك فقط وتُحذف عند تسجيل الخروج.</p>
+              <div class="audit-fields"><label>اسم المستخدم<input id="audit-user" dir="ltr" autocomplete="off" placeholder="DOMAIN\user"></label><label>كلمة المرور<input id="audit-password" type="password" autocomplete="new-password"></label></div>
+            </div>
+            <div class="audit-actions"><button id="audit-save" type="submit">حفظ إعدادات الربط</button><button id="audit-test" type="button">فحص الاتصال والتصدير</button></div>
+            <p id="audit-feedback" class="feedback" role="status" aria-live="polite"></p>
+          </form>
+        </details>
         <div class="section-title"><div><h2>فهرسة وثيقة محددة</h2><p>أدخل أي Entry ID. تُفهرس حقول Laserfiche حتى عندما يكون OCR مؤجلاً.</p></div></div>
         <form id="ingest-form" class="ingest"><input id="entry-id" type="number" min="1" placeholder="Entry ID مثل 618" required><button type="submit" id="ingest">بدء الفهرسة</button></form>
         <div id="ingest-result" class="feedback" role="status"></div>
@@ -73,5 +95,6 @@
   <script src="/report-download.js" defer></script>
   <script src="/office-export.js" defer></script>
   <script src="/app.js" defer></script>
+  <script src="/audit-setup.js" defer></script>
 </body>
 </html>

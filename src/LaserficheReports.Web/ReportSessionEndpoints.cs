@@ -34,6 +34,7 @@ internal static class ReportSessionEndpoints
             await auth.InvalidateCurrentSessionTokensAsync();
             await sessions.ClearAsync(ct);
             http.Session.SetString("ReportsGeneration", Guid.NewGuid().ToString("N"));
+            http.Session.Remove(AuditSessionCredentials.SessionKey);
             http.Session.Remove("AuthenticationScopeMethod");
             http.Session.Remove("AuthenticationScopeSubject");
             return Results.Ok(new { authenticated = false });
@@ -63,7 +64,7 @@ internal static class ReportSessionEndpoints
 
         // Authenticate in a provisional scope. A failed account/repository switch must
         // leave the previous credentials, token cache and repository selection intact.
-        string[] keys = ["ActiveRepositoryId", "ReportsGeneration", "AuthenticationScopeMethod", "AuthenticationScopeSubject"];
+        string[] keys = ["ActiveRepositoryId", "ReportsGeneration", "AuthenticationScopeMethod", "AuthenticationScopeSubject", AuditSessionCredentials.SessionKey];
         var previous = keys.ToDictionary(key => key, key => http.Session.GetString(key));
         http.Session.SetString("ActiveRepositoryId", id);
         http.Session.SetString("AuthenticationScopeMethod", "Reports");
@@ -74,6 +75,7 @@ internal static class ReportSessionEndpoints
             var repository = await repositories.GetActiveRepositoryAsync(ct);
             if (!await auth.TryAuthenticateAsync(repository, username, request.Password, ct))
                 return Results.Unauthorized();
+            http.Session.Remove(AuditSessionCredentials.SessionKey);
             await sessions.StoreAsync(username, request.Password, ct);
             http.Session.SetString("ReportsGeneration", Guid.NewGuid().ToString("N"));
             committed = true;
