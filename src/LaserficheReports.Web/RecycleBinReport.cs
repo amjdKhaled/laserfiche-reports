@@ -29,14 +29,16 @@ internal static class RecycleBinReport
         else
         {
             report.AppendLine("| رقم الإدخال | اسم العنصر | النوع | حذفه | تاريخ الحذف (الرياض) | عدد الصفحات |\n| --- | --- | --- | --- | --- | --- |");
-            foreach (var row in selected.Skip((plan.Page - 1) * plan.Limit).Take(plan.Limit))
+            var shown = plan.Shown(selected);
+            foreach (var row in shown)
             {
                 var deletedAt = TimeZoneInfo.ConvertTimeBySystemTimeZoneId(row.DeletedAt, "Asia/Riyadh").ToString("yyyy-MM-dd HH:mm:ss");
                 report.AppendLine($"| {row.EntryId} | {ReportSupport.Cell(row.Name)} | {(row.EntryType == "document" ? "وثيقة" : "مجلد")} | {ReportSupport.Cell(row.DeletedBy)} | {deletedAt} | {row.PageCount?.ToString() ?? "غير متوفر"} |");
             }
-            report.AppendLine($"\n| إجمالي العناصر المطابقة | الصفحة | عدد الصفحات |\n| --- | --- | --- |\n| {selected.Length} | {plan.Page} | {Math.Max(1, (selected.Length + plan.Limit - 1) / plan.Limit)} |");
+            report.AppendLine("\n" + plan.ShownFooter("إجمالي العناصر المطابقة", selected.Length, shown.Length));
         }
-        const string detail = "قراءة مباشرة للسلة بصلاحيات حساب Laserfiche الحالي. لا تشمل المحذوف نهائيًا، ولا تعني أن كل المستخدمين يرون القائمة نفسها. تعرض القائمة صفحة من نطاق القراءة الكامل، وقد تتغير السلة أثناء القراءة.";
+        var detail = "قراءة مباشرة للسلة بصلاحيات حساب Laserfiche الحالي. لا تشمل المحذوف نهائيًا، ولا تعني أن كل المستخدمين يرون القائمة نفسها. " +
+            (plan.CountOnly || plan.ShowsAllRows ? "تعرض القائمة كل ما قُرئ من السلة" : "تعرض القائمة صفحة من نطاق القراءة الكامل") + "، وقد تتغير السلة أثناء القراءة.";
         report.AppendLine("\n| نطاق التقرير |\n| --- |\n| " + detail + " |");
         return new ChatResult(report.ToString(), [], new AnswerScope("live-recycle-bin", repositoryId,
             selected.Count(e => e.EntryType == "document"), 0, true, detail, []));

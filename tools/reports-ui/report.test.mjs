@@ -11,20 +11,29 @@ function setup() {
   window.eval(readFileSync(root + 'office-export.js', 'utf8'));
   return window;
 }
+// Downloads sit in the details drawer that each answer card opens (three-pane design, 2026-10-28).
+function openDetails(window, card) {
+  (card || window.document.querySelector('.answer-card')).querySelector('.answer-details').click();
+  return window.document.getElementById('details');
+}
+function downloadFormats(window) {
+  return [...openDetails(window).querySelectorAll('.details-formats button')].map(node => node.textContent);
+}
 const message = {
   text: '# تقرير\n\n| البند | النتيجة | المرجع |\n| --- | --- | --- |\n| الحالة | تحت الإجراء | [1] |',
   generatedAt: '2026-10-03T18:00:00Z', scope: { detail: 'فُحصت 73 وثيقة؛ التقرير جزئي.' },
   sources: [{ entryId: 618, documentName: 'وثيقة أصلية', path: '\\قسم\\وثيقة', pageNumber: null,
               textSource: 'laserfiche-metadata-live', text: 'إجراء الوثيقة: تحت الإجراء' }]
 };
-test('downloaded HTML preserves tables, scope, question, UTC date without a sources appendix', () => {
+test('downloaded HTML preserves tables, scope, question, Saudi date without a sources appendix', () => {
   const window = setup();
   const exported = window.ReportsDownload.html(message, 'ما الحالة؟');
   const document = new Window().document; document.write(exported);
   assert.equal(document.querySelectorAll('table tbody tr').length, 1);
   assert.equal(document.documentElement.dir, 'rtl');
   assert(document.body.textContent.includes('ما الحالة؟'));
-  assert(document.body.textContent.includes('2026-10-03T18:00:00.000Z'));
+  assert(document.body.textContent.includes('(بتوقيت السعودية): 2026-10-03 21:00:00'));
+  assert(!document.body.textContent.includes('UTC'));
   assert(document.body.textContent.includes('التقرير جزئي'));
   assert.equal(document.querySelector('#export-source-1'),null);
   assert.equal(document.querySelector('a'),null);
@@ -55,6 +64,11 @@ test('renderer handles escaped pipes and a final cell ending in a backslash, and
   const node = window.ReportsMarkdown.render('# Report\n| Name | Ref |\n| --- | --- |\n| Original | [1] |', 1);
   assert.equal(node.dir, 'ltr'); assert.equal(node.querySelectorAll('tbody tr').length, 1);
 });
+test('dates after Arabic words stay left-to-right instead of flipping to 31-10-2026', () => {
+  const window = setup();
+  const node = window.ReportsMarkdown.render('معيار البحث: تاريخ الإنشاء خلال الفترة 2026-10-01 إلى 2026-10-31', 0);
+  assert.deepEqual([...node.querySelectorAll('bdi')].map(b => b.dir + ' ' + b.textContent), ['ltr 2026-10-01', 'ltr 2026-10-31']);
+});
 test('download builds a UTF-8 blob, supplies a safe filename and releases the object URL', () => {
   const window = setup(); let blob, filename, released;
   window.URL.createObjectURL = value => { blob = value; return 'blob:local-report'; };
@@ -76,10 +90,35 @@ test('chat saves report time/scope and displays download for a valid empty resul
   window.document.getElementById('question').value = 'عدد الوثائق؟';
   window.document.getElementById('ask-form').dispatchEvent(new window.Event('submit', { cancelable: true }));
   await new Promise(resolve => setTimeout(resolve, 20));
-  assert([...window.document.querySelectorAll('.report-actions button')].some(node => node.textContent === 'تحميل التقرير'));
+  assert.deepEqual(downloadFormats(window), ['Word', 'Excel', 'PDF', 'HTML']);
   const saved = JSON.parse(window.localStorage.getItem('laserfiche-reports-chat-v2:https%3A%2F%2Flocalhost:repoa:tester'));
   assert.equal(saved[0].messages[1].generatedAt, message.generatedAt);
   assert.equal(saved[0].messages[1].scope.detail, message.scope.detail);
+  await window.happyDOM.abort();
+});
+test('a ready report in the sidebar runs at once, and the sidebar search filters reports', async () => {
+  const window = setup();
+  window.document.write(readFileSync(root + 'index.html', 'utf8').replace(/<script[^>]*>[\s\S]*?<\/script>/g, ''));
+  let asked = 0;
+  window.fetch = async url => {
+    if (url === '/api/reports/chat') asked++;
+    return { ok: true, status: 200, json: async () => url === '/api/session/status'
+      ? { authenticated: true, username: 'tester', repository: 'RepoA', server: 'https://localhost' } : { ...message, sources: [] } };
+  };
+  window.eval(readFileSync(root + 'app.js', 'utf8'));
+  await new Promise(resolve => setTimeout(resolve, 20));
+  const labels = () => [...window.document.querySelectorAll('.ready-report .side-label')].map(node => node.textContent);
+  const search = window.document.getElementById('side-search');
+  search.value = 'المحذوفه';
+  search.dispatchEvent(new window.Event('input'));
+  assert.deepEqual(labels(), ['الوثائق المحذوفة هذا الأسبوع']);
+  search.value = '';
+  search.dispatchEvent(new window.Event('input'));
+  [...window.document.querySelectorAll('.ready-report')].find(node => node.textContent.includes('الوثائق في مجلد الوارد')).click();
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(asked, 1);
+  assert.equal(window.document.querySelector('.history-open .side-label').textContent, 'اعرض الوثائق في مجلد الوارد');
+  assert.ok(window.document.querySelector('.ready-report.selected').textContent.includes('الوثائق في مجلد الوارد'));
   await window.happyDOM.abort();
 });
 test('storage exhaustion keeps the received report downloadable and shows a warning', async () => {
@@ -97,7 +136,7 @@ test('storage exhaustion keeps the received report downloadable and shows a warn
   window.document.getElementById('ask-form').dispatchEvent(new window.Event('submit', { cancelable: true }));
   await new Promise(resolve => setTimeout(resolve, 20));
   assert(window.document.querySelector('#messages [role="status"]').textContent.includes('حمّله'));
-  assert([...window.document.querySelectorAll('.report-actions button')].some(node => node.textContent === 'تحميل التقرير'));
+  assert.deepEqual(downloadFormats(window), ['Word', 'Excel', 'PDF', 'HTML']);
   assert.equal(window.document.getElementById('send').disabled, false);
   await window.happyDOM.abort();
 });
@@ -158,7 +197,7 @@ test('Office downloads are ZIP packages and user content cannot create Excel for
   }
 });
 
-test('each table export contains only that table and retains report scope', async()=>{
+test('answers carry one report download that holds every table, not a second one per table', async()=>{
   const window=setup();
   window.document.write(readFileSync(root+'index.html','utf8').replace(/<script[^>]*>[\s\S]*?<\/script>/g,''));
   window.fetch=async url=>({ok:true,status:200,json:async()=>url==='/api/session/status'
@@ -168,9 +207,10 @@ test('each table export contains only that table and retains report scope', asyn
   window.document.getElementById('question').value='سؤال';
   window.document.getElementById('ask-form').dispatchEvent(new window.Event('submit',{cancelable:true}));
   await new Promise(r=>setTimeout(r,20));
-  const buttons=window.document.querySelectorAll('.table-export-actions button');assert.equal(buttons.length,2);
-  let exported;window.ReportsDownload.download=(result)=>{exported=result;};buttons[0].click();
-  assert(exported.text.includes('تحت الإجراء'));assert(!exported.text.includes('مختلف'));assert.equal(exported.scope.detail,message.scope.detail);
+  const buttons=[...window.document.querySelectorAll('button')];
+  assert.equal(window.document.querySelectorAll('.table-export-actions').length,0);assert(!buttons.some(b=>b.textContent==='تنزيل هذا الجدول'));
+  let exported;window.ReportsDownload.download=(result)=>{exported=result;};buttons.find(b=>b.textContent==='تحميل التقرير').click();
+  assert(exported.text.includes('تحت الإجراء'));assert(exported.text.includes('مختلف'));assert.equal(exported.scope.detail,message.scope.detail);
   await window.happyDOM.abort();
 });
 
@@ -199,23 +239,25 @@ test('multiple reports have separate rows, downloads and Web Client selections',
   window.document.getElementById('ask-form').dispatchEvent(new window.Event('submit',{cancelable:true}));
   await new Promise(r=>setTimeout(r,20));
   const cards=[...window.document.querySelectorAll('.message.assistant')];assert.equal(cards.length,2);
-  assert.equal(cards[0].querySelector('.label').textContent,'آخر تعديل');
+  assert.equal(cards[0].querySelector('.answer-title').textContent,'آخر تعديل');
   assert.equal(cards[0].querySelector('.report-scope strong').textContent,'1');
   assert.equal(cards[0].querySelector('.report-cell-path'),null);
   assert.equal(cards[0].querySelector('tbody .report-cell-date').dir,'rtl');
   for(const card of cards){
-    [...card.querySelectorAll('button')].find(b=>b.textContent==='تحميل التقرير').click();
-    [...card.querySelectorAll('button')].find(b=>b.textContent.startsWith('فتح وثائق')).click();
+    const details=openDetails(window,card);
+    assert(card.classList.contains('is-selected'));
+    [...details.querySelectorAll('button')].find(b=>b.textContent==='Word').click();
+    [...details.querySelectorAll('button')].find(b=>b.textContent.startsWith('فتح وثائق')).click();
     await new Promise(r=>setTimeout(r,10));
   }
   assert.deepEqual(requested,[[42],[619]]);assert.equal(opened,1);
   assert.equal(navigated.length,2);assert(navigated.every(url=>url.startsWith('https://desktop-k1svi53/')));
   assert.deepEqual(downloaded.map(r=>r.sources[0].entryId),[42,619]);
-  assert.equal(window.document.querySelectorAll('.sources').length,2);
+  assert.equal(window.document.querySelectorAll('.sources').length,0);
   await window.happyDOM.abort();
 });
 
-test('chat keeps the existing table and exposes references in compact rows', async()=>{
+test('chat keeps the existing table and shows references without a source list', async()=>{
   const window=setup();
   window.document.write(readFileSync(root+'index.html','utf8').replace(/<script[^>]*>[\s\S]*?<\/script>/g,''));
   const sources=Array.from({length:8},(_,i)=>({...message.sources[0],entryId:100+i,documentName:`وثيقة ${i+1}`}));
@@ -226,8 +268,7 @@ test('chat keeps the existing table and exposes references in compact rows', asy
   window.document.getElementById('question').value='اعرض الوثائق';
   window.document.getElementById('ask-form').dispatchEvent(new window.Event('submit',{cancelable:true}));
   await new Promise(r=>setTimeout(r,20));
-  assert.equal(window.document.querySelectorAll('.sources-compact>.source').length,3);
-  assert.equal(window.document.querySelector('.sources-extra').children.length,5);
+  assert.equal(window.document.querySelectorAll('.sources, details.source').length,0);
   const table=window.document.querySelector('.report-table');
   assert.equal(table.querySelectorAll('th').length,3);
   assert.equal(table.querySelectorAll('tbody td')[1].textContent,'12');
@@ -278,7 +319,7 @@ test('Arabic dates and IDs keep RTL cell alignment with isolated LTR values', ()
     assert.equal(cell.dir,'rtl'); assert.equal(cell.querySelector('bdi').dir,'ltr');
   }
 });
-test('chat references reveal compact evidence and open only their verified entry', async () => {
+test('a chat reference opens only its verified entry in Laserfiche', async () => {
   const window=setup();
   window.document.write(readFileSync(root+'index.html','utf8').replace(/<script[^>]*>[\s\S]*?<\/script>/g,''));
   const sources=Array.from({length:5},(_,i)=>({entryId:618+i,documentName:`وثيقة ${i+1}`,text:'مقتطف موثق',textSource:'ocr'}));
@@ -293,10 +334,8 @@ test('chat references reveal compact evidence and open only their verified entry
   window.document.getElementById('question').value='لخص الوثائق';
   window.document.getElementById('ask-form').dispatchEvent(new window.Event('submit',{cancelable:true}));
   await new Promise(r=>setTimeout(r,20));
-  const ref=window.document.querySelector('.report-reference');assert.equal(ref.textContent,'[5]');ref.click();
-  assert.equal(window.document.querySelector('.sources-more').open,true);
-  const row=window.document.querySelector('.sources-extra .source:last-child');assert.equal(row.open,true);
-  row.querySelector('button').click();await new Promise(r=>setTimeout(r,20));
+  const ref=window.document.querySelector('.report-reference');assert.equal(ref.textContent,'[5]');
+  ref.click();await new Promise(r=>setTimeout(r,20));
   assert.deepEqual(request.entryIds,[622]);assert.equal(request.openSingle,true);
   assert.match(opened,/DocView.aspx.*id=622/);
   await window.happyDOM.abort();

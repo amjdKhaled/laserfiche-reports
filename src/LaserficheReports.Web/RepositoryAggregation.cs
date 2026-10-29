@@ -111,7 +111,7 @@ internal static class RepositoryAggregation
             "metric asc" => groups.OrderBy(g => g.Metrics[0]), "group asc" => groups.OrderBy(g => string.Join(" / ", g.Labels)),
             "group desc" => groups.OrderByDescending(g => string.Join(" / ", g.Labels)), _ => groups.OrderByDescending(g => g.Metrics[0])
         };
-        var shown = ordered.Skip((plan.Page - 1) * plan.Limit).Take(plan.Limit).ToArray();
+        var shown = plan.Shown(ordered);
         string Label(AggregateMetric m) => (m.Function switch { "count" => "العدد", "sum" => "المجموع", "average" => "المتوسط", "min" => "الأدنى", "max" => "الأعلى", _ => "عدد القيم المختلفة" }) + (m.Field == null ? "" : " — " + m.Field);
         var headers = dimensions.Select(g => g.Field + (g.Bucket == null ? "" : " / " + g.Bucket)).Concat(metrics.Select(Label)).ToArray();
         var detail = $"حُسبت النتائج من **{result.TotalCount}** إدخال حي. عدد المجموعات: {groups.Length}؛ المعروض: {shown.Length}.";

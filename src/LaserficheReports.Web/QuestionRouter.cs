@@ -4,7 +4,7 @@ namespace LaserficheReports.Web;
 
 internal enum QueryKind { LASERFICHE_QUERY, OCR_QUERY, HYBRID_QUERY }
 internal sealed record QueryPlan(string Operation, string? Field = null, string? Value = null,
-    string? Template = null, int? FolderId = null, string? Name = null, int Limit = 50,
+    string? Template = null, int? FolderId = null, string? Name = null, int Limit = QueryPlan.DefaultLimit,
     bool Content = false, string? GroupBy = null, string? From = null, string? To = null, string? Title = null, string? Sort = null, int[]? EntryIds = null, string? Question = null,
     RepositoryFilter? Filters = null, string EntryType = "document", int Page = 1, bool CountOnly = false,
     GroupDimension[]? GroupFields = null, AggregateMetric[]? Metrics = null, string? AggregateSort = null,
@@ -34,7 +34,23 @@ internal sealed record QueryPlan(string Operation, string? Field = null, string?
         if (RequiresFilter && Operation != "clarify" && Filters == null && Field == null && Template == null && FolderId == null && FolderName == null && Name == null && !(EntryIds?.Length > 0) && From == null)
             throw new ArgumentException("خطة البحث لا تحتوي الشرط المطلوب؛ لم أنفذ بحثًا غير مقيّد بدلًا منه.");
     }
-    public bool CompleteListing => AllResults && Page == 1 && !Content && !CountOnly && !RequireUnique && Operation is "search" or "created" or "modified" or "folders";
+    // The planner leaves Limit at 50 when no size was asked for; «آخر 10» sets it.
+    internal const int DefaultLimit = 50;
+    // A listing without a requested size reads every match like a count does; the page shows 50 rows at a time
+    // (it showed 50 of 190 with no total for «اعرض الوثائق التي أنشئت هذا الشهر», 2026-10-28).
+    public bool CompleteListing => (AllResults || Limit == DefaultLimit) && Page == 1 && !Content && !CountOnly && !RequireUnique && Operation is "search" or "created" or "modified" or "folders";
+    // A count reads every row: Laserfiche's own count covers only the delivered page (50 shown where 444 matched).
+    public bool CompleteCount => CountOnly && Page == 1 && !Content && !RequireUnique && Operation is "search" or "created" or "modified" or "folders";
+    // Answers built from rows already in memory (recycle bin, audit trail, groups) follow the same rule: without a
+    // requested size every row is shown and the page splits them 50 at a time; a size shows that page only.
+    internal const int MaxShownRows = 10000;
+    internal bool ShowsAllRows => AllResults || Limit == DefaultLimit && Page == 1;
+    internal T[] Shown<T>(IEnumerable<T> rows) =>
+        (ShowsAllRows ? rows.Take(MaxShownRows) : rows.Skip((Page - 1) * Limit).Take(Limit)).ToArray();
+    // The line under a shown table: the total, and the page only when the answer is one requested page.
+    internal string ShownFooter(string totalLabel, int total, int shown) => ShowsAllRows
+        ? $"| {totalLabel} | المعروض |\n| --- | --- |\n| {total} | {(shown < total ? $"أول {shown}" : "الكل")} |"
+        : $"| {totalLabel} | الصفحة | عدد الصفحات |\n| --- | --- | --- |\n| {total} | {Page} | {Math.Max(1, (total + Limit - 1) / Limit)} |";
     public QueryKind Kind => Content ? Operation == "content" && Filters == null && Field == null && Template == null && FolderId == null && FolderName == null && Name == null ? QueryKind.OCR_QUERY : QueryKind.HYBRID_QUERY
         : QueryKind.LASERFICHE_QUERY;
 }

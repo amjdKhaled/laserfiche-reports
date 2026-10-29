@@ -1,6 +1,8 @@
+using System.Collections.Concurrent;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using LaserficheReports.Application.DTOs;
 using LaserficheReports.Application.Interfaces;
 using LaserficheReports.Domain.Common;
 using LaserficheReports.Domain.Entities;
@@ -23,19 +25,25 @@ internal sealed class LaserficheSearchService : ILaserficheSearchService
     private readonly ILaserficheApiAdapter _adapter;
     private readonly ISearchAuditLog _auditLog;
     private readonly ILogger<LaserficheSearchService> _logger;
+    private readonly ILaserficheAuthService? _auth;
+
+    // One gate per Laserfiche session; the service is scoped per request, the session is not.
+    private static readonly ConcurrentDictionary<string, SemaphoreSlim> SessionSearches = new();
 
     public LaserficheSearchService(
         IHttpClientFactory httpClientFactory,
         IRepositoryContext repositoryContext,
         ILaserficheApiAdapter adapter,
         ISearchAuditLog auditLog,
-        ILogger<LaserficheSearchService> logger)
+        ILogger<LaserficheSearchService> logger,
+        ILaserficheAuthService? auth = null)
     {
         _httpClientFactory = httpClientFactory;
         _repositoryContext = repositoryContext;
         _adapter = adapter;
         _auditLog = auditLog;
         _logger = logger;
+        _auth = auth;
     }
 
     public Task<PagedResult<LFSearchResult>> QueryAsync(string expression, int page, int pageSize,
@@ -119,6 +127,32 @@ internal sealed class LaserficheSearchService : ILaserficheSearchService
             .GetActiveRepositoryAsync(cancellationToken)
             .ConfigureAwait(false);
 
+        // One Laserfiche session runs one search at a time. The report button's search started while a
+        // question's search was running in the same session: both failed, and so did every later search
+        // in that session (2026-10-28). Searches of one session now wait their turn.
+        var gate = SessionSearches.GetOrAdd(_auth?.SessionKey(repo) ?? repo.Key, static _ => new SemaphoreSlim(1, 1));
+        var queueWatch = System.Diagnostics.Stopwatch.StartNew();
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        if (queueWatch.ElapsedMilliseconds > 50)
+            _logger.LogInformation("Stage=LF_SEARCH_QUEUE DurationMs={DurationMs}", queueWatch.ElapsedMilliseconds);
+        try
+        {
+            return await SearchInSessionAsync(repo, displayQuery, searchType, expression, page, pageSize,
+                cancellationToken, sort, field, readAll, projectedFields).ConfigureAwait(false);
+        }
+        finally { gate.Release(); }
+    }
+
+    private async Task<PagedResult<LFSearchResult>> SearchInSessionAsync(
+        RepositoryDescriptor repo,
+        string displayQuery,
+        SearchType searchType,
+        string expression,
+        int page,
+        int pageSize,
+        CancellationToken cancellationToken, string sort,
+        string? field, bool readAll, IReadOnlyList<string>? projectedFields)
+    {
         await _auditLog
             .RecordSearchAsync(repo.RepositoryId, displayQuery, cancellationToken)
             .ConfigureAwait(false);
@@ -264,7 +298,7 @@ internal sealed class LaserficheSearchService : ILaserficheSearchService
         client.DefaultRequestHeaders.Remove("Prefer");
         // A complete read uses large pages: fewer page boundaries means fewer chances for rows with
         // equal sort keys (e.g. one bulk import) to move between pages while they are read.
-        client.DefaultRequestHeaders.TryAddWithoutValidation("Prefer", $"odata.maxpagesize={(readAll ? CompleteReadPageSize : pageSize)}");
+        client.DefaultRequestHeaders.TryAddWithoutValidation("Prefer", $"odata.maxpagesize={(readAll ? CompleteReadPageSize : pageSize + 1)}");
         return await ReadRequestedPageAsync(client, null, firstUrl, 1, pageSize, cancellationToken, (page - 1) * pageSize, readAll)
             .ConfigureAwait(false);
     }
@@ -336,8 +370,8 @@ internal sealed class LaserficheSearchService : ILaserficheSearchService
             body = null;
 
             _logger.LogInformation(
-                "Search result chunk: {PageCount} item(s), buffered={Buffered}, total={Total}, nextLink={HasNext}.",
-                parsed.Items.Count, received.Count, totalCount, nextUrl is null ? "no" : "yes");
+                "Search result chunk: {PageCount} item(s), buffered={Buffered}, total={Total}, pageServerCount={PageServerCount}, nextLink={HasNext}.",
+                parsed.Items.Count, received.Count, totalCount, parsed.TotalCount, nextUrl is null ? "no" : "yes");
 
             if ((!readAll && received.Count >= required) || nextUrl is null)
                 break;
@@ -351,27 +385,30 @@ internal sealed class LaserficheSearchService : ILaserficheSearchService
             .ToList();
 
         var items = (readAll ? distinct : distinct.Skip(skip).Take(pageSize)).ToList().AsReadOnly();
-        if (readAll && totalCount.HasValue && totalCount.Value != distinct.Count)
+        // Laserfiche's @odata.count covers the delivered page only: 50 with $top=50 while 444 matched, and
+        // 150 on each page of a complete read (2026-10-28). The total is known only once the rows end.
+        var reachedEnd = nextUrl is null && (readAll || received.Count <= required);
+        if (reachedEnd && totalCount is int counted && received.Count < counted)
         {
             _logger.LogWarning(
-                "Stage=LF_RESULTS_MISMATCH ServerCount={ServerCount} RowsRead={RowsRead} DistinctEntries={Distinct} " +
-                "DuplicateRows={Duplicates} Pages={Pages}",
-                totalCount.Value, received.Count, distinct.Count, received.Count - distinct.Count, visitedUrls.Count);
-            // The server counted every row and some rows were the same entry: the distinct list is complete.
-            if (received.Count != totalCount.Value)
+                "Stage=LF_RESULTS_MISMATCH ServerCount={ServerCount} RowsRead={RowsRead} DistinctEntries={Distinct} Pages={Pages}",
+                counted, received.Count, distinct.Count, visitedUrls.Count);
+            // The rows ended before the server's own count of its first page: rows are missing.
+            if (readAll)
                 throw new JsonException("The complete search rows do not match the server count.");
-            totalCount = distinct.Count;
+            reachedEnd = false;
         }
-        var exact = totalCount.HasValue || (serverSkip == 0 && nextUrl is null);
-        if (totalCount is int count && count < serverSkip + distinct.Count)
-            throw new JsonException("Search returned a total count smaller than its result rows.");
-        var effectiveTotal = totalCount ?? serverSkip + distinct.Count;
+        if (received.Count != distinct.Count)
+            _logger.LogInformation("Stage=LF_RESULTS_DUPLICATES RowsRead={RowsRead} DistinctEntries={Distinct}",
+                received.Count, distinct.Count);
         return new PagedResult<LFSearchResult>
         {
             Items = items,
-            TotalCount = Math.Max(effectiveTotal, serverSkip + skip + items.Count),
-            IsTotalCountExact = exact,
-            HasMore = !readAll && (nextUrl is not null || (exact && serverSkip + skip + items.Count < effectiveTotal)),
+            // Exact once the rows ended; otherwise the rows seen so far, a lower bound. An empty page
+            // past the first says nothing about how many rows the skipped pages held.
+            TotalCount = serverSkip + distinct.Count,
+            IsTotalCountExact = reachedEnd && (serverSkip == 0 || distinct.Count > 0),
+            HasMore = !readAll && (!reachedEnd || skip + items.Count < distinct.Count),
             PageNumber = serverSkip > 0 ? serverSkip / pageSize + 1 : page,
             PageSize = pageSize
         };
@@ -469,7 +506,8 @@ internal sealed class LaserficheSearchService : ILaserficheSearchService
         var skip = checked((page - 1) * pageSize);
         var separator = url.Contains('?', StringComparison.Ordinal) ? '&' : '?';
         return $"{url}{separator}$skip={skip}&$count=true&$orderby={Uri.EscapeDataString(sort)}" +
-            (readAll ? "" : $"&$top={pageSize}") +
+            // One row more than the page shows: that row, not @odata.count, tells whether more results exist.
+            (readAll ? "" : $"&$top={pageSize + 1}") +
             string.Concat(projections.Select(name => "&fields=" + Uri.EscapeDataString(name)));
     }
 

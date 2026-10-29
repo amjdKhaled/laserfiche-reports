@@ -103,17 +103,22 @@ internal sealed class LaserficheAuthService : ILaserficheAuthService
     /// reuse each other's cached token. Outside an HTTP context (background work) a
     /// process-wide scope is used, matching the disk-stored fallback credentials.
     /// </summary>
-    private string CacheKeyFor(RepositoryDescriptor repository)
+    private string CacheKeyFor(RepositoryDescriptor repository, bool log = true)
     {
         var scope = CurrentScope();
         var serverHash = Convert.ToHexString(SHA256.HashData(
             Encoding.UTF8.GetBytes(repository.ServerUrl.TrimEnd('/').ToLowerInvariant())))[..16];
         var key = $"{CacheKeyPrefix}{serverHash}:{repository.Key}:{repository.RepositoryId}:{scope}:g{GenerationFor(scope)}";
-        _logger.LogInformation(
-            "[LF AUTH] Token cache key used. Repository={RepositoryId}; Scope={Scope}; Key={CacheKey}.",
-            repository.RepositoryId, scope, key);
+        if (log)
+            _logger.LogInformation(
+                "[LF AUTH] Token cache key used. Repository={RepositoryId}; Scope={Scope}; Key={CacheKey}.",
+                repository.RepositoryId, scope, key);
         return key;
     }
+
+    /// <inheritdoc />
+    /// <remarks>The token's own cache key: requests that share a token share its Laserfiche session.</remarks>
+    public string SessionKey(RepositoryDescriptor repository) => CacheKeyFor(repository, log: false);
 
     private string RefreshKeyFor(RepositoryDescriptor repository) =>
         RefreshKeyPrefix + CacheKeyFor(repository);

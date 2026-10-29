@@ -34,6 +34,19 @@ public class RecycleBinTests
         Assert.Contains("لا تشمل المحذوف نهائيًا", count.Answer);
         Assert.Contains("| 0 |", RecycleBinReport.Build(Snapshot() with { Entries = [] }, "Repo", new("recycle_bin", CountOnly: true)).Answer);
     }
+    [Fact] public void WithoutARequestedSizeEveryRowIsShownForThePageButtons()
+    {
+        // The answer page splits rows 50 at a time; the server stopped at the first 50 before (2026-10-28).
+        var many = Snapshot() with { Entries = Enumerable.Range(1, 60).Select(i => new RecycledEntry(i, "وثيقة " + i, "document", "alice",
+            DateTimeOffset.Parse("2026-10-19T00:00:00Z").AddMinutes(i), 1)).ToArray() };
+        int Rows(ChatResult result) => result.Answer.Split('\n').Count(line => line.Contains("| وثيقة | alice |"));
+        var all = RecycleBinReport.Build(many, "Repo", new("recycle_bin"));
+        Assert.Equal(60, Rows(all));
+        Assert.Contains("| 60 | الكل |", all.Answer);
+        var sized = RecycleBinReport.Build(many, "Repo", new("recycle_bin", Limit: 20));
+        Assert.Equal(20, Rows(sized));
+        Assert.Contains("| 60 | 1 | 3 |", sized.Answer);
+    }
     [Fact] public void UnsupportedConditionsCannotBeSilentlyIgnored()
     {
         foreach (var plan in new[] { new QueryPlan("recycle_bin", Content: true), new("recycle_bin", Name: "ignored"),

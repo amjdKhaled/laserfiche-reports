@@ -20,7 +20,8 @@ internal sealed record ChatResult(string Answer, IReadOnlyList<Evidence> Sources
     public string? ClarificationQuestion { get; init; }
 }
 internal sealed record ReportSection(string Title, string Answer, IReadOnlyList<Evidence> Sources, AnswerScope? Scope,
-    int[] RelatedEntryIds, ReportQuality? Quality, bool IsClarification = false, string? ClarificationQuestion = null);
+    int[] RelatedEntryIds, ReportQuality? Quality, bool IsClarification = false, string? ClarificationQuestion = null,
+    string? ResultType = null);
 internal sealed record ReportQuality(string Status, bool QuoteVerification, string SemanticReview,
     string PromptVersion, int ModelCalls);
 internal sealed record IndexedDocument(int EntryId, string Name, string Path, string Status,
@@ -116,6 +117,7 @@ internal sealed class ReportsChatService(
         foreach (var plan in request.Reports)
         {
             ChatResult result;
+            var resultType = plan.ResultType;
             try { result = plan.Operation == "clarify"
                 ? new ChatResult(request.Clarification ?? "وضح معيار هذا التقرير.", [])
                   { IsClarification = true, ClarificationQuestion = request.ClarificationQuestion ?? question }
@@ -130,9 +132,12 @@ internal sealed class ReportsChatService(
                 logger.LogWarning("Report section failed Operation={Operation} ErrorType={ErrorType} Reason={Reason}", plan.Operation, error.GetType().Name,
                     error is ArgumentException or RecycleBinException or AuditTrailException ? error.Message : "upstream failure");
                 result = new ChatResult(error is ArgumentException or RecycleBinException or AuditTrailException ? error.Message : "تعذر إكمال هذا التقرير؛ لم تُعرض نتائج أو أعداد غير مؤكدة.", []);
+                resultType = null;
             }
+            // The page draws a count card or a table card from the plan's result type (2026-10-28).
             sections.Add(new ReportSection(plan.Title ?? "تقرير", result.Answer, result.Sources, result.Scope,
-                result.RelatedEntryIds, result.Quality, result.IsClarification, result.ClarificationQuestion));
+                result.RelatedEntryIds, result.Quality, result.IsClarification, result.ClarificationQuestion,
+                result.IsClarification ? "clarification" : resultType));
         }
         // Structured facts, counts and tables need no second model call.
         var allSources = new List<Evidence>();

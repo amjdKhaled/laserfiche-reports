@@ -72,6 +72,9 @@
 .report-table .report-cell-date{text-align:start}
 .report-body[dir="rtl"]{text-align:right}
 .report-body[dir="rtl"] .report-table{direction:rtl}
+/* Cells keep plaintext bidi for reading order, which also aligned an all-English value («p9», a date) left, away from its header. */
+.report-table td[dir="rtl"]:not(.report-cell-compact):not(.report-cell-path){text-align:right}
+.report-table td[dir="ltr"]:not(.report-cell-compact):not(.report-cell-path){text-align:left}
 .sources-compact pre{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;font-size:12px;line-height:1.7}
 .sources-compact .source-link{font:inherit;font-size:12px;color:#0754ca;cursor:pointer}
 .sources.sources-compact{display:flex;flex-direction:column;gap:0}
