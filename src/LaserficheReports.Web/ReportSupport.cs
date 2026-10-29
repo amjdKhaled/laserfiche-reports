@@ -13,8 +13,8 @@ internal sealed record FieldCondition(string FieldQuestion, string ExpectedValue
 
 internal static class ReportSupport
 {
-    // Ignore harmless Arabic hamza/diacritic/whitespace differences for matching
-    // metadata, while preserving the original field name/value in the report.
+    // Ignore harmless Arabic spelling differences (hamza on alef, ة/ه, ى/ي), diacritics
+    // and whitespace for matching metadata, while preserving the original name/value in the report.
     internal static string MatchKey(string value)
     {
         var output = new StringBuilder();
@@ -22,10 +22,15 @@ internal static class ReportSupport
         {
             if (char.IsWhiteSpace(c) || c == '\u0640' ||
                 CharUnicodeInfo.GetUnicodeCategory(c) == UnicodeCategory.NonSpacingMark) continue;
-            output.Append(c is 'أ' or 'إ' or 'آ' ? 'ا' : char.ToLowerInvariant(c));
+            output.Append(ArabicLetter(c));
         }
         return output.ToString();
     }
+
+    internal static char ArabicLetter(char c) => c switch
+    {
+        'أ' or 'إ' or 'آ' => 'ا', 'ة' => 'ه', 'ى' => 'ي', _ => char.ToLowerInvariant(c)
+    };
 
     internal static bool MatchesField(FieldCondition condition, string fieldName) =>
         !string.IsNullOrWhiteSpace(fieldName) &&

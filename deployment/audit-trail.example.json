@@ -2,7 +2,7 @@
   "AuditTrail": {
     "Enabled": true,
     "BaseUrl": "https://AUDIT-SERVER/AuditTrail",
-    "TimeoutSeconds": 300,
+    "TimeoutSeconds": 3600,
     "PollMilliseconds": 1000,
     "MaxRows": 100000,
     "MaxBytes": 33554432,

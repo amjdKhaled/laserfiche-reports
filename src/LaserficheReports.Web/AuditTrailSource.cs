@@ -13,7 +13,7 @@ internal sealed class AuditTrailOptions
     public string BaseUrl { get; set; } = "";
     // Explicit repository bindings: never infer a data source from a display name.
     public Dictionary<string, AuditTrailReportOptions> Repositories { get; set; } = new(StringComparer.OrdinalIgnoreCase);
-    public int TimeoutSeconds { get; set; } = 300;
+    public int TimeoutSeconds { get; set; } = 3600;
     public int PollMilliseconds { get; set; } = 1000;
     public int MaxRows { get; set; } = 100000;
     public long MaxBytes { get; set; } = 33554432;
@@ -37,7 +37,7 @@ internal sealed record AuditSnapshot(IReadOnlyList<AuditEvent> Events, DateTimeO
 /// <summary>Uses the exact export/status protocol in the installed Export-AuditReport.ps1.
 /// Request-scoped snapshot and HTTP handler: no shared Windows identity, cookies, files or cached audit rows.</summary>
 internal sealed class AuditTrailSource(IConfiguration configuration, IRepositoryContext repositories,
-    ISessionCredentialStore sessions, ILogger<AuditTrailSource> logger)
+    ISessionCredentialStore sessions, ILogger<AuditTrailSource> logger, AuditSessionCredentials? auditCredentials = null)
 {
     private Task<AuditSnapshot>? snapshot;
     private string? snapshotRepository;
@@ -47,7 +47,7 @@ internal sealed class AuditTrailSource(IConfiguration configuration, IRepository
 
     internal async Task<object> CatalogAsync(CancellationToken ct)
     {
-        if (!Options.Enabled) return new { status = "disabled", reason = "Audit Trail غير مهيأ." };
+        if (!Options.Enabled) return new { status = "disabled", reason = "ربط التقارير بـ Audit Trail غير مهيأ. افتح الوثائق والنظام ثم إعدادات سجل التدقيق؛ هذه الحالة لا تعني أن تسجيل الأحداث معطّل في Laserfiche." };
         try
         {
             var data = await ReadAsync(ct);
@@ -92,10 +92,10 @@ internal sealed class AuditTrailSource(IConfiguration configuration, IRepository
         if (options.TimeoutSeconds is < 1 or > 3600 || options.PollMilliseconds is < 10 or > 10000 ||
             options.MaxRows is < 1 or > 1000000 || options.MaxBytes is < 1 or > 268435456)
             throw new AuditTrailException("حدود قراءة Audit Trail غير صالحة.");
-        var credentials = await sessions.TryGetAsync(ct);
+        var credentials = auditCredentials?.Read() ?? await sessions.TryGetAsync(ct);
         if (credentials is null || string.IsNullOrEmpty(credentials.Password) ||
             !(credentials.Username.Contains('\\') || credentials.Username.Contains('@')))
-            throw new AuditTrailException("قراءة Audit Trail تحتاج حساب Windows بصيغة DOMAIN\\user أو user@domain وله صلاحية التقرير؛ حساب المستودع أو LFDS وحده لا يكفي.");
+            throw new AuditTrailException("قراءة Audit Trail تحتاج حساب Windows له صلاحية التقرير. أدخله في الوثائق والنظام ← إعدادات سجل التدقيق، مع إبقاء حساب Laserfiche الحالي.");
         var user = credentials.Username;
         var slash = user.IndexOf('\\');
         var network = slash >= 0 ? new NetworkCredential(user[(slash + 1)..], credentials.Password, user[..slash])
@@ -103,7 +103,7 @@ internal sealed class AuditTrailSource(IConfiguration configuration, IRepository
         using var handler = HandlerFactory?.Invoke(network) ?? new HttpClientHandler {
             Credentials = network, UseDefaultCredentials = false, UseCookies = false,
             AllowAutoRedirect = false, UseProxy = false };
-        using var client = new HttpClient(handler) { BaseAddress = baseUri, Timeout = TimeSpan.FromSeconds(60) };
+        using var client = new HttpClient(handler) { BaseAddress = baseUri, Timeout = Timeout.InfiniteTimeSpan };
         using var budget = CancellationTokenSource.CreateLinkedTokenSource(ct);
         budget.CancelAfter(TimeSpan.FromSeconds(options.TimeoutSeconds));
         var filename = $"LaserficheReports-{Guid.NewGuid():N}.csv";
@@ -131,18 +131,24 @@ internal sealed class AuditTrailSource(IConfiguration configuration, IRepository
                     state.ValueKind != JsonValueKind.Number || !state.TryGetInt32(out var code))
                     throw new AuditTrailException("تعذر تفسير حالة تصدير Audit Trail.");
                 if (code == 2) { completed = true; break; }
-                if (code is 5 or 6) throw new AuditTrailException("فشل تصدير تقرير التدقيق أو أُلغي؛ لم تُعتبر النتائج فارغة.");
+                if (code is 5 or 6) {
+                    logger.LogWarning("Stage=AUDIT_EXPORT State={State}", code);
+                    throw new AuditTrailException("فشل تصدير تقرير التدقيق أو أُلغي. افحص التقرير المحفوظ وصلاحية AuditTrailAppPool في مجلد التصدير؛ لم تُعتبر النتائج فارغة.");
+                }
                 if (code is not (0 or 1)) throw new AuditTrailException("حالة تصدير Audit Trail غير معروفة.");
                 await Task.Delay(options.PollMilliseconds, budget.Token);
             }
-            var events = await AuditCsv.ReadAsync(path, report, options, budget.Token);
+            var events = await ReadExportAsync(path, report, options, budget.Token);
             return new AuditSnapshot(events, DateTimeOffset.UtcNow, report.ScopeDescription,
                 report.Columns.Keys.ToArray(), report.EventLabels);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         { throw new AuditTrailException("انتهت مهلة تصدير التدقيق؛ لم تُعرض أعداد أو نتائج جزئية."); }
-        catch (Exception error) when (error is HttpRequestException or IOException or JsonException or UnauthorizedAccessException)
-        { throw new AuditTrailException("تعذرت قراءة تقرير التدقيق؛ تحقق من الاتصال وصلاحية قراءة مجلد التصدير وإعدادات الأعمدة."); }
+        catch (UnauthorizedAccessException)
+        { throw new AuditTrailException("حساب تشغيل Reports لا يملك صلاحية قراءة مجلد تصدير Audit Trail. عند استخدام جهاز ثانٍ، اضبط مسار المشاركة وصلاحيات القراءة."); }
+        catch (Exception error) when (error is HttpRequestException or IOException or JsonException)
+        { logger.LogWarning("Stage=AUDIT_EXPORT Failure={ErrorType}", error.GetType().Name);
+          throw new AuditTrailException("تعذرت قراءة تقرير التدقيق؛ افحص الاتصال ومسار التصدير على جهاز Audit Trail وصلاحية قراءته من جهاز Reports."); }
         finally
         {
             if (token != null && !completed)
@@ -154,12 +160,26 @@ internal sealed class AuditTrailSource(IConfiguration configuration, IRepository
             }
         }
     }
+    private static async Task<IReadOnlyList<AuditEvent>> ReadExportAsync(string path, AuditTrailReportOptions report,
+        AuditTrailOptions options, CancellationToken ct)
+    {
+        var visibilityDeadline = DateTimeOffset.UtcNow.AddSeconds(15);
+        while (true)
+        {
+            ct.ThrowIfCancellationRequested();
+            try { return await AuditCsv.ReadAsync(path, report, options, ct); }
+            catch (IOException) when (DateTimeOffset.UtcNow < visibilityDeadline)
+            { await Task.Delay(Math.Max(10, options.PollMilliseconds), ct); }
+        }
+    }
     private static Task EnsureAsync(HttpResponseMessage response)
     {
         if (!response.IsSuccessStatusCode)
             throw new AuditTrailException(response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden
                 ? "Audit Trail رفض حساب Windows أو صلاحية التقرير؛ جلسة Laserfiche مستقلة عنه."
-                : "خدمة Audit Trail لم تُكمل طلب التصدير بنجاح.");
+                : response.StatusCode == HttpStatusCode.NotFound
+                    ? "عنوان Audit Trail أو معرّف التقرير المحفوظ غير صحيح (404). راجع إعدادات سجل التدقيق."
+                    : $"خدمة Audit Trail لم تُكمل طلب التصدير (HTTP {(int)response.StatusCode}).");
         return Task.CompletedTask;
     }
 }

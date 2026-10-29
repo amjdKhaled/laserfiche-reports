@@ -1,7 +1,8 @@
 /* Small local Markdown renderer: document/model text is never assigned to innerHTML. */
 (function (root) {
   function inline(parent, value, sourceCount, sourcePrefix) {
-    const tokens = /\*\*([^*]+)\*\*|`([^`]+)`|\[(\d+)\]/g;
+    // A date after Arabic words reads as Arabic digits and flips («2026-10-28» shown as «28-10-2026»), so it is isolated LTR.
+    const tokens = /\*\*([^*]+)\*\*|`([^`]+)`|\[(\d+)\]|(\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}(?::\d{2})?)?)/g;
     let offset = 0;
     for (const match of value.matchAll(tokens)) {
       parent.append(document.createTextNode(value.slice(offset, match.index)));
@@ -10,9 +11,11 @@
         const strong = document.createElement('strong'); strong.textContent = match[1]; parent.append(strong);
       } else if (match[2]) {
         const code = document.createElement('code'); code.textContent = match[2]; parent.append(code);
+      } else if (match[4]) {
+        const date = document.createElement('bdi'); date.dir = 'ltr'; date.textContent = match[4]; parent.append(date);
       } else if (reference > 0 && reference <= sourceCount) {
         const button = document.createElement('button');
-        button.type = 'button'; button.className = 'report-reference'; button.textContent = match[0];
+        button.type = 'button'; button.className = 'report-reference'; button.textContent = match[0]; button.dataset.reference = reference;
         button.setAttribute('aria-label', `عرض المصدر ${reference}`);
         button.onclick = () => {
           const source = document.getElementById(`${sourcePrefix}-${reference}`);

@@ -4,7 +4,7 @@ namespace LaserficheReports.Web;
 
 internal enum QueryKind { LASERFICHE_QUERY, OCR_QUERY, HYBRID_QUERY }
 internal sealed record QueryPlan(string Operation, string? Field = null, string? Value = null,
-    string? Template = null, int? FolderId = null, string? Name = null, int Limit = 50,
+    string? Template = null, int? FolderId = null, string? Name = null, int Limit = QueryPlan.DefaultLimit,
     bool Content = false, string? GroupBy = null, string? From = null, string? To = null, string? Title = null, string? Sort = null, int[]? EntryIds = null, string? Question = null,
     RepositoryFilter? Filters = null, string EntryType = "document", int Page = 1, bool CountOnly = false,
     GroupDimension[]? GroupFields = null, AggregateMetric[]? Metrics = null, string? AggregateSort = null,
@@ -13,6 +13,7 @@ internal sealed record QueryPlan(string Operation, string? Field = null, string?
     public void ValidateIntent()
     {
         if (Operation == "audit") { AuditTrailReport.Validate(this); return; }
+        if (Operation == "recycle_bin") { RecycleBinReport.Validate(this); return; }
         if (Audit != null) throw new ArgumentException("شروط التدقيق لا تنفذ بحثًا في المستودع.");
         if (Operation == "clarify")
         {
@@ -33,7 +34,23 @@ internal sealed record QueryPlan(string Operation, string? Field = null, string?
         if (RequiresFilter && Operation != "clarify" && Filters == null && Field == null && Template == null && FolderId == null && FolderName == null && Name == null && !(EntryIds?.Length > 0) && From == null)
             throw new ArgumentException("خطة البحث لا تحتوي الشرط المطلوب؛ لم أنفذ بحثًا غير مقيّد بدلًا منه.");
     }
-    public bool CompleteListing => AllResults && Page == 1 && !Content && !CountOnly && !RequireUnique && Operation is "search" or "created" or "modified" or "folders";
+    // The planner leaves Limit at 50 when no size was asked for; «آخر 10» sets it.
+    internal const int DefaultLimit = 50;
+    // A listing without a requested size reads every match like a count does; the page shows 50 rows at a time
+    // (it showed 50 of 190 with no total for «اعرض الوثائق التي أنشئت هذا الشهر», 2026-10-28).
+    public bool CompleteListing => (AllResults || Limit == DefaultLimit) && Page == 1 && !Content && !CountOnly && !RequireUnique && Operation is "search" or "created" or "modified" or "folders";
+    // A count reads every row: Laserfiche's own count covers only the delivered page (50 shown where 444 matched).
+    public bool CompleteCount => CountOnly && Page == 1 && !Content && !RequireUnique && Operation is "search" or "created" or "modified" or "folders";
+    // Answers built from rows already in memory (recycle bin, audit trail, groups) follow the same rule: without a
+    // requested size every row is shown and the page splits them 50 at a time; a size shows that page only.
+    internal const int MaxShownRows = 10000;
+    internal bool ShowsAllRows => AllResults || Limit == DefaultLimit && Page == 1;
+    internal T[] Shown<T>(IEnumerable<T> rows) =>
+        (ShowsAllRows ? rows.Take(MaxShownRows) : rows.Skip((Page - 1) * Limit).Take(Limit)).ToArray();
+    // The line under a shown table: the total, and the page only when the answer is one requested page.
+    internal string ShownFooter(string totalLabel, int total, int shown) => ShowsAllRows
+        ? $"| {totalLabel} | المعروض |\n| --- | --- |\n| {total} | {(shown < total ? $"أول {shown}" : "الكل")} |"
+        : $"| {totalLabel} | الصفحة | عدد الصفحات |\n| --- | --- | --- |\n| {total} | {Page} | {Math.Max(1, (total + Limit - 1) / Limit)} |";
     public QueryKind Kind => Content ? Operation == "content" && Filters == null && Field == null && Template == null && FolderId == null && FolderName == null && Name == null ? QueryKind.OCR_QUERY : QueryKind.HYBRID_QUERY
         : QueryKind.LASERFICHE_QUERY;
 }
@@ -80,7 +97,7 @@ internal sealed class QuestionRouter(IHttpClientFactory clients)
             if (plan.ResultType is not ("documents" or "count" or "statistics" or "content" or "details" or "schema" or "clarification"))
                 throw new ArgumentException("خدمة التخطيط لم تحدد نوع النتيجة المطلوبة؛ أعد تشغيل أحدث خدمة reports-graph.");
             plan.ValidateIntent();
-            if (plan.Operation is not ("audit" or "search" or "folders" or "metadata" or "availability" or "templates" or "schema" or "folder_information" or "recent" or "latest_created" or "latest_modified" or "created" or "modified" or "group" or "content" or "clarify") ||
+            if (plan.Operation is not ("audit" or "recycle_bin" or "search" or "folders" or "metadata" or "availability" or "templates" or "schema" or "folder_information" or "recent" or "latest_created" or "latest_modified" or "created" or "modified" or "group" or "content" or "clarify") ||
                 plan.Limit is < 1 or > 200 || plan.Page is < 1 or > 1000000 ||
                 plan.Sort is not (null or "creationTime desc" or "creationTime asc" or "lastModifiedTime desc" or "lastModifiedTime asc" or "name asc" or "name desc" or "id asc" or "id desc") ||
                 plan.ContentMode is not ("summary" or "search") || plan.SortDirection is not ("asc" or "desc") || plan.EntryType is not ("document" or "folder" or "all") ||

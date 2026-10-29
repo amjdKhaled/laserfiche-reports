@@ -9,9 +9,11 @@ namespace LaserficheReports.Web;
 /// <summary>Validated, live tools. Search executes on the repository, never by walking its folders.</summary>
 internal sealed class LiveRepositoryReportService(ILaserficheEntryService entries,
     ILaserficheSearchService searches, ILaserficheFieldDefinitionService fields,
-    ILaserficheTemplateService templates, ILogger<LiveRepositoryReportService> logger, ILaserficheTagDefinitionService? tagDefinitions = null, AuditTrailSource? auditTrail = null)
+    ILaserficheTemplateService templates, ILogger<LiveRepositoryReportService> logger, ILaserficheTagDefinitionService? tagDefinitions = null, AuditTrailSource? auditTrail = null, RecycleBinSource? recycleBin = null)
 {
     internal const string Documents = "{LF:Name=\"*\", Type=D}";
+    // Searches run as the signed-in user: author counted 49 documents where Admin counted all 444 (2026-10-28).
+    internal const string AccountScopeNote = "يشمل عدد الوثائق لك صلاحية الوصول لها.";
     internal static string Term(string value, bool field = false)
     {
         if (string.IsNullOrWhiteSpace(value) || value.Length > 200 ||
@@ -32,6 +34,9 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
     private static bool UsesTags(RepositoryFilter filter) => filter.Tag != null || (filter.Conditions?.Any(UsesTags) ?? false);
     private async Task<string[]?> FilterTagsAsync(RepositoryFilter filter, CancellationToken ct) =>
         UsesTags(filter) ? (await TagsAsync(ct)).Select(t => t.Name).ToArray() : null;
+    private static bool UsesTemplate(RepositoryFilter filter) => filter.Field == "template" || (filter.Conditions?.Any(UsesTemplate) ?? false);
+    private async Task<string[]?> FilterTemplatesAsync(RepositoryFilter filter, CancellationToken ct) =>
+        UsesTemplate(filter) ? (await TemplatesAsync(ct)).Select(t => t.Name).ToArray() : null;
 
     private async Task<IReadOnlyList<LFTemplateDefinition>> TemplatesAsync(CancellationToken ct) => templateSchema ??= await templates.GetTemplateDefinitionsAsync(ct);
     private Task<IReadOnlyDictionary<int, LFFieldDefinition>> SchemaAsync(CancellationToken ct) => schema is null ? LoadSchemaAsync(ct) : Task.FromResult(schema);
@@ -70,6 +75,32 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
             candidates.Select(n => Term(n, true)).ToArray());
     }
 
+    internal const int MaxNamedFolders = 50;
+
+    /// <summary>
+    /// Folders whose name matches <paramref name="name"/> after Arabic spelling normalization
+    /// (أ/ا، ة/ه، ى/ي). The search uses a single-character wildcard for those letters, then
+    /// keeps only names that are equal after normalization.
+    /// </summary>
+    private async Task<IReadOnlyList<LFSearchResult>> FoldersNamedAsync(string name, CancellationToken ct)
+    {
+        var exact = Term(name.Trim());
+        var pattern = FolderNamePattern(exact);
+        var key = ReportSupport.MatchKey(name);
+        async Task<IReadOnlyList<LFSearchResult>> FindAsync(string term)
+        {
+            var found = await searches.QueryAsync($"{{LF:Name=\"{term}\", Type=F}}", 1, MaxNamedFolders, cancellationToken: ct);
+            if (found.TotalCount > MaxNamedFolders)
+                throw new RepositoryScopeClarificationException($"يوجد أكثر من {MaxNamedFolders} مجلدًا بالاسم «{name}». حدد المسار أو اسمًا أدق.");
+            return found.Items.Where(i => ReportSupport.MatchKey(i.Name) == key).ToArray();
+        }
+        var folders = await FindAsync(pattern);
+        return folders.Count > 0 || pattern == exact ? folders : await FindAsync(exact);
+    }
+
+    internal static string FolderNamePattern(string term) =>
+        string.Concat(term.Select(c => c is 'ا' or 'أ' or 'إ' or 'آ' or 'ة' or 'ه' or 'ى' or 'ي' ? '?' : c));
+
     public async Task<PagedResult<LFSearchResult>> SelectAsync(QueryPlan plan, IReadOnlyList<int> ids,
         bool readAll, CancellationToken ct)
     {
@@ -78,7 +109,8 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
             throw new ArgumentException("نطاق الطلب غير صالح. حدد حتى 50 وثيقة وحجم نتائج بين 1 و200.");
         var expression = plan.Operation == "folders" || plan.EntryType == "folder" ? "{LF:Name=\"*\", Type=F}" :
             plan.EntryType == "all" ? "{LF:Name=\"*\", Type=DF}" : Documents;
-        if (plan.Filters != null) expression += " & " + StructuredRepositoryQuery.Compile(plan.Filters, (await SchemaAsync(ct)).Values, RepositoryDates.Today(), tags: await FilterTagsAsync(plan.Filters, ct));
+        if (plan.Filters != null) expression += " & " + StructuredRepositoryQuery.Compile(plan.Filters, (await SchemaAsync(ct)).Values, RepositoryDates.Today(), tags: await FilterTagsAsync(plan.Filters, ct),
+            templates: await FilterTemplatesAsync(plan.Filters, ct));
         if (ids.Count > 0) expression += " & (" + string.Join(" | ", ids.Select(id => $"{{LF:ID={id}}}")) + ")";
         string? requestedField = null;
         string? filterClause = null;
@@ -106,13 +138,15 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
         if (plan.FolderName is not null)
         {
             if (plan.FolderId is not null) throw new ArgumentException("حدد المجلد بالاسم أو الرقم، لا بالاثنين.");
-            var found = await searches.QueryAsync($"{{LF:Name=\"{Term(plan.FolderName)}\", Type=F}}",
-                1, 20, cancellationToken: ct);
-            if (!found.IsTotalCountExact || found.TotalCount != 1 || found.Items.Count != 1)
-                throw new RepositoryScopeClarificationException(found.IsTotalCountExact && found.TotalCount == 0
-                    ? RepositorySuggestions.MissingFolder(plan.FolderName, (await SchemaAsync(ct)).Values.Select(f => f.Name))
-                    : "اسم المجلد غير محدد بشكل فريد؛ اختر رقم المجلد: " + string.Join("، ", found.Items.Select(i => $"{i.EntryId}: {i.Name}")));
-            plan = plan with { FolderId = found.Items[0].EntryId, FolderName = null };
+            // A folder name covers every folder with that name (e.g. a "الوارد" folder per department).
+            var folders = await FoldersNamedAsync(plan.FolderName, ct);
+            if (folders.Count == 0)
+                throw new RepositoryScopeClarificationException(
+                    RepositorySuggestions.MissingFolder(plan.FolderName, (await SchemaAsync(ct)).Values.Select(f => f.Name)));
+            var scopes = new List<string>();
+            foreach (var folder in folders)
+                scopes.Add($"{{LF:Lookin=\"{Term(await entries.GetEntryPathAsync(folder.EntryId, ct))}\", Subfolders={(plan.IncludeSubfolders ? "Y" : "N")}}}");
+            expression += " & " + (scopes.Count == 1 ? scopes[0] : "(" + string.Join(" | ", scopes) + ")");
         }
         if (plan.FolderId is int folderId)
         {
@@ -158,11 +192,13 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
         if (plan.Filters is not null && result.IsTotalCountExact && result.TotalCount == 0)
         {
             var definitions = (await SchemaAsync(ct)).Values;
-            var original = StructuredRepositoryQuery.Compile(plan.Filters, definitions, RepositoryDates.Today(), tags: await FilterTagsAsync(plan.Filters, ct));
+            var original = StructuredRepositoryQuery.Compile(plan.Filters, definitions, RepositoryDates.Today(), tags: await FilterTagsAsync(plan.Filters, ct),
+                templates: await FilterTemplatesAsync(plan.Filters, ct));
             using var recoveryBudget = CancellationTokenSource.CreateLinkedTokenSource(ct);
             recoveryBudget.CancelAfter(TimeSpan.FromSeconds(300));
             var recovered = await RecoverTextValuesAsync(plan.Filters, expression, original, recoveryBudget.Token);
-            var replacement = StructuredRepositoryQuery.Compile(recovered, definitions, RepositoryDates.Today(), tags: await FilterTagsAsync(recovered, ct));
+            var replacement = StructuredRepositoryQuery.Compile(recovered, definitions, RepositoryDates.Today(), tags: await FilterTagsAsync(recovered, ct),
+                templates: await FilterTemplatesAsync(recovered, ct));
             if (replacement != original)
                 result = await searches.QueryAsync(expression.Replace(" & " + original, " & " + replacement, StringComparison.Ordinal),
                     readAll ? 1 : plan.Page, plan.Limit, Sort(plan), requestedField, readAll, ct, projection);
@@ -303,7 +339,19 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
         "latest_modified" or "recent" => "lastModifiedTime desc",
         _ => plan.Sort ?? "id asc"
     };
-    private static string Date(DateTimeOffset? date) => date?.ToString("yyyy-MM-dd HH:mm:ss zzz", CultureInfo.InvariantCulture) ?? "غير متاح";
+    // Saudi time without the "+03:00" suffix, whatever offset Laserfiche returned the date in (2026-10-28).
+    internal static string Date(DateTimeOffset? date) => date is DateTimeOffset value
+        ? TimeZoneInfo.ConvertTimeBySystemTimeZoneId(value, "Asia/Riyadh").ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture) : "غير متاح";
+    // Laserfiche counts image pages only: a document held as an electronic file (PDF, Word) reports 0.
+    // "—" remains only for folders and entries whose details could not be read.
+    internal static string Pages(int? pages, bool electronicFile) => pages is not int count ? "—"
+        : count == 0 && electronicFile ? "0 · ملف إلكتروني" : count.ToString(CultureInfo.InvariantCulture);
+    // The planner names built-in properties in English («created»); the reader sees the table's Arabic column names.
+    internal static string FieldLabel(string? field) => field switch
+    {
+        "entryId" => "رقم الوثيقة", "name" => "اسم الوثيقة", "created" => "تاريخ الإنشاء", "modified" => "آخر تعديل",
+        "template" => "القالب", "creator" => "المنشئ", "pageCount" => "عدد الصفحات", _ => field ?? ""
+    };
     private static string SelectionSummary(QueryPlan plan)
     {
         string Filter(RepositoryFilter node)
@@ -311,12 +359,14 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
             if (node.Conditions is { } children)
                 return "(" + string.Join(node.Logic == "or" ? " أو " : " و ", children.Select(Filter)) + ")";
             if (node.Tag != null) return (node.Operator == "not_tag" ? "بدون الوسم: " : "الوسم: ") + node.Tag;
+            if (node.Field == "template" && node.Operator is "is_empty" or "is_not_empty")
+                return node.Operator == "is_empty" ? "بدون قالب (كرت فهرسة)" : "لها قالب";
             if (node.Period != null)
             {
                 var (start, end) = node.Period.Bounds();
                 var comparisonPeriod = node.Operator switch { "in_period" => "خلال", "before_period" => "قبل",
                     "through_period" => "حتى نهاية", "from_period" => "من بداية", _ => "بعد نهاية" };
-                return $"{node.Field} {comparisonPeriod} الفترة {start:yyyy-MM-dd} إلى {end.AddDays(-1):yyyy-MM-dd}";
+                return $"{FieldLabel(node.Field)} {comparisonPeriod} الفترة {start:yyyy-MM-dd} إلى {end.AddDays(-1):yyyy-MM-dd}";
             }
             var comparison = node.Operator switch
             {
@@ -327,7 +377,7 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
             };
             string Value(string? literal, RelativeDate? relative) => relative is null ? literal ?? "" :
                 RepositoryDates.Resolve(relative, RepositoryDates.Today()).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
-            return $"{node.Field} {comparison} {Value(node.Value, node.Relative)}" +
+            return $"{FieldLabel(node.Field)} {comparison} {Value(node.Value, node.Relative)}" +
                 (node.Upper != null || node.UpperRelative != null ? " و " + Value(node.Upper, node.UpperRelative) : "");
         }
         var parts = new List<string>();
@@ -336,7 +386,7 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
             (plan.IncludeSubfolders ? " والمجلدات الفرعية" : " فقط"));
         if (plan.Name != null) parts.Add("اسم الوثيقة: " + plan.Name);
         if (plan.Template != null) parts.Add("القالب: " + plan.Template);
-        if (plan.Field != null) parts.Add(plan.Field + " = " + plan.Value);
+        if (plan.Field != null) parts.Add(FieldLabel(plan.Field) + " = " + plan.Value);
         return parts.Count == 0 ? "" : "معيار البحث: " + ReportSupport.Cell(string.Join("؛ ", parts)) + "\n\n";
     }
 
@@ -385,17 +435,27 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
             logger.LogWarning("Stage=FIELD_SAMPLE Status=unavailable ErrorType={ErrorType}", error.GetType().Name);
         }
         var auditCatalog = auditTrail == null ? (object)new { status = "disabled" } : await auditTrail.CatalogAsync(ct);
-        return new { auditTrail = auditCatalog, tool = "GetRepositorySchema", fields = definitions.Values.Select(f => new { f.Name, f.FieldType, f.IsMultiValue, f.IsRequired, description = string.IsNullOrWhiteSpace(f.Description) ? null : f.Description[..Math.Min(f.Description.Length, 160)] }).Distinct().ToArray(),
-            capabilities = new { deletedEntries = "unavailable_requires_recycle_bin_or_audit_source", volumeIntegrity = "requires_native_volume_verification_report",
+        var recycleCatalog = recycleBin == null ? (object)new { status = "unavailable", reason = "قارئ السلة غير مهيأ." } : await recycleBin.CatalogAsync(ct);
+        return new { recycleBin = recycleCatalog, auditTrail = auditCatalog, tool = "GetRepositorySchema", fields = definitions.Values
+                .GroupBy(f => (f.Name, f.FieldType, f.IsMultiValue, f.IsRequired, f.Description)).Select(g => g.First())
+                // List choices let the planner tie «تحت الإجراء» to the fields that offer it (2026-10-29).
+                .Select(f => new { f.Name, f.FieldType, f.IsMultiValue, f.IsRequired, description = string.IsNullOrWhiteSpace(f.Description) ? null : f.Description[..Math.Min(f.Description.Length, 160)],
+                    listValues = f.ListValues.Count == 0 ? null : f.ListValues.Where(v => !string.IsNullOrWhiteSpace(v)).Take(100).Select(v => v[..Math.Min(80, v.Length)]).ToArray() }).ToArray(),
+            capabilities = new { deletedEntries = "current_recycle_bin_via_recycleBin_status_permanent_deletion_history_via_auditTrail", volumeIntegrity = "requires_native_volume_verification_report",
                 availability = "explicit_entry_ids_only_current_user_rights_404_does_not_prove_deletion" },
             fieldSamples = samples, sampleStatus, tags = currentTags.Select(t => new { t.Name, t.Description }).ToArray(), tagStatus,
             templates = templateDefinitions.Select(t => t.Name).ToArray(), entryProperties = StructuredRepositoryQuery.Builtins,
-            tools = new[] { "SearchEntries", "AggregateEntries", "GetEntry", "GetEntryMetadata", "GetFolderContents", "GetTemplates", "GetRepositorySchema", "GetFolderInformation", "GetEntryAvailability", "GetAuditEvents", "GetOcrContent" } };
+            tools = new[] { "SearchEntries", "AggregateEntries", "GetEntry", "GetEntryMetadata", "GetFolderContents", "GetTemplates", "GetRepositorySchema", "GetFolderInformation", "GetEntryAvailability", "GetAuditEvents", "GetRecycleBin", "GetOcrContent" } };
     }
 
     public async Task<ChatResult> CreateAsync(string repositoryId, QueryPlan plan, IReadOnlyList<int> ids,
         CancellationToken ct)
     {
+        if (plan.Operation == "recycle_bin")
+        {
+            RecycleBinReport.Validate(plan);
+            return RecycleBinReport.Build(await (recycleBin ?? throw new RecycleBinException("قارئ السلة غير مهيأ.")).ReadAsync(ct), repositoryId, plan);
+        }
         if (plan.Operation == "audit")
             return await AuditTrailReport.CreateAsync(auditTrail ?? throw new AuditTrailException("ربط Audit Trail غير مهيأ."), repositoryId, plan, ct);
         if (plan.Operation == "availability")
@@ -438,7 +498,7 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
             return new ChatResult(string.Join("\n\n", sources.Select(e => $"## الوثيقة {e.EntryId}\n\n" + e.Text)), sources)
                 { RelatedEntryIds = ids.ToArray() };
         }
-        var result = await SelectAsync(plan, ids, plan.CompleteListing || plan.Operation == "group" || plan.SortField != null, ct);
+        var result = await SelectAsync(plan, ids, plan.CompleteListing || plan.CompleteCount || plan.Operation == "group" || plan.SortField != null, ct);
         if (plan.CompleteListing && (result.HasNextPage || !result.IsTotalCountExact || result.Items.Count != result.TotalCount))
             throw new ArgumentException("تعذر تحميل جميع الوثائق المطابقة؛ لم أعرض قائمة ناقصة على أنها كاملة.");
         if (plan.RequireUnique && (!result.IsTotalCountExact || result.TotalCount != 1))
@@ -465,17 +525,20 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
             return new ChatResult(table, [], new AnswerScope("repository", repositoryId, result.Items.Count, 0, true,
                 "حُسب التوزيع من نتائج البحث الحالية المتاحة لحسابك.", ids));
         }
-        // Reuse search values. Only missing page counts require details, bounded to 4 calls.
+        // Reuse search values. Only missing page counts require details, bounded to 4 calls. Counts
+        // fill the column too: search results carry no page count, so the table showed only "—".
         var enriched = new LFSearchResult[result.Items.Count];
+        var electronic = new bool[result.Items.Count];
         await Parallel.ForEachAsync(Enumerable.Range(0, result.Items.Count), new ParallelOptions { MaxDegreeOfParallelism = 4, CancellationToken = ct }, async (index, token) =>
         {
             var item = result.Items[index];
-            if (!plan.CountOnly && item.PageCount is null && item.EntryType is not (LFEntryType.Folder or LFEntryType.RecordSeries))
+            if (item.PageCount is null && item.EntryType is not (LFEntryType.Folder or LFEntryType.RecordSeries))
             {
                 try
                 {
                     var detail = await entries.GetEntryAsync(item.EntryId, token);
                     item = item with { PageCount = detail.PageCount, FullPath = string.IsNullOrWhiteSpace(item.FullPath) ? detail.FullPath : item.FullPath };
+                    electronic[index] = detail.FileSizeBytes > 0;
                 }
                 catch (Exception error) when (!token.IsCancellationRequested && error is LaserficheReports.Domain.Exceptions.LaserficheException or HttpRequestException or OperationCanceledException)
                 { logger.LogWarning("Page count unavailable EntryId={EntryId} ErrorType={ErrorType}", item.EntryId, error.GetType().Name); }
@@ -486,11 +549,14 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
         var evidence = result.Items.Select(i => new Evidence(i.EntryId, i.Name, i.FullPath, null, 1,
             $"الاسم: {i.Name}\nالمسار: {i.FullPath}", "laserfiche-metadata-live")).ToArray();
         var latest = plan.Operation is "latest_created" or "latest_modified";
-        var detail = latest ? $"عُرضت **{result.Items.Count}** وثيقة حسب أحدث تاريخ { (plan.Operation == "latest_created" ? "إنشاء" : "تعديل") }." : result.IsTotalCountExact ? $"عدد النتائج المطابقة: **{result.TotalCount}**." :
+        var detail = latest ? $"عُرضت **{result.Items.Count}** وثيقة حسب أحدث تاريخ { (plan.Operation == "latest_created" ? "إنشاء" : "تعديل") }." : result.IsTotalCountExact ? $"عدد النتائج المطابقة: **{result.TotalCount}** — {AccountScopeNote}" :
             "تعذر تأكيد إجمالي النتائج من استجابة المستودع؛ العدد الإجمالي غير متاح.";
         if (!latest && result.HasNextPage) detail += $" عُرضت {result.Items.Count} نتيجة فقط؛ هذه ليست القائمة الكاملة.";
+        // Folder contents and folder listings name each row's type: a subfolder is not a document (2026-10-29).
+        var withType = plan.EntryType is "all" or "folder" || plan.Operation == "folders";
         var tableRows = string.Join("\n", result.Items.Select((i, index) =>
-            $"| {i.EntryId} | {ReportSupport.Cell(i.Name)} | {Date(i.CreationTime)} | {Date(i.LastModifiedTime)} | {i.PageCount?.ToString(CultureInfo.InvariantCulture) ?? "—"} | [{index + 1}] |"));
+            $"| {i.EntryId} | {ReportSupport.Cell(i.Name)} | " + (withType ? (i.EntryType is LFEntryType.Folder or LFEntryType.RecordSeries ? "مجلد" : "وثيقة") + " | " : "") +
+            $"{Date(i.CreationTime)} | {Date(i.LastModifiedTime)} | {Pages(i.PageCount, electronic[index])} | [{index + 1}] |"));
         var emptyAdvice = "";
         if (result.IsTotalCountExact && result.TotalCount == 0 && plan.RequiresFilter)
         {
@@ -501,8 +567,11 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
                 : "هل تريد تعديل قيمة الحقل، أم الفترة، أم نطاق المجلد؟")
                 + " هذه اقتراحات للتوضيح؛ لم أنفذ بحثًا بشروط بديلة.";
         }
-        return new ChatResult("# " + ReportSupport.Cell(plan.Title ?? "تقرير المستودع") + "\n\n" + SelectionSummary(plan) + detail + "\n\n| رقم الوثيقة | اسم الوثيقة | تاريخ الإنشاء | آخر تعديل | عدد الصفحات | المرجع |\n| --- | --- | --- | --- | --- | --- |\n" +
-            (result.Items.Count == 0 ? "| — | لم يتم العثور على نتائج مطابقة | — | — | — | — |" : tableRows) + emptyAdvice, evidence,
+        var header = withType ? "| رقم الإدخال | الاسم | النوع | تاريخ الإنشاء | آخر تعديل | عدد الصفحات | المرجع |\n| --- | --- | --- | --- | --- | --- | --- |\n"
+            : "| رقم الوثيقة | اسم الوثيقة | تاريخ الإنشاء | آخر تعديل | عدد الصفحات | المرجع |\n| --- | --- | --- | --- | --- | --- |\n";
+        var empty = "| — | لم يتم العثور على نتائج مطابقة | — | — | — | — |" + (withType ? " — |" : "");
+        return new ChatResult("# " + ReportSupport.Cell(plan.Title ?? "تقرير المستودع") + "\n\n" + SelectionSummary(plan) + detail + "\n\n" + header +
+            (result.Items.Count == 0 ? empty : tableRows) + emptyAdvice, evidence,
             new AnswerScope(ids.Count > 0 ? "selected-documents" : "repository", repositoryId,
                 result.IsTotalCountExact ? result.TotalCount : result.Items.Count, evidence.Length,
                 result.IsTotalCountExact && !result.HasNextPage, detail, ids))

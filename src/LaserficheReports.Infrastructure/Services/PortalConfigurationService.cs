@@ -29,7 +29,7 @@ internal sealed class PortalConfigurationService : IPortalConfigurationService
     /// read-merge-write cycle is not — without this lock two concurrent saves
     /// could silently lose each other's fields.
     /// </summary>
-    private readonly SemaphoreSlim _writeLock = new(1, 1);
+    private readonly SemaphoreSlim _writeLock = ReportsConfigPaths.WriteLock;
 
     private static readonly JsonSerializerOptions WriteOptions =
         new() { WriteIndented = true };

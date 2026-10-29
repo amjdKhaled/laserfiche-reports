@@ -82,7 +82,7 @@ The 46-case synthetic corpus is a separate model-quality check. Run it on the mo
 used for reports after restarting LangGraph:
 
 ```powershell
-.\tools\reports-graph\.venv\Scripts\python.exe .\tools\reports-graph\evaluate.py --model qwen2.5:7b --output .\quality-results.json
+.\tools\reports-graph\.venv\Scripts\python.exe .\tools\reports-graph\evaluate.py --model qwen3-vl:8b-instruct --output .\quality-results.json
 ```
 
 The saved evaluation contains per-case results, elapsed time, model and prompt
