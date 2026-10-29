@@ -60,6 +60,12 @@ internal sealed class ReportsChatService(
         if (!string.IsNullOrWhiteSpace(search))
             expression += $" & {{LF:Name=\"{LiveRepositoryReportService.Term(search.Trim())}\", Type=D}}";
         var live = await searches.QueryAsync(expression, page, 50, cancellationToken: cancellationToken);
+        // For a targeted name lookup, a Browse-visible document may still reject
+        // reading its details. Preserve an actual upstream 403 for the UI.
+        // Never treat a zero-result name search as proof of a permission denial.
+        if (!string.IsNullOrWhiteSpace(search) && live.IsTotalCountExact &&
+            live.TotalCount == 1 && live.Items.Count == 1)
+            await entries.GetEntryAsync(live.Items[0].EntryId, cancellationToken);
         var chunks = new Dictionary<int, int>();
         try
         {
