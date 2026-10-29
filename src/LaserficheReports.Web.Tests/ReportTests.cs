@@ -48,6 +48,83 @@ public class ReportTests
     }
 
     [Fact]
+    public async Task SearchByExplicitIdDisplaysReal403InsteadOfClaimingDocumentMissing()
+    {
+        var entries = new Entries(0) { DeniedId = 620 };
+        var searches = new Searches { Response = (_, _, _) => PagedResult<LFSearchResult>.Empty };
+        var denied = await Assert.ThrowsAsync<LaserficheException>(() => Create(entries, searches).CreateAsync(
+            "repo", new QueryPlan("search", EntryIds: [620], RequiresFilter: true, ResultType: "documents"), [620], default));
+        Assert.Equal(403, denied.StatusCode);
+        Assert.Equal(new[] { 620 }, entries.EntryCalls);
+        Assert.Single(searches.Calls);
+        Assert.Contains("صلاحية", RepositoryReadError.Message(denied));
+    }
+
+    [Fact]
+    public async Task SearchByExplicitIdKeeps404AmbiguousAndDoesNotInvent403()
+    {
+        var entries = new Entries(0) { MissingId = 621 };
+        var searches = new Searches { Response = (_, _, _) => PagedResult<LFSearchResult>.Empty };
+        var result = await Create(entries, searches).CreateAsync("repo",
+            new QueryPlan("search", EntryIds: [621], RequiresFilter: true, ResultType: "documents"), [621], default);
+        Assert.Contains("لم يتم العثور على نتائج مطابقة ضمن صلاحيات حسابك", result.Answer);
+        Assert.DoesNotContain("(403)", result.Answer);
+        Assert.Equal(new[] { 621 }, entries.EntryCalls);
+    }
+
+    [Fact]
+    public async Task SearchByNameWithSingleVisibleButUnreadableEntryPropagates403()
+    {
+        var entries = new Entries(0) { DeniedId = 620 };
+        var searches = new Searches { Response = (_, _, _) => new PagedResult<LFSearchResult>
+        {
+            Items = [new() { EntryId = 620, Name = "ملف العقود", EntryType = LFEntryType.Document }],
+            TotalCount = 1
+        } };
+        var denied = await Assert.ThrowsAsync<LaserficheException>(() => Create(entries, searches).CreateAsync(
+            "repo", new QueryPlan("search", Name: "ملف العقود", RequiresFilter: true, ResultType: "documents"), [], default));
+        Assert.Equal(403, denied.StatusCode);
+        Assert.Equal(new[] { 620 }, entries.EntryCalls);
+    }
+
+    [Fact]
+    public async Task SearchByNameWithNoMatchesDoesNotProbeOrClaim403()
+    {
+        var entries = new Entries(0) { DeniedId = 620 };
+        var searches = new Searches { Response = (_, _, _) => PagedResult<LFSearchResult>.Empty };
+        var result = await Create(entries, searches).CreateAsync("repo",
+            new QueryPlan("search", Name: "غير موجود", RequiresFilter: true, ResultType: "documents"), [], default);
+        Assert.Contains("لم يتم العثور على نتائج مطابقة ضمن صلاحيات حسابك", result.Answer);
+        Assert.DoesNotContain("(403)", result.Answer);
+        Assert.Empty(entries.EntryCalls);
+    }
+
+    [Fact]
+    public async Task ExplicitIdProbeDoesNotConvertServerErrorToMissing()
+    {
+        var entries = new Entries(0) { FailureId = 620 };
+        var searches = new Searches { Response = (_, _, _) => PagedResult<LFSearchResult>.Empty };
+        var error = await Assert.ThrowsAsync<LaserficheException>(() => Create(entries, searches).CreateAsync(
+            "repo", new QueryPlan("search", EntryIds: [620], RequiresFilter: true, ResultType: "documents"), [620], default));
+        Assert.Equal(503, error.StatusCode);
+    }
+
+    [Fact]
+    public async Task OrdinaryBulkSearchDoesNotProbeEveryReturnedDocument()
+    {
+        var entries = new Entries(0) { DeniedId = 1 };
+        var searches = new Searches { Response = (_, _, _) => new PagedResult<LFSearchResult>
+        {
+            Items = [new() { EntryId = 1, Name = "وثيقة 1", EntryType = LFEntryType.Document }],
+            TotalCount = 1
+        } };
+        var result = await Create(entries, searches).CreateAsync("repo",
+            new QueryPlan("search", CountOnly: true, ResultType: "count"), [], default);
+        Assert.Contains("عدد النتائج المطابقة: **1**", result.Answer);
+        Assert.Empty(entries.EntryCalls);
+    }
+
+    [Fact]
     public async Task ConfirmedEmptySelectionKeepsZeroTableAndOffersClarificationWithoutExtraQuery()
     {
         var query = new Searches { Response = (_, _, _) => PagedResult<LFSearchResult>.Empty };
