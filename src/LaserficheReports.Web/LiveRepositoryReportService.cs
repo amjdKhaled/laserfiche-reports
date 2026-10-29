@@ -3,6 +3,7 @@ using System.Text;
 using LaserficheReports.Application.Interfaces;
 using LaserficheReports.Domain.Common;
 using LaserficheReports.Domain.Entities;
+using LaserficheReports.Domain.Exceptions;
 
 namespace LaserficheReports.Web;
 
@@ -473,6 +474,27 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
                 { RelatedEntryIds = ids.ToArray() };
         }
         var result = await SelectAsync(plan, ids, plan.CompleteListing || plan.Operation == "group" || plan.SortField != null, ct);
+        // A search returning no rows does not prove that an entry is absent:
+        // Laserfiche also hides entries without Browse rights. Probe only an
+        // explicitly requested, unfiltered ID under the SAME user's session.
+        // A real 403 may be reported; a 404 stays indistinguishable from hidden.
+        if (plan.Operation == "search" && !plan.CountOnly && ids.Count == 1 &&
+            result.IsTotalCountExact && result.TotalCount == 0 &&
+            plan.Name is null && plan.Filters is null && plan.Field is null &&
+            plan.Template is null && plan.FolderId is null && plan.FolderName is null &&
+            plan.From is null && plan.To is null)
+        {
+            try { await entries.GetEntryAsync(ids[0], ct); }
+            catch (LaserficheException deniedOrMissing) when (deniedOrMissing.StatusCode == 404)
+            { /* Do not infer deletion or reveal hidden entries from a 404. */ }
+        }
+        // A targeted result can be Browse-visible but not readable. Verify that
+        // its entry details are accessible before presenting it as an openable document.
+        // General list/count queries keep Laserfiche's Browse-scoped results.
+        if (plan.Operation == "search" && !plan.CountOnly &&
+            result.IsTotalCountExact && result.TotalCount == 1 && result.Items.Count == 1 &&
+            (ids.Count == 1 || plan.Name is not null || plan.RequireUnique))
+            await entries.GetEntryAsync(result.Items[0].EntryId, ct);
         if (plan.CompleteListing && (result.HasNextPage || !result.IsTotalCountExact || result.Items.Count != result.TotalCount))
             throw new ArgumentException("تعذر تحميل جميع الوثائق المطابقة؛ لم أعرض قائمة ناقصة على أنها كاملة.");
         if (plan.RequireUnique && (!result.IsTotalCountExact || result.TotalCount != 1))
@@ -536,7 +558,7 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
                 + " هذه اقتراحات للتوضيح؛ لم أنفذ بحثًا بشروط بديلة.";
         }
         return new ChatResult("# " + ReportSupport.Cell(plan.Title ?? "تقرير المستودع") + "\n\n" + SelectionSummary(plan) + detail + "\n\n| رقم الوثيقة | اسم الوثيقة | تاريخ الإنشاء | آخر تعديل | عدد الصفحات | المرجع |\n| --- | --- | --- | --- | --- | --- |\n" +
-            (result.Items.Count == 0 ? "| — | لم يتم العثور على نتائج مطابقة | — | — | — | — |" : tableRows) + emptyAdvice, evidence,
+            (result.Items.Count == 0 ? "| — | لم يتم العثور على نتائج مطابقة ضمن صلاحيات حسابك | — | — | — | — |" : tableRows) + emptyAdvice, evidence,
             new AnswerScope(ids.Count > 0 ? "selected-documents" : "repository", repositoryId,
                 result.IsTotalCountExact ? result.TotalCount : result.Items.Count, evidence.Length,
                 result.IsTotalCountExact && !result.HasNextPage, detail, ids))
