@@ -88,6 +88,25 @@ public class ReportTests
     }
 
     [Fact]
+    public async Task DocumentSearchPanelSurfaces403ForSingleNamedDocument()
+    {
+        var entries = new Entries(0) { DeniedId = 620 };
+        var searches = new Searches { Response = (_, _, _) => new PagedResult<LFSearchResult>
+        {
+            Items = [new() { EntryId = 620, Name = "ملف العقود", EntryType = LFEntryType.Document }],
+            TotalCount = 1
+        } };
+        var graph = new GraphClient("{}");
+        var service = new ReportsChatService(new ConfigurationBuilder().Build(), new NoEmbeddings(), new Repository(),
+            entries, graph, Create(entries, searches), new QuestionRouter(graph), searches,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<ReportsChatService>.Instance);
+        var denied = await Assert.ThrowsAsync<LaserficheException>(() => service.ListAsync(1, "ملف العقود", default));
+        Assert.Equal(403, denied.StatusCode);
+        Assert.Equal(new[] { 620 }, entries.EntryCalls);
+        Assert.Single(searches.Calls);
+    }
+
+    [Fact]
     public async Task SearchByNameWithNoMatchesDoesNotProbeOrClaim403()
     {
         var entries = new Entries(0) { DeniedId = 620 };
