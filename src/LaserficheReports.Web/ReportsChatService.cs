@@ -129,7 +129,9 @@ internal sealed class ReportsChatService(
             {
                 logger.LogWarning("Report section failed Operation={Operation} ErrorType={ErrorType} Reason={Reason}", plan.Operation, error.GetType().Name,
                     error is ArgumentException or RecycleBinException or AuditTrailException ? error.Message : "upstream failure");
-                result = new ChatResult(error is ArgumentException or RecycleBinException or AuditTrailException ? error.Message : "تعذر إكمال هذا التقرير؛ لم تُعرض نتائج أو أعداد غير مؤكدة.", []);
+                result = new ChatResult(error is LaserficheException { StatusCode: 403 } denied ? RepositoryReadError.Message(denied) :
+                    error is ArgumentException or RecycleBinException or AuditTrailException ? error.Message :
+                    "تعذر إكمال هذا التقرير؛ لم تُعرض نتائج أو أعداد غير مؤكدة.", []);
             }
             sections.Add(new ReportSection(plan.Title ?? "تقرير", result.Answer, result.Sources, result.Scope,
                 result.RelatedEntryIds, result.Quality, result.IsClarification, result.ClarificationQuestion));
@@ -164,6 +166,8 @@ internal sealed class ReportsChatService(
         if (plan.Name != null && (plan.Operation == "metadata" || plan.RequireUnique || plan.Content))
         {
             var lookup = await liveReports.SelectAsync(plan with { Operation = "search", Content = false, ResultType = "documents", Limit = 50, CountOnly = false }, requestedEntries, false, cancellationToken);
+            if (lookup.IsTotalCountExact && lookup.TotalCount == 0)
+                return new ChatResult("لم يتم العثور على وثيقة ظاهرة بهذا الاسم ضمن صلاحيات حسابك. لا يمكن تأكيد ما إذا كانت غير موجودة أو مخفية عن هذا الحساب.", []);
             if (!lookup.IsTotalCountExact || lookup.TotalCount != 1)
                 return new ChatResult("لم أحدد وثيقة واحدة بالاسم؛ اختر رقم الوثيقة من النتائج أو وضح الاسم.\n\n" + string.Join("\n", lookup.Items.Select(i => $"- {i.EntryId}: {ReportSupport.Cell(i.Name)}")), []);
             requestedEntries = [lookup.Items[0].EntryId];
