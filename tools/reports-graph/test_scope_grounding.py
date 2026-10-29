@@ -49,9 +49,14 @@ class GroundFolderScopeTests(unittest.TestCase):
         self.assertEqual("القرار", grounded["template"])
         self.assertEqual({"field": "created", "operator": "in_period", "period": {"year": 2026, "month": 10}}, grounded["filters"])
 
+    def test_subfolders_of_a_named_folder_are_a_scoped_folder_listing(self):
+        # Before 2026-10-29 the folder listing ignored «مجلد الوارد» and listed every folder.
+        grounded = ground_folder_scope({"operation": "folders", "folderName": None}, "اعرض المجلدات داخل مجلد الوارد")
+        self.assertEqual(("folders", "folder", "الوارد"), (grounded["operation"], grounded["entryType"], grounded["folderName"]))
+
     def test_other_operations_and_questions_are_unchanged(self):
-        planned = {"operation": "folders", "folderName": None}
-        self.assertIs(planned, ground_folder_scope(planned, "اعرض المجلدات داخل مجلد الوارد"))
+        planned = {"operation": "metadata", "folderName": None}
+        self.assertIs(planned, ground_folder_scope(planned, "بيانات مجلد الوارد"))
         planned = {"operation": "search", "template": "القرار"}
         self.assertIs(planned, ground_folder_scope(planned, "الوثائق التي قالبها القرار"))
 

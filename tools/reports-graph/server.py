@@ -28,8 +28,12 @@ from clarification_options import (clarification as unresolved_clarification, se
 from request_body import RequestBodyError, read_request_body
 from context_windows import focused_window
 from search_reference import SEARCH_REFERENCE, SEMANTIC_FIELDS
-from calendar_grounding import ground_report_filters
+from calendar_grounding import add_missing_period, ground_named_month, ground_report_filters, normalize_arabic, whole_periods
 from scope_grounding import ground_folder_scope
+from catalog_grounding import ground_catalog_scope
+from value_grounding import GLOSSARY, ground_field_values
+from spelling import correct_spelling
+from name_grounding import ground_entry_name
 from report_reasoning import (PROMPT_VERSION, Extraction, Draft, Review, COMPOSE_SYSTEM,
                               REVIEW_SYSTEM, invoke_structured, compact_schema, validate_draft, apply_review, StrictModel, Quotation, Finding, REQUEST_ID)
 
@@ -507,36 +511,113 @@ PROPERTY_ALIASES = {"creationTime": "created", "lastModifiedTime": "modified", "
 
 
 def ground_calendar_periods(request, question, today, catalog):
-    """Replace the planned date condition of a fixed relative phrase («هذا الشهر»، «أمس») by its exact period."""
+    """Replace the planned date condition of a fixed relative phrase («هذا الشهر»، «أمس») by its exact period,
+    or add it to a document selection when the model dropped it («تم انشاها بتاريخ اليوم»)."""
     date_fields = {"created", "modified"} | {f["name"] for f in catalog.get("fields", [])
                                              if (f.get("fieldType") or "").lower() in ("date", "datetime")}
     for report in request.reports:
-        if report.filters is None:
-            continue
-        planned = report.filters.model_dump(exclude_none=True)
+        planned = report.filters.model_dump(exclude_none=True) if report.filters is not None else None
         grounded = ground_report_filters(planned, question, today, date_fields)
+        grounded = ground_named_month(whole_periods(grounded, date_fields), question, date_fields)
+        if report.operation in ("search", "group", "content") and report.from_ is None and report.to is None:
+            grounded = add_missing_period(grounded, question, today, date_fields)
         if grounded is not planned:
             report.filters = RepositoryFilter.model_validate(grounded)
+            report.requiresFilter = True
             print("Stage=PERIOD_GROUNDED RequestId=" + REQUEST_ID.get() + " Planned=" + json.dumps(planned, ensure_ascii=False) +
                   " Grounded=" + json.dumps(grounded, ensure_ascii=False), flush=True)
     return request
 
 
-def ground_folder_scopes(request, question):
+def ground_folder_scopes(request, question, catalog=None):
     """Apply an explicit «مجلد X»: every folder named X, never an invented template or name filter."""
     for report in request.reports:
         planned = {"operation": report.operation, "folderName": report.folderName, "folderId": report.folderId,
                    "includeSubfolders": report.includeSubfolders, "template": report.template, "name": report.name,
+                   "entryType": report.entryType,
                    "filters": report.filters.model_dump(exclude_none=True) if report.filters is not None else None}
-        grounded = ground_folder_scope(planned, question)
+        grounded = ground_folder_scope(planned, question, (catalog or {}).get("templates") or ())
         if grounded is planned:
             continue
         report.folderName, report.folderId = grounded["folderName"], None
+        report.operation, report.entryType = grounded["operation"], grounded["entryType"]
         report.includeSubfolders, report.template, report.name = grounded["includeSubfolders"], grounded["template"], grounded["name"]
         report.filters = RepositoryFilter.model_validate(grounded["filters"]) if grounded["filters"] else None
         print("Stage=FOLDER_GROUNDED RequestId=" + REQUEST_ID.get() + " Planned=" + json.dumps(planned, ensure_ascii=False) +
-              " Folder=" + json.dumps(grounded["folderName"], ensure_ascii=False) + " Subfolders=" + str(grounded["includeSubfolders"]), flush=True)
+              " Folder=" + json.dumps(grounded["folderName"], ensure_ascii=False) + " Subfolders=" + str(grounded["includeSubfolders"]) +
+              " EntryType=" + grounded["entryType"], flush=True)
     return request
+
+
+def ground_catalog_scopes(request, question, catalog):
+    """Apply an explicit «قالب X» or «وسم X» that names a live template or tag (see catalog_grounding.py)."""
+    for report in request.reports:
+        planned = {"operation": report.operation, "template": report.template, "name": report.name,
+                   "requiresFilter": report.requiresFilter,
+                   "filters": report.filters.model_dump(exclude_none=True) if report.filters is not None else None}
+        grounded = ground_catalog_scope(planned, question, catalog)
+        if grounded is planned:
+            continue
+        report.template, report.name, report.requiresFilter = grounded["template"], grounded["name"], grounded["requiresFilter"]
+        report.filters = RepositoryFilter.model_validate(grounded["filters"]) if grounded["filters"] else None
+        print("Stage=CATALOG_GROUNDED RequestId=" + REQUEST_ID.get() + " Planned=" + json.dumps(planned, ensure_ascii=False) +
+              " Template=" + json.dumps(grounded["template"], ensure_ascii=False) +
+              " Filters=" + json.dumps(grounded["filters"], ensure_ascii=False), flush=True)
+    return request
+
+
+def ground_value_scopes(request, question, catalog):
+    """Apply a List-field choice the question names («تحت الإجراء») and glossary terms («مؤرشفة»), see value_grounding.py."""
+    for report in request.reports:
+        planned = {"operation": report.operation, "folderName": report.folderName, "template": report.template,
+                   "requiresFilter": report.requiresFilter,
+                   "filters": report.filters.model_dump(exclude_none=True) if report.filters is not None else None}
+        grounded = ground_field_values(planned, question, catalog)
+        if grounded is planned:
+            continue
+        report.template, report.requiresFilter = grounded["template"], grounded["requiresFilter"]
+        report.filters = RepositoryFilter.model_validate(grounded["filters"]) if grounded["filters"] else None
+        print("Stage=VALUE_GROUNDED RequestId=" + REQUEST_ID.get() + " Planned=" + json.dumps(planned, ensure_ascii=False) +
+              " Filters=" + json.dumps(grounded["filters"], ensure_ascii=False), flush=True)
+    return request
+
+
+def ground_name_scopes(request, question, catalog):
+    """Apply the file the question names («الملف اللي اسمه X موجود؟», «فين ملف X»), see name_grounding.py."""
+    for report in request.reports:
+        planned = {"operation": report.operation, "name": report.name, "template": report.template,
+                   "requiresFilter": report.requiresFilter,
+                   "filters": report.filters.model_dump(exclude_none=True) if report.filters is not None else None}
+        grounded = ground_entry_name(planned, question, catalog)
+        if grounded is planned:
+            continue
+        report.requiresFilter = grounded["requiresFilter"]
+        report.filters = RepositoryFilter.model_validate(grounded["filters"])
+        print("Stage=NAME_GROUNDED RequestId=" + REQUEST_ID.get() + " Planned=" + json.dumps(planned, ensure_ascii=False) +
+              " Filters=" + json.dumps(grounded["filters"], ensure_ascii=False), flush=True)
+    return request
+
+
+_RECYCLE_BIN = re.compile(r"(?<!\w)[وفبل]{0,2}(?:ال)?(?:سله\s+(?:ال)?(?:محذوفات|مهملات)|recycle\s+bin|trash)(?!\w)")
+
+
+def ground_recycle_bin(request, question, catalog):
+    """«كم وثيقة في سلة المحذوفات» names the recycle bin: never a repository search. Seen 2026-10-29 with the bin source
+    unavailable: the model counted the whole repository (447) and titled it the recycle bin."""
+    if not _RECYCLE_BIN.search(normalize_arabic(question)) or any(p.operation in ("recycle_bin", "audit", "clarify") for p in request.reports):
+        return request
+    source = catalog.get("recycleBin", {})
+    first = request.reports[0]
+    if source.get("status") == "available":
+        report = {"operation": "recycle_bin", "title": first.title or "سلة المحذوفات", "countOnly": first.countOnly,
+                  "entryType": first.entryType, "selection": {"requiresFilter": False}}
+        grounded = planner_request(json.dumps({"reports": [report]}, ensure_ascii=False), question)
+    else:
+        grounded = planner_request(json.dumps({"reports": [{"operation": "clarify", "title": "سلة المحذوفات", "selection": {"requiresFilter": False}}],
+                                               "clarification": source.get("reason") or "سلة المحذوفات غير متاحة حاليًا."}, ensure_ascii=False), question)
+    print("Stage=RECYCLE_BIN_GROUNDED RequestId=" + REQUEST_ID.get() + " Planned=" + json.dumps([p.operation for p in request.reports]) +
+          " Grounded=" + grounded.reports[0].operation, flush=True)
+    return grounded
 
 
 def canonicalize_property_names(request, catalog):
@@ -624,7 +705,7 @@ def validate_plan_schema(request, catalog):
             if node.operator not in ("is_empty", "is_not_empty") and ((node.value is None) == (node.relative is None)):
                 raise ValueError("Specify exactly one literal or relative value")
             if node.operator in ("is_empty", "is_not_empty"):
-                if node.field in properties or any(v is not None for v in (node.value, node.relative, node.upper, node.upperRelative)):
+                if (node.field in properties and node.field != "template") or any(v is not None for v in (node.value, node.relative, node.upper, node.upperRelative)):
                     raise ValueError("Empty checks require a metadata field without values")
                 return
             is_date, is_number, first = typed_value(node.field, node.value, node.relative)
@@ -1010,7 +1091,7 @@ DIRECT_PLAN_SYSTEM = ROUTE_SYSTEM.replace(
     "When questionIntent is supplied, return outputs={output0:{operation,title,selection,...},output1:...} in the SAME order, one object per requested output. Otherwise return reports=[{operation,title,selection,...}].",
     "Return reports=[{operation,title,selection,...}], one per independently requested output.").replace(
     "questionIntent is an independent reading of the requested outputs and bounds; preserve it while mapping to LIVE fields. ", "") + """
-خطط مباشرة من سؤال المستخدم وكتالوج المستودع. خصائص الإدخال المضمنة: created تاريخ إنشاء الوثيقة الفعلي، modified تاريخ آخر تعديل، creator منشئها، name اسمها، entryId معرفها، template قالبها، pageCount عدد صفحاتها. استخدم created لسؤال عن وقت إنشاء الوثائق وmodified لوقت تعديلها، ولا تبحث عن حقل Metadata بديل دون سبب من السؤال. للفترات الميلادية استخدم period={year:Y} للسنة، أو أضف month للشهر وday لليوم؛ القيم مأخوذة من السؤال. in_period للوثائق خلال الفترة، through_period حتى نهاية الفترة شاملًا وما قبلها، before_period قبل بداية الفترة، from_period من بدايتها وما بعدها، after_period بعد نهايتها. التطبيق يحسب حدود الفترة؛ لا تخترع value أو upper معها. الفترات تخص حقول Date/DateTime فقط؛ السنة الرقمية في حقل Number تبقى مقارنة رقمية. لا تستخدم period لتاريخ هجري أو تقويم غير محسوم.  أعد contextMode=current للسؤال المستقل، followup للإشارة إلى نتيجة أو طلب سابق، clarification_reply للإجابة عن التوضيح المعلق. اختر السياق في نفس الاستجابة ثم خطط المطلوب منه. استخلص المطلوب والشروط معًا، ولا تفصل شرطًا عن نتيجته في تقرير مستقل. الوصف المختصر أو الخطأ الإملائي لا يستلزم كتابة اسم الحقل حرفيًا؛ طابق معناه بالاسم الكامل والنوع والوصف في الكتالوج. استخدم تقويم السؤال أو اختيار المستخدم في المحادثة. عند وجود clarificationContext، افهم هل الرسالة الحالية تجيب عنه أم تطلب تقريرًا جديدًا، واحتفظ بطلبه الأصلي فقط إذا كانت جوابًا عنه. اطلب توضيحًا فقط عند وجود بدائل حقيقية تؤثر في النتائج، واذكر البدائل المحددة. لا تطلب من المستخدم إعادة صياغة تاريخ مفهوم بتنسيق تقني. عقد JSON المرفق يحدد الأدوات الفعلية المتاحة وليس حقول المستودع المطلوبة في السؤال.
+خطط مباشرة من سؤال المستخدم وكتالوج المستودع. خصائص الإدخال المضمنة: created تاريخ إنشاء الوثيقة الفعلي، modified تاريخ آخر تعديل، creator منشئها، name اسمها، entryId معرفها، template قالبها، pageCount عدد صفحاتها. «قالب» و«تمبلت» و«كرت الفهرسة» و«بطاقة الفهرسة» و«كرت الأرشفة» كلها تعني template، واسم القالب يطابق اسمه في الكتالوج ولو كُتب دون «ال» أو بإملاء مختلف («تمبلت قرار» هو القالب «القرار»). «مجلد» و«فولدر» و«دوسيه» و«folder» تعني folderName. «وسم» و«تاج» تعني tag. استخدم created لسؤال عن وقت إنشاء الوثائق وmodified لوقت تعديلها، ولا تبحث عن حقل Metadata بديل دون سبب من السؤال. للفترات الميلادية استخدم period={year:Y} للسنة، أو أضف month للشهر وday لليوم؛ القيم مأخوذة من السؤال. in_period للوثائق خلال الفترة، through_period حتى نهاية الفترة شاملًا وما قبلها، before_period قبل بداية الفترة، from_period من بدايتها وما بعدها، after_period بعد نهايتها. التطبيق يحسب حدود الفترة؛ لا تخترع value أو upper معها. الفترات تخص حقول Date/DateTime فقط؛ السنة الرقمية في حقل Number تبقى مقارنة رقمية. لا تستخدم period لتاريخ هجري أو تقويم غير محسوم.  أعد contextMode=current للسؤال المستقل، followup للإشارة إلى نتيجة أو طلب سابق، clarification_reply للإجابة عن التوضيح المعلق. اختر السياق في نفس الاستجابة ثم خطط المطلوب منه. استخلص المطلوب والشروط معًا، ولا تفصل شرطًا عن نتيجته في تقرير مستقل. الوصف المختصر أو الخطأ الإملائي لا يستلزم كتابة اسم الحقل حرفيًا؛ طابق معناه بالاسم الكامل والنوع والوصف في الكتالوج. استخدم تقويم السؤال أو اختيار المستخدم في المحادثة. عند وجود clarificationContext، افهم هل الرسالة الحالية تجيب عنه أم تطلب تقريرًا جديدًا، واحتفظ بطلبه الأصلي فقط إذا كانت جوابًا عنه. اطلب توضيحًا فقط عند وجود بدائل حقيقية تؤثر في النتائج، واذكر البدائل المحددة. لا تطلب من المستخدم إعادة صياغة تاريخ مفهوم بتنسيق تقني. عقد JSON المرفق يحدد الأدوات الفعلية المتاحة وليس حقول المستودع المطلوبة في السؤال.
 """
 
 DIRECT_PLAN_SYSTEM += """
@@ -1235,7 +1316,8 @@ def plan_reports(model, payload, *, budget_seconds=None, max_tokens=1536, review
         payload["history"] = planning_history(payload.get("history"), payload["question"])
     catalog = payload.get("catalog") or {}
     payload["catalog"] = {
-        "fields": [{key: item[key] for key in ("name", "fieldType", "isMultiValue", "isRequired", "description") if key in item}
+        # listValues serve value grounding only; the model prompt below lists names and types.
+        "fields": [{key: item[key] for key in ("name", "fieldType", "isMultiValue", "isRequired", "description", "listValues") if key in item}
                    for item in catalog.get("fields", [])],
         "tags": catalog.get("tags", []), "tagStatus": catalog.get("tagStatus", "unavailable"),
         "templates": catalog.get("templates", []),
@@ -1244,6 +1326,12 @@ def plan_reports(model, payload, *, budget_seconds=None, max_tokens=1536, review
                          for f in catalog.get("fields", []) if catalog.get("fieldSamples", {}).get(f["name"])},
         "sampleStatus": catalog.get("sampleStatus", "unavailable"),
         "tools": catalog.get("tools", []), "capabilities": catalog.get("capabilities", {}), "auditTrail": catalog.get("auditTrail", {"status": "unavailable"}), "recycleBin": catalog.get("recycleBin", {"status": "unavailable"})}
+    # The model and every grounding step read the question with misspelled planning words and names corrected.
+    corrected, corrections = correct_spelling(payload["question"], payload["catalog"], GLOSSARY)
+    if corrections:
+        print("Stage=SPELLING_CORRECTED RequestId=" + REQUEST_ID.get() +
+              " Corrections=" + json.dumps(corrections, ensure_ascii=False), flush=True)
+        payload["question"] = corrected
     descriptions = sum(bool(item.get("description")) for item in payload["catalog"]["fields"])
     description_limit = min(160, max(1, 2000 // max(1, descriptions)))
     for item in payload["catalog"]["fields"]:
@@ -1361,7 +1449,11 @@ If clarificationContext.selectedOption exists, it is the exact displayed option 
                 model_payload["contextMode"] = context_mode
             request = canonicalize_property_names(planner_request(content, model_payload["question"]), payload["catalog"])
             request = ground_calendar_periods(request, model_payload["question"], payload.get("today"), payload["catalog"])
-            request = ground_folder_scopes(request, model_payload["question"])
+            request = ground_folder_scopes(request, model_payload["question"], payload["catalog"])
+            request = ground_catalog_scopes(request, model_payload["question"], payload["catalog"])
+            request = ground_value_scopes(request, model_payload["question"], payload["catalog"])
+            request = ground_name_scopes(request, model_payload["question"], payload["catalog"])
+            request = ground_recycle_bin(request, model_payload["question"], payload["catalog"])
             print("Stage=PLANNER_DRAFT RequestId=" + REQUEST_ID.get() + " Attempt=" + str(attempt + 1) +
                   " Plans=" + json.dumps([{"operation": p.operation, "resultType": p.resultType,
                     "countOnly": p.countOnly, "hasFilter": bool(p.filters),

@@ -37,7 +37,8 @@ def canonical_filter(node):
         conditions = [canonical_filter(child) for child in node["conditions"]]
         if len(conditions) == 1:
             return conditions[0]
-        node["conditions"] = conditions
+        # «قالب و تاريخ» and «تاريخ و قالب» select the same documents.
+        node["conditions"] = sorted(conditions, key=lambda c: json.dumps(c, ensure_ascii=False, sort_keys=True))
         return node
     day = None
     if node.get("operator") == "equals" and node.get("field") in ("created", "modified"):
@@ -53,11 +54,28 @@ def canonical_filter(node):
     return node
 
 
+def leaves(node):
+    """Every condition of a filter tree, canonical."""
+    node = canonical_filter(node)
+    if not isinstance(node, dict):
+        return []
+    return [leaf for child in node["conditions"] for leaf in leaves(child)] if "conditions" in node else [node]
+
+
 def mismatches(plan, expect):
     problems = []
     for name, wanted in expect.items():
         if name == "absent":
             problems += [f"{field} should be empty: {plan.get(field)!r}" for field in wanted if plan.get(field)]
+        elif name == "includes":
+            # A condition that must appear anywhere, whatever else the planner added (a template, a date).
+            planned = leaves(plan.get("filters"))
+            problems += [f"missing {json.dumps(leaf, ensure_ascii=False)}" for leaf in wanted if canonical_filter(leaf) not in planned]
+        elif name == "absent_value":
+            # A negated value: no condition may select it (not_equals is the planner's own reading).
+            planned = [leaf for leaf in leaves(plan.get("filters"))
+                       if leaf.get("operator") in ("equals", "contains", "starts_with") and key(wanted) in str(leaf.get("value", ""))]
+            problems += [f"unexpected {json.dumps(leaf, ensure_ascii=False)}" for leaf in planned]
         elif name == "filters":
             if canonical_filter(plan.get("filters")) != canonical_filter(wanted):
                 problems.append(f"filters {json.dumps(plan.get('filters'), ensure_ascii=False)}")
@@ -65,6 +83,9 @@ def mismatches(plan, expect):
             # The backend runs plan.template and a "template equals" filter the same way.
             condition = canonical_filter(plan.get("filters"))
             as_filter = (condition or {}).get("field") == "template" and condition.get("operator") == "equals" and condition.get("value") == key(wanted)
+            # With "includes", the template may stand beside the other conditions: «template = X and archived».
+            if "includes" in expect and (condition or {}).get("logic") == "and":
+                as_filter = as_filter or {"field": "template", "operator": "equals", "value": key(wanted)} in condition["conditions"]
             if key(plan.get(name)) != key(wanted) and not as_filter:
                 problems.append(f"template {plan.get(name)!r} filters {json.dumps(plan.get('filters'), ensure_ascii=False)[:160]}")
         elif name == "folderName":
