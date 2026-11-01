@@ -91,7 +91,7 @@ def without_unasked_fields(node, question, grounded_names):
 
     Seen 2026-10-29: «عليها وسم تم الرفض» came back with Status = Rejected or Status is_not_empty, and
     «مجلد الطلبات المرفوضة» with Status = Rejected. A condition stays when the question, without the grounded
-    names, still mentions its field or its value."""
+    names, still mentions its field, its value or its structured period's year."""
     if not isinstance(node, dict):
         return node
     if node.get("conditions") is not None:
@@ -103,6 +103,15 @@ def without_unasked_fields(node, question, grounded_names):
     for name in grounded_names:
         rest = rest.replace(normalize_arabic(name), " ")
     if _mentioned(node.get("field"), rest) or _mentioned(node.get("value"), rest):
+        return node
+    # Calendar filters store their date in `period`, not `value`. A paraphrase
+    # such as «ينتهي حتى 2042» can state that year without the full catalog field
+    # name. Do not discard that explicit condition while grounding a catalog name.
+    # Date/schema validation remains in the planner; the year must occur outside
+    # grounded names and must not be a substring of a different number.
+    period = node.get("period")
+    year = period.get("year") if isinstance(period, dict) else None
+    if type(year) is int and re.search(r"(?<!\d)" + re.escape(str(year)) + r"(?!\d)", rest):
         return node
     return None
 

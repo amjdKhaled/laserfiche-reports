@@ -66,6 +66,14 @@ builder.Services.AddSession(options =>
     options.IdleTimeout = TimeSpan.FromHours(8);
 });
 builder.Services.AddLaserficheInfrastructure(builder.Configuration);
+builder.Services.AddHealthChecks().AddCheck<LaserficheReports.Web.Permissions.PermissionBridgeHealthCheck>("permission-bridge-deployment");
+builder.Services.AddSingleton<LaserficheReports.Web.Permissions.PermissionVerificationGate>();
+builder.Services.AddScoped<LaserficheReports.Web.Permissions.IAuthenticatedLaserfichePrincipalResolver,
+    LaserficheReports.Web.Permissions.AuthenticatedLaserfichePrincipalResolver>();
+builder.Services.AddScoped<LaserficheReports.Web.Permissions.ILaserficheSdkBridge,
+    LaserficheReports.Web.Permissions.ProcessLaserficheSdkBridge>();
+builder.Services.AddScoped<LaserficheReports.Web.Permissions.ILaserfichePermissionVerifier,
+    LaserficheReports.Web.Permissions.PermissionVerificationService>();
 builder.Services.AddScoped<ReportsChatService>();
 builder.Services.AddScoped<LiveRepositoryReportService>();
 builder.Services.AddScoped<AuditTrailSource>();
@@ -201,8 +209,25 @@ app.Use(async (context, next) =>
         context.Response.StatusCode = 401;
         await context.Response.WriteAsJsonAsync(new { error = "session_expired", message = "تعذر تجديد جلسة Laserfiche. سجّل الدخول مرة أخرى." });
     }
+    catch (LaserficheReports.Web.Permissions.PermissionVerificationException error) when (!context.Response.HasStarted)
+    {
+        context.Response.StatusCode = error.Decision.HttpStatusCode;
+        await context.Response.WriteAsJsonAsync(new { error = "entry_verification", message = error.Message });
+    }
     catch (LaserficheException error) when (!context.Response.HasStarted)
     {
+        // Fallback is restricted to an observed, failed entry/folder operation. There is
+        // intentionally no public privileged verification endpoint or client-supplied identity.
+        var routeKey = context.Request.RouteValues.ContainsKey("entryId") ? "entryId" : "folderId";
+        if (error.StatusCode is 403 or 404 &&
+            int.TryParse(context.Request.RouteValues[routeKey]?.ToString(), out var targetId) && targetId > 0)
+        {
+            var decision = await context.RequestServices.GetRequiredService<LaserficheReports.Web.Permissions.ILaserfichePermissionVerifier>()
+                .VerifyAsync(new(Id: targetId, Kind: routeKey == "folderId" ? "folder" : "document", OperationForbidden: error.StatusCode == 403), context.RequestAborted);
+            context.Response.StatusCode = decision.HttpStatusCode;
+            await context.Response.WriteAsJsonAsync(new { error = "entry_verification", message = decision.Message });
+            return;
+        }
         context.Response.StatusCode = error.StatusCode is 401 or 403 or 404 ? error.StatusCode : 502;
         await context.Response.WriteAsJsonAsync(new { error = RepositoryReadError.Message(error), upstreamStatus = error.StatusCode, requestId = context.TraceIdentifier });
     }
@@ -362,6 +387,10 @@ app.MapPost("/api/reports/chat", async (ChatQuestion request, ReportsChatService
     {
         return Results.Json(new { error = "session_expired", message = "تعذر تجديد جلسة Laserfiche. سجّل الدخول مرة أخرى." }, statusCode: 401);
     }
+    catch (LaserficheReports.Web.Permissions.PermissionVerificationException verification)
+    {
+        return Results.Ok(verification.Decision.ToChatResult());
+    }
     catch (AuditTrailException exception)
     {
         return Results.Json(new { error = "audit_trail_unavailable", message = exception.Message }, statusCode: 503);
@@ -470,6 +499,7 @@ app.MapPost("/api/ingestion/laserfiche/{entryId:int}", async (
     int entryId,
     ILaserficheDocumentIngestionService ingestion,
     ISessionCredentialStore sessions,
+    LaserficheReports.Web.Permissions.ILaserfichePermissionVerifier permissions,
     CancellationToken cancellationToken) =>
 {
     if (await sessions.TryGetSignedInUserAsync(cancellationToken) is null) return Results.Unauthorized();
@@ -525,6 +555,12 @@ app.MapPost("/api/ingestion/laserfiche/{entryId:int}", async (
     }
     catch (LaserficheException exception)
     {
+        if (exception.StatusCode is 403 or 404)
+        {
+            var decision = await permissions.VerifyAsync(new(Id: entryId, Kind: "document", OperationForbidden: exception.StatusCode == 403), cancellationToken);
+            return Results.Json(new { error = "entry_verification", message = decision.Message, preservedExistingIndex = true },
+                statusCode: decision.HttpStatusCode);
+        }
         app.Logger.LogWarning(exception, "Laserfiche ingestion failed for Entry {EntryId}.", entryId);
         var operation = exception.Message.Contains("entry fields", StringComparison.OrdinalIgnoreCase)
             ? "entry_fields"

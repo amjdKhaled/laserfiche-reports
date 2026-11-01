@@ -86,6 +86,7 @@ try {
         }
     }
     Invoke-Checked dotnet @('publish',"$source\src\LaserficheReports.Web",'-c','Release','-r','win-x64','--self-contained','true','-o',"$payload\web","-p:Version=$Version")
+    & "$source\deployment\windows\test-permission-bridge.ps1" -WebPath "$payload\web"
     Invoke-Checked dotnet @('publish',"$source\installer\Reports.Service",'-c','Release','-r','win-x64','--self-contained','true','-o',$payload,"-p:Version=$Version")
     foreach ($project in @('Reports.BA','Reports.SafetyActions')) { Invoke-Checked dotnet @('build',"$source\installer\$project",'-c','Release') }
     Copy-Item "$source\installer\Reports.BA\bin\Release\net48\*" $baStage -Recurse -Force
