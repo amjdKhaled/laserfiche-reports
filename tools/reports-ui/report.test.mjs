@@ -1,11 +1,26 @@
 import { Window } from 'happy-dom';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import test from 'node:test';
+import test, { afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 const root = fileURLToPath(new URL('../../src/LaserficheReports.Web/wwwroot/', import.meta.url));
+const windows = new Set();
+function createWindow(options) {
+  const window = new Window(options);
+  windows.add(window);
+  return window;
+}
+// Assertions may throw before the end of a test. Always release app keepalive
+// intervals, asset fetches and secondary document windows, including failure paths.
+afterEach(async () => {
+  const openWindows = [...windows];
+  windows.clear();
+  const results = await Promise.allSettled(openWindows.map(window => window.happyDOM.close()));
+  const failed = results.find(result => result.status === 'rejected');
+  if (failed) throw failed.reason;
+});
 function setup() {
-  const window = new Window({ url: 'http://localhost:5187', settings: { enableJavaScriptEvaluation: true, suppressInsecureJavaScriptEnvironmentWarning: true } });
+  const window = createWindow({ url: 'http://localhost:5187', settings: { enableJavaScriptEvaluation: true, suppressInsecureJavaScriptEnvironmentWarning: true } });
   window.eval(readFileSync(root + 'report-format.js', 'utf8'));
   window.eval(readFileSync(root + 'report-download.js', 'utf8'));
   window.eval(readFileSync(root + 'office-export.js', 'utf8'));
@@ -28,11 +43,16 @@ const message = {
 test('downloaded HTML preserves tables, scope, question, Saudi date without a sources appendix', () => {
   const window = setup();
   const exported = window.ReportsDownload.html(message, 'ما الحالة؟');
-  const document = new Window().document; document.write(exported);
+  const document = createWindow().document; document.write(exported);
   assert.equal(document.querySelectorAll('table tbody tr').length, 1);
   assert.equal(document.documentElement.dir, 'rtl');
   assert(document.body.textContent.includes('ما الحالة؟'));
-  assert(document.body.textContent.includes('(بتوقيت السعودية): 2026-10-03 21:00:00'));
+  const timeLabel = [...document.querySelectorAll('.report-info dt')]
+    .find(node => node.textContent === 'وقت الإجابة (بتوقيت السعودية)');
+  assert(timeLabel);
+  const time = timeLabel.nextElementSibling.querySelector('bdi');
+  assert.equal(time.textContent, '2026-10-03 21:00:00');
+  assert.equal(time.dir, 'ltr');
   assert(!document.body.textContent.includes('UTC'));
   assert(document.body.textContent.includes('التقرير جزئي'));
   assert.equal(document.querySelector('#export-source-1'),null);
@@ -45,7 +65,7 @@ test('untrusted question, model HTML, document names and source text cannot beco
   const payload = '<img src="https://example.com" onerror="alert(1)"><script>alert(1)</script>';
   const exported = window.ReportsDownload.html({ ...message, text: message.text + '\n' + payload,
     sources: [{ ...message.sources[0], documentName: payload, text: payload }] }, payload);
-  const document = new Window().document; document.write(exported);
+  const document = createWindow().document; document.write(exported);
   assert.equal(document.querySelectorAll('img,script,iframe,[onerror]').length, 0);
   assert(document.querySelector('meta[http-equiv="Content-Security-Policy"]').content.includes("default-src 'none'"));
   assert(document.body.textContent.includes(payload));
@@ -209,7 +229,12 @@ test('answers carry one report download that holds every table, not a second one
   await new Promise(r=>setTimeout(r,20));
   const buttons=[...window.document.querySelectorAll('button')];
   assert.equal(window.document.querySelectorAll('.table-export-actions').length,0);assert(!buttons.some(b=>b.textContent==='تنزيل هذا الجدول'));
-  let exported;window.ReportsDownload.download=(result)=>{exported=result;};buttons.find(b=>b.textContent==='تحميل التقرير').click();
+  const details = openDetails(window);
+  assert.equal(details.querySelectorAll('.details-formats').length, 1);
+  let exported, format;
+  window.ReportsDownload.download=(result,question,extension)=>{exported=result;format=extension;};
+  details.querySelector('button[aria-label="تحميل التقرير بصيغة HTML"]').click();
+  assert.equal(format, 'html');
   assert(exported.text.includes('تحت الإجراء'));assert(exported.text.includes('مختلف'));assert.equal(exported.scope.detail,message.scope.detail);
   await window.happyDOM.abort();
 });
@@ -308,7 +333,7 @@ test('Office reports include professional headers, printing without a sources ap
   assert(doc.includes('word/styles.xml'));assert(doc.includes('word/footer1.xml'));assert(doc.includes('w:tblHeader'));assert(doc.includes('NUMPAGES'));assert(!doc.includes('ملحق المصادر والأدلة'));
   assert(!doc.includes('إجراء الوثيقة: تحت الإجراء'));
   const sheet=Buffer.from(await window.ReportsOffice.xlsx(message,'السؤال').arrayBuffer()).toString('utf8');
-  assert(sheet.includes('state="frozen"'));assert(sheet.includes('autoFilter'));assert(sheet.includes('_xlnm.Print_Titles'));assert(sheet.includes('orientation="landscape"'));assert(sheet.includes('FF0754CA'));assert(!sheet.includes('إجراء الوثيقة: تحت الإجراء'));
+  assert(sheet.includes('state="frozen"'));assert(sheet.includes('autoFilter'));assert(sheet.includes('_xlnm.Print_Titles'));assert(sheet.includes('orientation="landscape"'));assert(sheet.includes('<fgColor rgb="FF0B3954"/>'));assert(!sheet.includes('إجراء الوثيقة: تحت الإجراء'));
   assert(!sheet.includes('name="المصادر"'));
 });
 test('Arabic dates and IDs keep RTL cell alignment with isolated LTR values', () => {

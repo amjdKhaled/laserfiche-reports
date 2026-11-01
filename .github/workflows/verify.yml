@@ -3,6 +3,9 @@ on:
   push:
     branches: [main, feature/reports-chat-langgraph, fix/typed-semantic-repository-plans]
   pull_request:
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 jobs:
   dotnet:
     runs-on: windows-latest
@@ -95,6 +98,7 @@ jobs:
       - run: python -m unittest discover -s tools/reports-graph -p 'test_*.py'
   ui:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -102,6 +106,7 @@ jobs:
           node-version: '22'
       - run: npm ci --prefix tools/reports-ui
       - run: npm test --prefix tools/reports-ui
+        timeout-minutes: 2
   hybrid-retrieval:
     runs-on: ubuntu-latest
     services:

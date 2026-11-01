@@ -240,3 +240,22 @@ of invented conditions. Regression tests cover combined date/tag/numeric filters
 unasked years, years inside tag names, and substrings of unrelated numbers. The original failing
 planner test now passes. The full Python suite runs 267 cases: **266 passed, one skipped**.
 Current overall CI status must still be checked on the PR; live SDK acceptance requirements remain.
+
+### UI runner hang resolved
+
+On run 126, Windows build/.NET tests/MSI install-repair-upgrade-removal, Python and PostgreSQL
+integration all completed successfully. The UI job remained open after 25 tests passed and three
+assertions failed: an app keepalive interval survived because cleanup was placed after assertions.
+
+The follow-up registers unconditional `afterEach` cleanup for every happy-dom window (including
+secondary export documents) and closes its timers/fetches on both pass and failure. The three stale
+assertions now verify the current report-info Saudi timestamp, a full report HTML download through
+the details drawer, and the current navy Excel header fill. No product UI/export behavior is changed.
+The runner does not use forced exit or suppress failing assertions.
+
+Validation: before the fix the suite exceeded a 12-second reproduction deadline; with cleanup alone
+it returned failure normally (25 passed / 3 failed, about 1.4 seconds). After correcting expectations,
+**all 28 UI tests passed**, zero skipped, and the process exited successfully in about 1.4 seconds
+locally. The runner has a 30-second test timeout, the CI test step a two-minute limit and the UI job
+a five-minute limit. New workflow runs use a per-PR concurrency group to cancel superseded grouped
+runs. Already-running older runs created without that group require manual cancellation in Actions.
