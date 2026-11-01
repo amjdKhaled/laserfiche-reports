@@ -23,6 +23,7 @@ if ($existing) { throw "Reports is already installed. Use deployment\windows\unr
 New-Item -ItemType Directory -Force -Path $InstallPath, "$InstallPath\web", "$InstallPath\graph", "$InstallPath\logs" | Out-Null
 & dotnet publish "$source\src\LaserficheReports.Web" -c Release -r win-x64 --self-contained true -o "$InstallPath\web"
 if ($LASTEXITCODE -ne 0) { throw 'Web publish failed; nothing was registered for startup.' }
+& "$PSScriptRoot\test-permission-bridge.ps1" -WebPath "$InstallPath\web"
 Copy-Item "$source\tools\reports-graph\*.py" "$InstallPath\graph" -Force
 Copy-Item "$source\tools\reports-graph\requirements.txt" "$InstallPath\graph" -Force
 Copy-Item "$source\deployment\supervise.py" $InstallPath -Force

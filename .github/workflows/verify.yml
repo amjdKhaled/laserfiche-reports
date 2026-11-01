@@ -27,6 +27,11 @@ jobs:
             $path = Join-Path $reader $file
             if (!(Test-Path $path) -or (Get-Item $path).Length -eq 0) { throw "Reader payload missing: $file" }
           }
+          $bridge = 'src/LaserficheReports.Web/bin/Release/net8.0/permission-bridge'
+          foreach ($file in @('LaserficheReports.PermissionBridge.exe', 'LaserficheReports.PermissionBridge.exe.config', 'Laserfiche.RepositoryAccess.dll', 'Laserfiche-SDK-EULA.md')) {
+            $path = Join-Path $bridge $file
+            if (!(Test-Path $path) -or (Get-Item $path).Length -eq 0) { throw "Permission bridge payload missing: $file" }
+          }
       - run: dotnet test LaserficheReports.sln --configuration Release
       - shell: pwsh
         run: |

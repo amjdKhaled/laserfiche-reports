@@ -8,6 +8,7 @@ $package = Join-Path $OutputDirectory "LaserficheReports-$stamp"
 New-Item -ItemType Directory -Force -Path "$package\web", "$package\graph" | Out-Null
 & dotnet publish "$source\src\LaserficheReports.Web" -c Release -r win-x64 --self-contained true -o "$package\web"
 if ($LASTEXITCODE -ne 0) { throw 'Publish failed. No transfer archive was produced.' }
+& "$PSScriptRoot\test-permission-bridge.ps1" -WebPath "$package\web"
 # Never export local passwords, runtime settings, sessions or source data.
 Remove-Item "$package\web\appsettings.Local.json" -ErrorAction SilentlyContinue
 Remove-Item "$package\web\config" -Recurse -ErrorAction SilentlyContinue
@@ -18,6 +19,9 @@ Copy-Item "$PSScriptRoot\install-package.ps1" "$package\install.ps1"
 Copy-Item "$PSScriptRoot\install-package.cmd" "$package\Install.cmd"
 Copy-Item "$PSScriptRoot\unregister.ps1" $package
 Copy-Item "$PSScriptRoot\diagnostics.ps1" $package
+Copy-Item "$PSScriptRoot\test-permission-bridge.ps1" $package
+Copy-Item "$PSScriptRoot\protect-permission-service-credential.ps1" $package
+Copy-Item "$source\docs\PERMISSION-VERIFICATION.md" $package
 Copy-Item "$source\deployment\TRANSFER.md" "$package\README.md"
 $archive = "$package.zip"
 Compress-Archive -Path "$package\*" -DestinationPath $archive

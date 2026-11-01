@@ -5,6 +5,7 @@ using LaserficheReports.Application.DTOs;
 using LaserficheReports.Domain.Entities;
 using LaserficheReports.Domain.Exceptions;
 using Npgsql;
+using LaserficheReports.Web.Permissions;
 
 namespace LaserficheReports.Web;
 
@@ -37,15 +38,17 @@ internal sealed class ReportsChatService(
     IHttpClientFactory clients,
     LiveRepositoryReportService liveReports,
     QuestionRouter router, ILaserficheSearchService searches, ILogger<ReportsChatService> logger,
-    ILaserficheDocumentIngestionService? ingestion = null)
+    ILaserficheDocumentIngestionService? ingestion = null, ILaserfichePermissionVerifier? permissions = null)
 {
     internal static async Task RefreshContentAsync(ILaserficheDocumentIngestionService ingestion,
-        IEnumerable<int> entryIds, CancellationToken cancellationToken)
+        IEnumerable<int> entryIds, CancellationToken cancellationToken, ILaserfichePermissionVerifier? permissions = null)
     {
         foreach (var entryId in entryIds.Distinct())
         {
             cancellationToken.ThrowIfCancellationRequested();
-            await ingestion.IngestMetadataAsync(entryId, cancellationToken);
+            try { await ingestion.IngestMetadataAsync(entryId, cancellationToken); }
+            catch (LaserficheException error) when (permissions != null && error.StatusCode is 403 or 404)
+            { throw new PermissionVerificationException(await permissions.VerifyAsync(new(Id: entryId, Kind: "document"), cancellationToken)); }
         }
     }
 
@@ -126,6 +129,11 @@ internal sealed class ReportsChatService(
             {
                 result = new ChatResult(clarification.Message, []) { IsClarification = true, ClarificationQuestion = question };
             }
+            catch (PermissionVerificationException verification)
+            {
+                result = verification.Decision.ToChatResult();
+                resultType = null;
+            }
             catch (Exception error) when (request.Reports.Length > 1 && !cancellationToken.IsCancellationRequested &&
                 error is RecycleBinException or AuditTrailException or LaserficheException or NpgsqlException or HttpRequestException or InvalidOperationException or ArgumentException)
             {
@@ -204,7 +212,7 @@ internal sealed class ReportsChatService(
         }
         // Refresh before retrieval, not in the background after returning an old
         // answer. Ingestion checks live access and writes document chunks atomically.
-        await RefreshContentAsync(ingestion, requestedEntries, cancellationToken);
+        await RefreshContentAsync(ingestion, requestedEntries, cancellationToken, permissions);
         logger.LogInformation("Stage=LIVE_CONTENT_REFRESH Documents={Documents}", requestedEntries.Length);
         var hasEntryFilter = requestedEntries.Length > 0;
         var candidateLimit = Math.Clamp(configuration.GetValue<int?>("Reports:CandidateLimit") ?? 240, 24, 1000);
@@ -265,12 +273,19 @@ internal sealed class ReportsChatService(
         }
 
         logger.LogInformation("Stage=SUPABASE Tool=GetOcrContent DurationMs={DurationMs} Passages={Passages}", watch.ElapsedMilliseconds, candidates.Count);
-        var authorized = liveSelected;
-        var candidateIds = candidates.Select(c => c.EntryId).Distinct().Where(id => !authorized.ContainsKey(id)).Take(evidenceLimit).ToArray();
+        // Recheck even entries selected before ingestion: access may have changed during OCR.
+        // Stored snippets and a successful search are never an authorization cache.
+        var authorized = new Dictionary<int, LFEntry>();
+        var candidateIds = candidates.Select(c => c.EntryId).Distinct().Take(evidenceLimit).ToArray();
         var currentEntries = new LFEntry?[candidateIds.Length];
         await Parallel.ForEachAsync(Enumerable.Range(0, candidateIds.Length), new ParallelOptions { MaxDegreeOfParallelism = 4, CancellationToken = cancellationToken }, async (index, token) =>
         {
-            try { currentEntries[index] = await entries.GetEntryAsync(candidateIds[index], token); }
+            try
+            {
+                var current = await entries.GetEntryAsync(candidateIds[index], token);
+                await entries.GetEntryFieldsAsync(candidateIds[index], token);
+                currentEntries[index] = current;
+            }
             catch (LaserficheException error) when (error.StatusCode is 403 or 404) { }
         });
         foreach (var current in currentEntries.OfType<LFEntry>().Where(e => e.EntryType == LFEntryType.Document)) authorized[current.Id] = current;

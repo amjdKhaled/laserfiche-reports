@@ -3,14 +3,24 @@ using System.Text;
 using LaserficheReports.Application.Interfaces;
 using LaserficheReports.Domain.Common;
 using LaserficheReports.Domain.Entities;
+using LaserficheReports.Web.Permissions;
+using LaserficheReports.Domain.Exceptions;
 
 namespace LaserficheReports.Web;
 
 /// <summary>Validated, live tools. Search executes on the repository, never by walking its folders.</summary>
 internal sealed class LiveRepositoryReportService(ILaserficheEntryService entries,
     ILaserficheSearchService searches, ILaserficheFieldDefinitionService fields,
-    ILaserficheTemplateService templates, ILogger<LiveRepositoryReportService> logger, ILaserficheTagDefinitionService? tagDefinitions = null, AuditTrailSource? auditTrail = null, RecycleBinSource? recycleBin = null)
+    ILaserficheTemplateService templates, ILogger<LiveRepositoryReportService> logger, ILaserficheTagDefinitionService? tagDefinitions = null, AuditTrailSource? auditTrail = null, RecycleBinSource? recycleBin = null,
+    ILaserfichePermissionVerifier? permissions = null)
 {
+    private async Task<T> TargetedReadAsync<T>(int id, string kind, Func<Task<T>> read, CancellationToken ct)
+    {
+        try { return await read(); }
+        catch (LaserficheException error) when (permissions != null && error.StatusCode is 403 or 404)
+        { throw new PermissionVerificationException(await permissions.VerifyAsync(new(Id: id, Kind: kind), ct)); }
+    }
+
     internal const string Documents = "{LF:Name=\"*\", Type=D}";
     // Searches run as the signed-in user: author counted 49 documents where Admin counted all 444 (2026-10-28).
     internal const string AccountScopeNote = "يشمل عدد الوثائق لك صلاحية الوصول لها.";
@@ -44,7 +54,7 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
 
     private async Task<IReadOnlyList<LFFieldValue>> EntryFieldsAsync(int id, CancellationToken ct)
     {
-        var values = await entries.GetEntryFieldsAsync(id, ct);
+        var values = await TargetedReadAsync(id, "all", () => entries.GetEntryFieldsAsync(id, ct), ct);
         var definitions = schema ?? (values.Any(f => string.IsNullOrWhiteSpace(f.FieldName)) ? await SchemaAsync(ct) : null);
         return values.Select(value =>
         {
@@ -141,8 +151,12 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
             // A folder name covers every folder with that name (e.g. a "الوارد" folder per department).
             var folders = await FoldersNamedAsync(plan.FolderName, ct);
             if (folders.Count == 0)
+            {
+                if (permissions != null)
+                    throw new PermissionVerificationException(await permissions.VerifyAsync(new(Name: plan.FolderName, Kind: "folder"), ct));
                 throw new RepositoryScopeClarificationException(
                     RepositorySuggestions.MissingFolder(plan.FolderName, (await SchemaAsync(ct)).Values.Select(f => f.Name)));
+            }
             var scopes = new List<string>();
             foreach (var folder in folders)
                 scopes.Add($"{{LF:Lookin=\"{Term(await entries.GetEntryPathAsync(folder.EntryId, ct))}\", Subfolders={(plan.IncludeSubfolders ? "Y" : "N")}}}");
@@ -150,7 +164,7 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
         }
         if (plan.FolderId is int folderId)
         {
-            var folder = await entries.GetEntryAsync(folderId, ct);
+            var folder = await TargetedReadAsync(folderId, "folder", () => entries.GetEntryAsync(folderId, ct), ct);
             if (folder.EntryType is not (LFEntryType.Folder or LFEntryType.RecordSeries))
                 throw new ArgumentException("الإدخال المحدد ليس مجلدًا.");
             var path = await entries.GetEntryPathAsync(folderId, ct);
@@ -189,6 +203,17 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
         logger.LogDebug("Stage=COMPILED_SEARCH Expression={Expression}", expression);
         var result = await searches.QueryAsync(expression, readAll ? 1 : plan.Page, plan.Limit,
             Sort(plan), requestedField, readAll, ct, projection);
+        // Only precise standalone lookups may fall back to the privileged verifier.
+        // A filtered report with zero matches is not evidence of a missing named entry.
+        if (permissions != null && result.Items.Count == 0 && plan.Filters == null && plan.Field == null &&
+            plan.Template == null && plan.FolderId == null && plan.FolderName == null &&
+            plan.Operation is "search" or "folders" && (ids.Count == 1 && plan.Name == null || ids.Count == 0 && plan.Name != null))
+        {
+            var kind = plan.EntryType == "all" ? "all" : plan.EntryType == "folder" || plan.Operation == "folders" ? "folder" : "document";
+            var target = ids.Count == 1 ? new PermissionTarget(Id: ids[0], Kind: kind) :
+                plan.Name!.StartsWith('\\') ? new PermissionTarget(Path: plan.Name, Kind: kind) : new PermissionTarget(Name: plan.Name, Kind: kind);
+            throw new PermissionVerificationException(await permissions.VerifyAsync(target, ct));
+        }
         if (plan.Filters is not null && result.IsTotalCountExact && result.TotalCount == 0)
         {
             var definitions = (await SchemaAsync(ct)).Values;
@@ -459,7 +484,7 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
         if (plan.Operation == "audit")
             return await AuditTrailReport.CreateAsync(auditTrail ?? throw new AuditTrailException("ربط Audit Trail غير مهيأ."), repositoryId, plan, ct);
         if (plan.Operation == "availability")
-            return await EntryAvailabilityReport.CreateAsync(entries, repositoryId, plan, ids, ct);
+            return await EntryAvailabilityReport.CreateAsync(entries, repositoryId, plan, ids, ct, permissions);
         if (plan.Operation == "schema")
         {
             if (plan.Template != null) throw new ArgumentException("هذه الأداة تعرض تعريفات حقول المستودع؛ ربط الحقول بتعريف قالب بعينه غير متاح من عقد الخدمة الحالي.");
@@ -470,7 +495,7 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
         if (plan.Operation == "folder_information")
         {
             if (plan.FolderId is not int folderId) throw new ArgumentException("حدد رقم المجلد.");
-            var folder = await entries.GetEntryAsync(folderId, ct);
+            var folder = await TargetedReadAsync(folderId, "folder", () => entries.GetEntryAsync(folderId, ct), ct);
             if (folder.EntryType is not (LFEntryType.Folder or LFEntryType.RecordSeries)) throw new ArgumentException("الإدخال ليس مجلدًا.");
             return new ChatResult($"المجلد {folderId}: {ReportSupport.Cell(folder.Name)}\nالمسار: {ReportSupport.Cell(string.IsNullOrWhiteSpace(folder.FullPath) ? await entries.GetEntryPathAsync(folderId, ct) : folder.FullPath)}", []) { RelatedEntryIds = [folderId] };
         }
@@ -488,7 +513,7 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
             await Parallel.ForEachAsync(Enumerable.Range(0, ids.Count), new ParallelOptions { MaxDegreeOfParallelism = 4, CancellationToken = ct }, async (index, token) =>
             {
                 var id = ids[index];
-                var entry = await entries.GetEntryAsync(id, token);
+                var entry = await TargetedReadAsync(id, "all", () => entries.GetEntryAsync(id, token), token);
                 var values = await EntryFieldsAsync(id, token);
                 var path = string.IsNullOrWhiteSpace(entry.FullPath) ? await entries.GetEntryPathAsync(id, token) : entry.FullPath;
                 sources[index] = new Evidence(id, entry.Name, path, null, 1,
@@ -540,6 +565,8 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
                     item = item with { PageCount = detail.PageCount, FullPath = string.IsNullOrWhiteSpace(item.FullPath) ? detail.FullPath : item.FullPath };
                     electronic[index] = detail.FileSizeBytes > 0;
                 }
+                catch (LaserficheException error) when (permissions != null && error.StatusCode is 403 or 404)
+                { throw new PermissionVerificationException(await permissions.VerifyAsync(new(Id: item.EntryId, Kind: "document"), token)); }
                 catch (Exception error) when (!token.IsCancellationRequested && error is LaserficheReports.Domain.Exceptions.LaserficheException or HttpRequestException or OperationCanceledException)
                 { logger.LogWarning("Page count unavailable EntryId={EntryId} ErrorType={ErrorType}", item.EntryId, error.GetType().Name); }
             }
