@@ -4,6 +4,7 @@ using System.Linq;
 using System.Security.Cryptography;
 using System.Security.Principal;
 using System.Text;
+using System.Threading;
 using Laserfiche.RepositoryAccess;
 using Newtonsoft.Json;
 
@@ -11,7 +12,7 @@ using Newtonsoft.Json;
 // The installed directory/credential file must be writable only by the service owner/admins.
 internal static class Program
 {
-    private sealed class Target { public int? Id { get; set; } public string Name { get; set; } public string Path { get; set; } public string Kind { get; set; } }
+    private sealed class Target { public int? Id { get; set; } public string Name { get; set; } public string Path { get; set; } public string Kind { get; set; } public bool OperationForbidden { get; set; } }
     private sealed class Binding
     {
         public string ServerName { get; set; } public string RepositoryName { get; set; } public string ServiceCredentialFile { get; set; }
@@ -28,6 +29,12 @@ internal static class Program
     private static readonly JsonSerializerSettings JsonSettings = new JsonSerializerSettings {
         MissingMemberHandling = MissingMemberHandling.Error, MaxDepth = 12 };
     private static int Main()
+    {
+        // Bounds orphaned/native calls if the owning Web process is forcibly terminated.
+        using (var watchdog = new Timer(_ => Environment.Exit(1), null, TimeSpan.FromSeconds(35), Timeout.InfiniteTimeSpan))
+            return Run();
+    }
+    private static int Run()
     {
         Console.InputEncoding = Encoding.UTF8;
         Console.OutputEncoding = new UTF8Encoding(false);
@@ -136,7 +143,7 @@ internal static class Program
                 if (kind == null || input.Target.Kind != "all" && input.Target.Kind != kind) { kind = null; return "Unknown"; }
                 var rights = Entry.GetEffectiveRights(entry.Id, trustee, service);
                 var requiredRights = EntryRights.Browse | EntryRights.Read;
-                if ((rights & requiredRights) != requiredRights)
+                if ((rights & requiredRights) != requiredRights || input.Target.OperationForbidden)
                     return kind == "folder" ? "FolderAccessDenied" : "DocumentAccessDenied";
                 // Rights alone don't prove success of the requested API read (tags, field/volume ACLs,
                 // filters, concurrent moves). The real read remains mandatory under the user's session.

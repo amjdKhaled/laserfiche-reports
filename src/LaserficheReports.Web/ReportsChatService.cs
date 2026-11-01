@@ -48,7 +48,7 @@ internal sealed class ReportsChatService(
             cancellationToken.ThrowIfCancellationRequested();
             try { await ingestion.IngestMetadataAsync(entryId, cancellationToken); }
             catch (LaserficheException error) when (permissions != null && error.StatusCode is 403 or 404)
-            { throw new PermissionVerificationException(await permissions.VerifyAsync(new(Id: entryId, Kind: "document"), cancellationToken)); }
+            { throw new PermissionVerificationException(await permissions.VerifyAsync(new(Id: entryId, Kind: "document", OperationForbidden: error.StatusCode == 403), cancellationToken)); }
         }
     }
 

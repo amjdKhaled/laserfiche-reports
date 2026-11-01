@@ -18,6 +18,15 @@ public class PermissionSearchTests
         Assert.Equal(0, verifier.Calls); Assert.Empty(result.Sources);
     }
     [Fact]
+    public async Task PlannerCatalogSampleNeverPerformsPrivilegedInspection()
+    {
+        var verifier = new Verifier();
+        var service = new LiveRepositoryReportService(new Entries(denyFields: true), new Searches(sample: true),
+            new Definitions(), new Templates(), NullLogger<LiveRepositoryReportService>.Instance, permissions: verifier);
+        await service.CatalogAsync(default);
+        Assert.Equal(0, verifier.Calls);
+    }
+    [Fact]
     public async Task ExactNamedLookupFallsBackButCombinedCriteriaDoNotProveAbsence()
     {
         var verifier = new Verifier(); var service = Service(verifier);
@@ -46,6 +55,7 @@ public class PermissionSearchTests
         Assert.Contains("visible", result.Answer); Assert.Contains("لا توجد لديك صلاحية على هذه الوثيقة.", result.Answer);
         Assert.DoesNotContain("secret-native-diagnostic", result.Answer);
         Assert.Equal(new[] { 1 }, result.RelatedEntryIds); Assert.Empty(result.Sources);
+        Assert.False(verifier.Target!.OperationForbidden); // A 404 must not become observed denial evidence.
     }
     private static LiveRepositoryReportService Service(Verifier verifier) =>
         new(new Entries(), new Searches(), new Definitions(), new Templates(), NullLogger<LiveRepositoryReportService>.Instance, permissions: verifier);
@@ -56,12 +66,14 @@ public class PermissionSearchTests
         public Task<PermissionDecision> VerifyAsync(PermissionTarget target, CancellationToken ct)
         { Calls++; Target = target; return Task.FromResult(Decision); }
     }
-    private sealed class Entries : ILaserficheEntryService
+    private sealed class Entries(bool denyFields = false) : ILaserficheEntryService
     {
         public Task<LFEntry> GetEntryAsync(int id, CancellationToken ct = default) => id == 1
             ? Task.FromResult(new LFEntry { Id = id, Name = "visible", EntryType = LFEntryType.Document })
             : throw new LaserficheException("secret-native-diagnostic", 404);
-        public Task<IReadOnlyList<LFFieldValue>> GetEntryFieldsAsync(int id, CancellationToken ct = default) => Task.FromResult<IReadOnlyList<LFFieldValue>>([]);
+        public Task<IReadOnlyList<LFFieldValue>> GetEntryFieldsAsync(int id, CancellationToken ct = default) => denyFields
+            ? throw new LaserficheException("sample must not inspect privileged rights", 403)
+            : Task.FromResult<IReadOnlyList<LFFieldValue>>([]);
         public Task<LFTemplate?> GetEntryTemplateAsync(int id, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<string> GetEntryPathAsync(int id, CancellationToken ct = default) => Task.FromResult("\\visible");
         public Task<int> GetRootEntryIdAsync(CancellationToken ct = default) => Task.FromResult(1);
@@ -73,10 +85,11 @@ public class PermissionSearchTests
     { public Task<IReadOnlyDictionary<int, LFFieldDefinition>> GetFieldDefinitionsAsync(CancellationToken ct = default) => Task.FromResult<IReadOnlyDictionary<int, LFFieldDefinition>>(new Dictionary<int, LFFieldDefinition>()); }
     private sealed class Templates : ILaserficheTemplateService
     { public Task<IReadOnlyList<LFTemplateDefinition>> GetTemplateDefinitionsAsync(CancellationToken ct = default) => Task.FromResult<IReadOnlyList<LFTemplateDefinition>>([]); }
-    private sealed class Searches : ILaserficheSearchService
+    private sealed class Searches(bool sample = false) : ILaserficheSearchService
     {
         public Task<PagedResult<LFSearchResult>> QueryAsync(string e, int p, int size, string sort = "creationTime desc", string? field = null, bool readAll = false, CancellationToken cancellationToken = default, IReadOnlyList<string>? projectedFields = null) =>
-            Task.FromResult(new PagedResult<LFSearchResult> { Items = [], TotalCount = 0, IsTotalCountExact = true, PageNumber = p, PageSize = size });
+            Task.FromResult(new PagedResult<LFSearchResult> { Items = sample ? [new() { EntryId = 1, Name = "visible", EntryType = LFEntryType.Document }] : [],
+                TotalCount = sample ? 1 : 0, IsTotalCountExact = true, PageNumber = p, PageSize = size });
         public Task<PagedResult<LFSearchResult>> SimpleSearchAsync(string q, int p, int s, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<PagedResult<LFSearchResult>> AdvancedSearchAsync(string q, int p, int s, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<PagedResult<LFSearchResult>> SearchByTemplateAsync(string q, int p, int s, CancellationToken ct = default) => throw new NotSupportedException();

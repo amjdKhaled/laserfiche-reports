@@ -223,7 +223,7 @@ app.Use(async (context, next) =>
             int.TryParse(context.Request.RouteValues[routeKey]?.ToString(), out var targetId) && targetId > 0)
         {
             var decision = await context.RequestServices.GetRequiredService<LaserficheReports.Web.Permissions.ILaserfichePermissionVerifier>()
-                .VerifyAsync(new(Id: targetId, Kind: routeKey == "folderId" ? "folder" : "document"), context.RequestAborted);
+                .VerifyAsync(new(Id: targetId, Kind: routeKey == "folderId" ? "folder" : "document", OperationForbidden: error.StatusCode == 403), context.RequestAborted);
             context.Response.StatusCode = decision.HttpStatusCode;
             await context.Response.WriteAsJsonAsync(new { error = "entry_verification", message = decision.Message });
             return;
@@ -557,7 +557,7 @@ app.MapPost("/api/ingestion/laserfiche/{entryId:int}", async (
     {
         if (exception.StatusCode is 403 or 404)
         {
-            var decision = await permissions.VerifyAsync(new(Id: entryId, Kind: "document"), cancellationToken);
+            var decision = await permissions.VerifyAsync(new(Id: entryId, Kind: "document", OperationForbidden: exception.StatusCode == 403), cancellationToken);
             return Results.Json(new { error = "entry_verification", message = decision.Message, preservedExistingIndex = true },
                 statusCode: decision.HttpStatusCode);
         }

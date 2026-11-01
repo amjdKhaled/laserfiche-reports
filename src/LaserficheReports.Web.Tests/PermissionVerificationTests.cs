@@ -120,14 +120,17 @@ public class PermissionVerificationTests
         Assert.Equal(12, bridge.Calls);
     }
 
-    [Fact]
-    public async Task ContentRefreshChecksFailedTargetAndNeverContinuesToNextDocument()
+    [Theory]
+    [InlineData(403)]
+    [InlineData(404)]
+    public async Task ContentRefreshChecksFailedTargetAndNeverContinuesToNextDocument(int status)
     {
-        var ingestion = new Ingestion(); var verifier = new Verifier();
+        var ingestion = new Ingestion(status); var verifier = new Verifier();
         var error = await Assert.ThrowsAsync<PermissionVerificationException>(() =>
             ReportsChatService.RefreshContentAsync(ingestion, [5, 6], default, verifier));
         Assert.Equal(PermissionStatus.DocumentAccessDenied, error.Decision.Status);
         Assert.Equal(5, verifier.Target!.Id); Assert.Equal(1, ingestion.Calls);
+        Assert.Equal(status == 403, verifier.Target.OperationForbidden);
     }
 
     private static PermissionVerificationService Service(bool enabled, string apiServer,
@@ -166,10 +169,10 @@ public class PermissionVerificationTests
         public Task<PermissionDecision> VerifyAsync(PermissionTarget target, CancellationToken ct)
         { Target = target; return Task.FromResult(new PermissionDecision(PermissionStatus.DocumentAccessDenied, "document")); }
     }
-    private sealed class Ingestion : ILaserficheDocumentIngestionService
+    private sealed class Ingestion(int status) : ILaserficheDocumentIngestionService
     {
         public int Calls;
         public Task<DocumentIngestionResult> IngestMetadataAsync(int id, CancellationToken ct = default)
-        { Calls++; throw new LaserficheException("hidden", 404); }
+        { Calls++; throw new LaserficheException("hidden", status); }
     }
 }

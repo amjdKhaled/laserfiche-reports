@@ -18,7 +18,7 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
     {
         try { return await read(); }
         catch (LaserficheException error) when (permissions != null && error.StatusCode is 403 or 404)
-        { throw new PermissionVerificationException(await permissions.VerifyAsync(new(Id: id, Kind: kind), ct)); }
+        { throw new PermissionVerificationException(await permissions.VerifyAsync(new(Id: id, Kind: kind, OperationForbidden: error.StatusCode == 403), ct)); }
     }
 
     internal const string Documents = "{LF:Name=\"*\", Type=D}";
@@ -52,9 +52,11 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
     private Task<IReadOnlyDictionary<int, LFFieldDefinition>> SchemaAsync(CancellationToken ct) => schema is null ? LoadSchemaAsync(ct) : Task.FromResult(schema);
     private async Task<IReadOnlyDictionary<int, LFFieldDefinition>> LoadSchemaAsync(CancellationToken ct) => schema = await fields.GetFieldDefinitionsAsync(ct);
 
-    private async Task<IReadOnlyList<LFFieldValue>> EntryFieldsAsync(int id, CancellationToken ct)
+    private async Task<IReadOnlyList<LFFieldValue>> EntryFieldsAsync(int id, CancellationToken ct, bool verifyTarget = true)
     {
-        var values = await TargetedReadAsync(id, "all", () => entries.GetEntryFieldsAsync(id, ct), ct);
+        var values = verifyTarget
+            ? await TargetedReadAsync(id, "all", () => entries.GetEntryFieldsAsync(id, ct), ct)
+            : await entries.GetEntryFieldsAsync(id, ct);
         var definitions = schema ?? (values.Any(f => string.IsNullOrWhiteSpace(f.FieldName)) ? await SchemaAsync(ct) : null);
         return values.Select(value =>
         {
@@ -446,7 +448,7 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
             var values = new IReadOnlyList<LFFieldValue>[Math.Min(8, recent.Items.Count)];
             await Parallel.ForEachAsync(Enumerable.Range(0, values.Length),
                 new ParallelOptions { MaxDegreeOfParallelism = 4, CancellationToken = sampleBudget.Token },
-                async (index, token) => values[index] = await EntryFieldsAsync(recent.Items[index].EntryId, token));
+                async (index, token) => values[index] = await EntryFieldsAsync(recent.Items[index].EntryId, token, verifyTarget: false));
             var known = definitions.Values.Select(f => f.Name).ToHashSet(StringComparer.Ordinal);
             samples = values.SelectMany(v => v).Where(v => known.Contains(v.FieldName) && !string.IsNullOrWhiteSpace(v.Value))
                 .GroupBy(v => v.FieldName, StringComparer.Ordinal).ToDictionary(g => g.Key,
@@ -566,7 +568,7 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
                     electronic[index] = detail.FileSizeBytes > 0;
                 }
                 catch (LaserficheException error) when (permissions != null && error.StatusCode is 403 or 404)
-                { throw new PermissionVerificationException(await permissions.VerifyAsync(new(Id: item.EntryId, Kind: "document"), token)); }
+                { throw new PermissionVerificationException(await permissions.VerifyAsync(new(Id: item.EntryId, Kind: "document", OperationForbidden: error.StatusCode == 403), token)); }
                 catch (Exception error) when (!token.IsCancellationRequested && error is LaserficheReports.Domain.Exceptions.LaserficheException or HttpRequestException or OperationCanceledException)
                 { logger.LogWarning("Page count unavailable EntryId={EntryId} ErrorType={ErrorType}", item.EntryId, error.GetType().Name); }
             }

@@ -21,7 +21,7 @@ Windows service; the existing Reports Windows service/scheduled task owns its li
 
 Only a minimal reply (protocol, nonce, repository, principal scope, status and entry kind) is accepted.
 Replies for another request/user/repository, unexpected fields, unknown statuses and oversized output
-are rejected. The parent kills child processes on cancellation/timeout/output overflow, drains both
+are rejected. The parent kills child processes on cancellation/timeout/output overflow; an independent 35-second child watchdog bounds orphaned operations if the parent is forcibly terminated. The parent drains both
 streams, and bounds concurrent checks to four and admission to twelve checks per minute per identity
 bucket (fixed 256-bucket table; collisions may conservatively throttle another identity).
 
@@ -85,7 +85,8 @@ credential file. Changing the Windows service account itself is an administrator
 | --- | --- |
 | Normal API read succeeds | Existing user-visible result; no privileged data is used |
 | Service resolves one authorized document/folder, approved SID lacks Browse or Read in `Entry.GetEffectiveRights(id, trustee, service)` | Exact requested Arabic document/folder denial |
-| Rights are granted, but the original API operation failed/returned nothing | Unknown: tags, filters, field or volume rights, concurrent changes and endpoint behavior are not inferred |
+| Confirmed authorized target/trustee and a real API 403 for the requested operation (backend-only evidence) | Typed denial for that operation, even when entry-level rights alone would allow it |
+| Rights are granted, but the original API operation returned 404/nothing | Unknown: tags, filters, field or volume rights, concurrent changes and endpoint behavior are not inferred |
 | Completed exact **ID** search has zero hits, explicit full-visibility acceptance AND runtime ReadAccess, BypassBrowse, BypassFilters, SeeAllUserAreas privileges, known requested kind, approved ID and SID | Typed NotFound |
 | Missing visibility attestation/privileges, failed SDK call, licensing or dependency error, service cannot inspect security | Neutral Unknown or VerificationUnavailable; never NotFound |
 | Hidden name duplicates, no approved disclosure, unresolved trustee, opaque SSO token | Neutral Unknown |
@@ -101,7 +102,7 @@ unless all security tags, classification restrictions, filters, user areas and o
 have been tested, including hidden sentinel entries. The runtime privilege check is additional evidence,
 not a claim that those flags alone bypass every overlay. An SDK exception never proves absence. Name/path
 absence remains Unknown; NotFound is intentionally limited to exact IDs with strong scope evidence.
-Security-tag-specific denial is not separately inferred if effective rights grant Browse+Read. BrowseOnly
+Security-tag-specific denial is not separately inferred if effective rights grant Browse+Read and there is no observed API 403. BrowseOnly
 and Accessible exist in the internal decision model; the bridge does not claim them from a failed API read.
 Ambiguity among visible results uses the existing user-only clarification. Hidden ambiguity stays neutral.
 
@@ -155,7 +156,7 @@ The bridge's admin scripts and this document are published alongside it.
 * Native installer: create the EXE/MSI through `build/publish.ps1 -Version <new-version>`, then install it.
   Existing Reports service starts the published Web executable; Visual Studio / `dotnet run` are unnecessary.
 * Transfer package / source installation: use the existing build-package/install-package or install.ps1
-  workflow. The bridge uses the same owning process and stops with it; no extra port or service is registered.
+  workflow. The bridge uses the same owning process and is terminated on cancellation (with a child watchdog for forced parent shutdown); no extra port or service is registered.
 * Verify deployment: `test-deployment.ps1 -WebPath <installed-web-directory>`. `/health` includes a bridge
   **deployment** check, which does not assert native SDK connectivity/licensing or real LFDS correctness.
 * Configure identity/disclosure only after acceptance. Restart Reports if needed to load the runtime config.
@@ -203,8 +204,8 @@ Base commit: `1f63ff98b2aa14c65f78a694f5d779426c04d002` on
 * Web + test projects: compiled against .NET SDK 8.0.427. Existing ASP.NET analyzer/platform warnings
   were observed; no compiler errors remained.
 * net48 bridge: restored the actual pinned NuGet package and compiled successfully, zero warnings/errors.
-* Web suite: 224 cases, 223 passed, one explicitly skipped PostgreSQL/pgvector database integration case.
-* Infrastructure suite: 308 cases, all passed. Total: **531 passed, one skipped**, including 19 new cases.
+* Web suite: 226 cases, 225 passed, one explicitly skipped PostgreSQL/pgvector database integration case.
+* Infrastructure suite: 308 cases, all passed. Total: **533 passed, one skipped**, including 21 new cases.
 * VSTest itself failed inside this sandbox's process/diagnostics environment. Both suites were subsequently
   discovered/executed by the real xUnit framework in an in-process temporary harness with parallelism
   disabled. The harness was not added to production source. These are not native Windows test results.
@@ -219,3 +220,19 @@ admission/budgets and the process adapter; `tools/permission-bridge/` holds SDK-
 and `Program` connect safe outcomes to the existing search/content/HTTP flows. The Web project and
 Windows build/install scripts package the component; CI asserts the shipped payload. Tests are in
 `PermissionVerificationTests`, `PermissionPrincipalTests` and `PermissionSearchTests`.
+
+### CI observation and unchanged baseline failure
+
+The first PR run (`Verify Reports`, run 124) passed clean Windows SDK payload build, the normal
+Windows .NET test invocation, PowerShell syntax parsing, source identity checks, transfer packaging,
+and the PostgreSQL hybrid integration job. These checks do not establish live LFDS/SDK behavior.
+EXE/MSI and UI jobs were still running when this observation was recorded; use the PR checks for
+current status, including the follow-up commit's rerun.
+
+The Python job ran 264 tests and failed
+`LivePlannerTests.test_calendar_period_can_combine_with_tag_and_numeric_conditions_for_one_count`
+(`2 != 3` conditions; calendar filter removed during catalog grounding). This was reproduced in a
+separate archive of the unchanged base commit `1f63ff98b2aa14c65f78a694f5d779426c04d002`.
+No `tools/reports-graph` file differs from that base. The planner issue is pre-existing and left
+outside this permission change, as requested to preserve unrelated logic. Overall CI is therefore
+not claimed green. Fix/triage that baseline failure separately before release.

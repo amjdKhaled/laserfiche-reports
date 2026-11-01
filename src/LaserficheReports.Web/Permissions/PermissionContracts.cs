@@ -34,7 +34,8 @@ internal sealed record PermissionDecision(PermissionStatus Status, string? Entry
     internal ChatResult ToChatResult() => new(Message, []);
 }
 
-internal sealed record PermissionTarget(int? Id = null, string? Name = null, string? Path = null, string Kind = "all")
+// OperationForbidden is evidence supplied ONLY by a backend catch of a real API 403.
+internal sealed record PermissionTarget(int? Id = null, string? Name = null, string? Path = null, string Kind = "all", bool OperationForbidden = false)
 {
     internal bool IsValid => (Id.HasValue ? 1 : 0) + (Name != null ? 1 : 0) + (Path != null ? 1 : 0) == 1 &&
         Id is not <= 0 && Kind is "document" or "folder" or "all" &&

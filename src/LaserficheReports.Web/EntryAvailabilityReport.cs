@@ -32,7 +32,7 @@ internal static class EntryAvailabilityReport
             {
                 if (permissions != null)
                 {
-                    var decision = await permissions.VerifyAsync(new(Id: id), token);
+                    var decision = await permissions.VerifyAsync(new(Id: id, OperationForbidden: true), token);
                     rows[index] = $"| {id} | — | {decision.Message} | — |";
                     return;
                 }
