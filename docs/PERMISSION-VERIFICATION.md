@@ -221,7 +221,7 @@ and `Program` connect safe outcomes to the existing search/content/HTTP flows. T
 Windows build/install scripts package the component; CI asserts the shipped payload. Tests are in
 `PermissionVerificationTests`, `PermissionPrincipalTests` and `PermissionSearchTests`.
 
-### CI observation and unchanged baseline failure
+### CI observation and resolved baseline failure
 
 The first PR run (`Verify Reports`, run 124) passed clean Windows SDK payload build, the normal
 Windows .NET test invocation, PowerShell syntax parsing, source identity checks, transfer packaging,
@@ -233,6 +233,10 @@ The Python job ran 264 tests and failed
 `LivePlannerTests.test_calendar_period_can_combine_with_tag_and_numeric_conditions_for_one_count`
 (`2 != 3` conditions; calendar filter removed during catalog grounding). This was reproduced in a
 separate archive of the unchanged base commit `1f63ff98b2aa14c65f78a694f5d779426c04d002`.
-No `tools/reports-graph` file differs from that base. The planner issue is pre-existing and left
-outside this permission change, as requested to preserve unrelated logic. Overall CI is therefore
-not claimed green. Fix/triage that baseline failure separately before release.
+The follow-up requested from that failure log fixes `scope_grounding.without_unasked_fields` to
+retain an explicit structured period when its year is mentioned outside grounded catalog names.
+It checks numeric boundaries and normalized Arabic/Persian digits, preserving the existing removal
+of invented conditions. Regression tests cover combined date/tag/numeric filters, folder scope,
+unasked years, years inside tag names, and substrings of unrelated numbers. The original failing
+planner test now passes. The full Python suite runs 267 cases: **266 passed, one skipped**.
+Current overall CI status must still be checked on the PR; live SDK acceptance requirements remain.
