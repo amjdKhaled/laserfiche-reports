@@ -111,7 +111,7 @@ test('chat saves report time/scope and displays download for a valid empty resul
   window.document.getElementById('ask-form').dispatchEvent(new window.Event('submit', { cancelable: true }));
   await new Promise(resolve => setTimeout(resolve, 20));
   assert.deepEqual(downloadFormats(window), ['Word', 'Excel', 'PDF', 'HTML']);
-  const saved = JSON.parse(window.localStorage.getItem('laserfiche-reports-chat-v2:https%3A%2F%2Flocalhost:repoa:tester'));
+  const saved = JSON.parse(window.localStorage.getItem('laserfiche-reports-chat-v3:https%3A%2F%2Flocalhost:repoa:tester:'));
   assert.equal(saved[0].messages[1].generatedAt, message.generatedAt);
   assert.equal(saved[0].messages[1].scope.detail, message.scope.detail);
   await window.happyDOM.abort();
@@ -179,8 +179,11 @@ test('repository histories and scan checkpoints never migrate across repositorie
   window.localStorage.setItem('laserfiche-reports-chat-v1:tester',JSON.stringify([{id:'legacy',title:'unscoped data',messages:[]} ]));
   window.localStorage.setItem('laserfiche-reports-chat-v2:https%3A%2F%2Flocalhost:repoa:tester',JSON.stringify([{id:'a',title:'Repository A confidential',messages:[]} ]));
   window.eval(readFileSync(root+'app.js','utf8')); await new Promise(r=>setTimeout(r,20));
-  assert(window.document.getElementById('history').textContent.includes('Repository A confidential'));
+  assert(!window.document.getElementById('history').textContent.includes('Repository A confidential')); // old login data cannot be restored
   assert(!window.document.getElementById('history').textContent.includes('unscoped'));
+  window.document.getElementById('question').value = 'new question';
+  window.eval("openSession('tester','RepoA','https://localhost','new-generation')");
+  assert(!window.document.getElementById('history').textContent.includes('Repository A confidential'));
   window.eval("openSession('tester','RepoB','https://localhost','new-generation')");
   assert.equal(window.document.getElementById('history').textContent,'');
   assert.equal(window.document.getElementById('active-repository').textContent,'RepoB');
@@ -201,7 +204,7 @@ test('late report from another repository is not saved or displayed in the new s
   resolveChat({ok:true,status:200,json:async()=>({answer:'OLD PRIVATE RESULT',sources:[],generatedAt:message.generatedAt})});
   await new Promise(r=>setTimeout(r,20));
   assert(!window.document.getElementById('messages').textContent.includes('OLD PRIVATE RESULT'));
-  assert.equal(window.localStorage.getItem('laserfiche-reports-chat-v2:https%3A%2F%2Flocalhost:repob:tester'),null);
+  assert.equal(window.localStorage.getItem('laserfiche-reports-chat-v3:https%3A%2F%2Flocalhost:repob:tester:'),null);
   await window.happyDOM.abort();
 });
 
@@ -299,7 +302,7 @@ test('chat keeps the existing table and shows references without a source list',
   assert.equal(table.querySelectorAll('tbody td')[1].textContent,'12');
   assert.equal(table.querySelector('.report-reference').textContent,'[8]');
   assert(table.textContent.includes('[8]'));
-  const history=JSON.parse(window.localStorage.getItem('laserfiche-reports-chat-v2:https%3A%2F%2Flocalhost:repoa:tester'));
+  const history=JSON.parse(window.localStorage.getItem('laserfiche-reports-chat-v3:https%3A%2F%2Flocalhost:repoa:tester:'));
   assert.equal(history[0].messages.at(-1).sources.length,8);
   await window.happyDOM.abort();
 });
@@ -314,7 +317,7 @@ test('path columns disappear from old reports without shifting cells or altering
 });
 test('chat deletion is scoped, persisted and a late answer cannot restore it',async()=>{
   const window=setup();window.document.write(readFileSync(root+'index.html','utf8').replace(/<script[^>]*>[\s\S]*?<\/script>/g,''));
-  const key='laserfiche-reports-chat-v2:https%3A%2F%2Flocalhost:repoa:tester',other='laserfiche-reports-chat-v2:https%3A%2F%2Flocalhost:repob:tester';
+  const key='laserfiche-reports-chat-v3:https%3A%2F%2Flocalhost:repoa:tester:',other='laserfiche-reports-chat-v3:https%3A%2F%2Flocalhost:repob:tester:';
   const saved=[{id:'one',title:'المحادثة الأولى',messages:[{role:'user',text:'سؤال قديم'}]},{id:'two',title:'المحادثة الثانية',messages:[]}];
   window.localStorage.setItem(key,JSON.stringify(saved));window.localStorage.setItem(other,JSON.stringify(saved));let complete;
   window.fetch=async url=>url==='/api/reports/chat'?new Promise(resolve=>{complete=resolve;}):({ok:true,status:200,json:async()=>({authenticated:true,username:'tester',repository:'RepoA',server:'https://localhost'})});
