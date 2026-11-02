@@ -108,6 +108,11 @@ public sealed class RepositoryReadSessionTests
         public Task LoadAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
         public void Remove(string key) => values.Remove(key);
         public void Set(string key, byte[] value) => values[key] = value;
-        public bool TryGetValue(string key, out byte[] value) => values.TryGetValue(key, out value!);
+        public bool TryGetValue(string key, out byte[] value)
+        {
+            if (values.TryGetValue(key, out var bytes)) { value = bytes; return true; }
+            value = Array.Empty<byte>();
+            return false;
+        }
     }
 }
