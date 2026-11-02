@@ -1,6 +1,7 @@
 using LaserficheReports.Application.Interfaces;
 using LaserficheReports.Domain.Common;
 using Microsoft.Extensions.Logging;
+using Microsoft.AspNetCore.Http;
 
 namespace LaserficheReports.Infrastructure.Credentials;
 
@@ -30,16 +31,19 @@ internal sealed class SessionAwareCredentialProvider : ICredentialProvider
 {
     private readonly ISessionCredentialStore _sessionStore;
     private readonly ICredentialProvider     _diskChain;
+    private readonly IHttpContextAccessor _contexts;
     private readonly ILogger<SessionAwareCredentialProvider> _logger;
 
     /// <summary>Initialises the provider with the session store and disk chain fallback.</summary>
     public SessionAwareCredentialProvider(
         ISessionCredentialStore sessionStore,
         ICredentialProvider     diskChain,
+        IHttpContextAccessor contexts,
         ILogger<SessionAwareCredentialProvider> logger)
     {
         _sessionStore = sessionStore;
         _diskChain    = diskChain;
+        _contexts     = contexts;
         _logger       = logger;
     }
 
@@ -52,7 +56,18 @@ internal sealed class SessionAwareCredentialProvider : ICredentialProvider
         string repositoryKey,
         CancellationToken cancellationToken = default)
     {
+        var session = _contexts.HttpContext?.Session;
+        var method = session?.GetString("AuthenticationScopeMethod");
+        // A configured machine account must never replace a failed or expired
+        // interactive login. In particular LFDS sessions have no password.
+        if (method == "LFDS")
+            throw new UnauthorizedAccessException("The LFDS session cannot use machine credentials. Sign in again.");
         var sessionCred = await _sessionStore.TryGetAsync(cancellationToken).ConfigureAwait(false);
+        if (method == "Reports" && sessionCred is null)
+            throw new UnauthorizedAccessException("The selected Reports account credentials are unavailable. Sign in again.");
+        if (session is not null && method != "Reports" &&
+            !string.IsNullOrWhiteSpace(session.GetString("ReportsGeneration")))
+            throw new UnauthorizedAccessException("The interactive Reports identity is not verified. Sign in again.");
 
         if (sessionCred is not null)
         {
