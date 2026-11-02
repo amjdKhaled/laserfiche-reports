@@ -49,10 +49,13 @@ internal static class ReportSessionEndpoints
     internal static async Task<IResult> StatusAsync(ISessionCredentialStore sessions, IRepositoryContext repositories,
         IOptionsMonitor<LaserficheOptions> options, HttpContext http, CancellationToken ct)
     {
-        var username = await sessions.TryGetSignedInUserAsync(ct);
         var repository = await repositories.GetActiveRepositoryAsync(ct);
-        return Results.Ok(new { authenticated = username is not null, username,
-            repository = repository.RepositoryId, server = repository.ServerUrl, generation = http.Session.GetString("ReportsGeneration"),
+        // Report the same identity readiness that guards every repository read.
+        // A stale stored name alone must never make the UI look signed in.
+        var bound = await RepositoryReadSession.IsAuthorizedAsync(http, repository, sessions, ct);
+        var username = bound ? await sessions.TryGetSignedInUserAsync(ct) : null;
+        return Results.Ok(new { authenticated = bound, username,
+            repository = repository.RepositoryId, server = repository.ServerUrl, generation = bound ? http.Session.GetString("ReportsGeneration") : null,
             sso = ReportSso.Enabled(options.CurrentValue) });
     }
 

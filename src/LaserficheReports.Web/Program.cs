@@ -197,6 +197,24 @@ app.Use(async (context, next) =>
             await context.Response.WriteAsJsonAsync(new { error = "session_scope_changed", message = "تغيّر المستودع في جلسة أخرى. أعد تسجيل الدخول إلى المستودع المطلوب." });
             return;
         }
+        // Never permit a report or document read to fall through to the
+        // machine's disk/service credentials. Validate the completed interactive
+        // session before an endpoint can reach the Repository API.
+        if (RepositoryReadSession.IsRepositoryReadPath(context.Request.Path))
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            if (!await RepositoryReadSession.IsAuthorizedAsync(context, repository,
+                context.RequestServices.GetRequiredService<ISessionCredentialStore>(), context.RequestAborted))
+            {
+                context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                await context.Response.WriteAsJsonAsync(new
+                {
+                    error = "session_identity_unverified",
+                    message = "تعذر التحقق من هوية حساب Laserfiche الحالي. سجّل الدخول مرة أخرى."
+                });
+                return;
+            }
+        }
         if (!mutatesSession)
         {
             gate.Release();

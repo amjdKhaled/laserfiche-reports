@@ -9,6 +9,7 @@ using LaserficheReports.Infrastructure.OAuth;
 using LaserficheReports.Infrastructure.Options;
 using LaserficheReports.Infrastructure.Repository;
 using LaserficheReports.Infrastructure.Services;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
@@ -148,6 +149,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ICredentialProvider>(sp => new SessionAwareCredentialProvider(
             sp.GetRequiredService<ISessionCredentialStore>(),
             sp.GetRequiredService<CredentialChainProvider>(),
+            sp.GetRequiredService<IHttpContextAccessor>(),
             sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<SessionAwareCredentialProvider>>()));
     }
 
