@@ -148,6 +148,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ICredentialProvider>(sp => new SessionAwareCredentialProvider(
             sp.GetRequiredService<ISessionCredentialStore>(),
             sp.GetRequiredService<CredentialChainProvider>(),
+            sp.GetRequiredService<IHttpContextAccessor>(),
             sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<SessionAwareCredentialProvider>>()));
     }
 
