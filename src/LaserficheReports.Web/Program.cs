@@ -200,17 +200,20 @@ app.Use(async (context, next) =>
         // Never permit a report or document read to fall through to the
         // machine's disk/service credentials. Validate the completed interactive
         // session before an endpoint can reach the Repository API.
-        if (RepositoryReadSession.IsRepositoryReadPath(context.Request.Path) &&
-            !await RepositoryReadSession.IsAuthorizedAsync(context, repository,
-                context.RequestServices.GetRequiredService<ISessionCredentialStore>(), context.RequestAborted))
+        if (RepositoryReadSession.IsRepositoryReadPath(context.Request.Path))
         {
-            context.Response.StatusCode = StatusCodes.Status401Unauthorized;
-            await context.Response.WriteAsJsonAsync(new
+            context.Response.Headers.CacheControl = "no-store";
+            if (!await RepositoryReadSession.IsAuthorizedAsync(context, repository,
+                context.RequestServices.GetRequiredService<ISessionCredentialStore>(), context.RequestAborted))
             {
-                error = "session_identity_unverified",
-                message = "تعذر التحقق من هوية حساب Laserfiche الحالي. سجّل الدخول مرة أخرى."
-            });
-            return;
+                context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                await context.Response.WriteAsJsonAsync(new
+                {
+                    error = "session_identity_unverified",
+                    message = "تعذر التحقق من هوية حساب Laserfiche الحالي. سجّل الدخول مرة أخرى."
+                });
+                return;
+            }
         }
         if (!mutatesSession)
         {
