@@ -9,6 +9,7 @@ using LaserficheReports.Infrastructure.OAuth;
 using LaserficheReports.Infrastructure.Options;
 using LaserficheReports.Infrastructure.Repository;
 using LaserficheReports.Infrastructure.Services;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
