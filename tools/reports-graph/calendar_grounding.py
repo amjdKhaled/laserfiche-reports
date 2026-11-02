@@ -23,7 +23,7 @@ _P = r"(?<!\w)(?:[وفبل]{0,2})"   # attached و/ف/ب/ل, e.g. «بالامس
 _END = r"(?!\w)"
 # Ordered: a longer phrase wins over the shorter phrase it contains.
 _PHRASES = [
-    ("day", -2, _P + r"(?:اول (?:من )?(?:امس|امبارح)|قبل امس)" + _END),
+    ("day", -2, _P + r"(?:اول (?:من )?(?:امس|امبارح)|قبل امس|امس الاول)" + _END),
     ("day", -1, _P + r"(?:(?:ال)?(?:امس|بارحه)|امبارح)" + _END),
     ("day", 0, _P + r"(?:اليوم|النهارده|انهارده)" + _END),
     ("week", -1, _P + r"(?:الاسبوع (?:الماضي|السابق|الفائت)|الاسبوع اللي فات)" + _END),
@@ -32,6 +32,14 @@ _PHRASES = [
     ("month", 0, _P + r"(?:(?:هذا|هاذا) الشهر|الشهر (?:الحالي|الجاري))" + _END),
     ("year", -1, _P + r"(?:(?:السنه|العام) (?:الماضي|الماضيه|السابق|السابقه|الفائت|الفائته)|السنه اللي فاتت)" + _END),
     ("year", 0, _P + r"(?:(?:هذه|هذي|هاذي) السنه|(?:هذا|هاذا) العام|(?:السنه|العام) (?:الحالي|الحاليه|الجاري|الجاريه))" + _END),
+    # Saudi/Gulf fixed calendar phrases; vague and rolling periods remain with the planner.
+    ("day", -1, _P + r"البارح" + _END),
+    ("week", 0, _P + r"(?:هالاسبوع|الاسبوع (?:هذا|ذا))" + _END),
+    ("week", -1, _P + r"الاسبوع اللي راح" + _END),
+    ("month", 0, _P + r"(?:هالشهر|الشهر (?:هذا|ذا))" + _END),
+    ("month", -1, _P + r"الشهر اللي راح" + _END),
+    ("year", 0, _P + r"(?:هالسنه|السنه (?:هذي|ذي))" + _END),
+    ("year", -1, _P + r"السنه اللي راحت" + _END),
     # English (2026-10-29). «past week» is left out: it may mean the last seven days.
     ("day", -2, r"(?<!\w)the day before yesterday" + _END),
     ("day", -1, r"(?<!\w)yesterday" + _END),
@@ -190,8 +198,8 @@ def ground_report_filters(filters, question, today, date_fields=("created", "mod
 
 
 # Word stems after attached و/ف/ب/ل and «ال». Masculine «معدل» is left out: it also means "rate".
-_CREATED_WORDS = re.compile(r"(?<!\w)[وفبل]{0,2}(?:ال)?(?:انش[اءئؤ]|منشا|اضيف|اضاف|اتضاف|اتعمل)|(?<!\w)(?:created|added|uploaded|creation)(?!\w)")
-_MODIFIED_WORDS = re.compile(r"(?<!\w)[وفبل]{0,2}(?:ال)?(?:معدله|تعديل|اتعدل|عدلت|عدلها)|(?<!\w)(?:modified|updated|changed|edited|modification)(?!\w)")
+_CREATED_WORDS = re.compile(r"(?<!\w)[وفبل]{0,2}(?:ال)?(?:انش[اءئؤ]|منشا|اضيف|اضاف|اتضاف|اتعمل|انعمل|انضاف|اتنشا|انشئت)|(?<!\w)(?:created|added|uploaded|creation)(?!\w)")
+_MODIFIED_WORDS = re.compile(r"(?<!\w)[وفبل]{0,2}(?:ال)?(?:معدله|تعديل|اتعدل|عدلت|عدلها|تعدلت|انعدل|اتحدث|تحديث|تغيرت)|(?<!\w)(?:modified|updated|changed|edited|modification)(?!\w)")
 
 
 def period_field(question):
@@ -216,6 +224,10 @@ def add_missing_period(filters, question, today, date_fields=("created", "modifi
     whole repository on 2026-10-26), or the filters unchanged in every less certain case."""
     period, field = relative_period(question), period_field(question)
     if period is None or field is None or not today or not (filters is None or isinstance(filters, dict)):
+        return filters
+    text = normalize_arabic(question)
+    if any(re.search(r"(?<!\w)(?:ما|مو|مب|موب|مش|لم|لن|لا|ليس|ليست|بدون|غير|not|never)\s+(?:تم\s+)?$", text[:m.start()])
+           for pattern in (_CREATED_WORDS, _MODIFIED_WORDS) for m in pattern.finditer(text)):
         return filters
     if _date_mentions(filters, set(date_fields)):
         return filters

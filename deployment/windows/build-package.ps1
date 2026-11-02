@@ -14,6 +14,7 @@ Remove-Item "$package\web\appsettings.Local.json" -ErrorAction SilentlyContinue
 Remove-Item "$package\web\config" -Recurse -ErrorAction SilentlyContinue
 Copy-Item "$source\tools\reports-graph\*.py" "$package\graph"
 Copy-Item "$source\tools\reports-graph\requirements.txt" "$package\graph"
+Copy-Item "$source\tools\reports-graph\glossary.json" "$package\graph"
 Copy-Item "$source\deployment\supervise.py" $package
 Copy-Item "$PSScriptRoot\install-package.ps1" "$package\install.ps1"
 Copy-Item "$PSScriptRoot\install-package.cmd" "$package\Install.cmd"

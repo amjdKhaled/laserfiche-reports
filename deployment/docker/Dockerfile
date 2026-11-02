@@ -17,6 +17,7 @@ COPY tools/reports-graph/requirements.txt /app/graph/requirements.txt
 RUN python3 -m venv /opt/graph && /opt/graph/bin/pip install --no-cache-dir -r /app/graph/requirements.txt "Pillow>=12.3,<13"
 COPY --from=build /out /app/web
 COPY tools/reports-graph/*.py /app/graph/
+COPY tools/reports-graph/glossary.json /app/graph/glossary.json
 COPY deployment/supervise.py /app/supervise.py
 COPY deployment/docker/convert_image.py /app/convert_image.py
 RUN mkdir -p /app/logs /app/web/config /models /home/app/.aspnet/DataProtection-Keys \

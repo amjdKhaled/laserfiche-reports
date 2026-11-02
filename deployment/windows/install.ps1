@@ -26,6 +26,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Web publish failed; nothing was registered for
 & "$PSScriptRoot\test-permission-bridge.ps1" -WebPath "$InstallPath\web"
 Copy-Item "$source\tools\reports-graph\*.py" "$InstallPath\graph" -Force
 Copy-Item "$source\tools\reports-graph\requirements.txt" "$InstallPath\graph" -Force
+Copy-Item "$source\tools\reports-graph\glossary.json" "$InstallPath\graph" -Force
 Copy-Item "$source\deployment\supervise.py" $InstallPath -Force
 & py "-$PythonVersion" -m venv "$InstallPath\python"
 if ($LASTEXITCODE -ne 0) { throw "Python $PythonVersion x64 virtual environment creation failed." }
