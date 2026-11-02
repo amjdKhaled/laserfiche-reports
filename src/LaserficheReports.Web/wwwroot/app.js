@@ -72,9 +72,17 @@ function openSession(username, repository, server, generation) {
   $('statuses').replaceChildren();
   $('ingest-result').textContent = '';
   const identity = [sessionServer, sessionRepository, username].map(value => encodeURIComponent(value.toLowerCase())).join(':');
+  // Saved answers and scan inventories contain document names. Never restore
+  // results from a previous login after the account's rights may have changed.
+  // Keep conversation history across refreshes in the SAME server session only.
+  const sessionIdentity = encodeURIComponent(sessionGeneration);
+  try {
+    localStorage.removeItem(`laserfiche-reports-chat-v2:${identity}`);
+    localStorage.removeItem(`laserfiche-reports-scan-v2:${identity}`);
+  } catch {}
   historySaved = true;
-  storeKey = `laserfiche-reports-chat-v2:${identity}`;
-  scanKey = `laserfiche-reports-scan-v2:${identity}`;
+  storeKey = `laserfiche-reports-chat-v3:${identity}:${sessionIdentity}`;
+  scanKey = `laserfiche-reports-scan-v3:${identity}:${sessionIdentity}`;
   try { chats = JSON.parse(localStorage.getItem(storeKey) || '[]'); }
   catch { chats = []; }
   try { scan = JSON.parse(localStorage.getItem(scanKey) || 'null'); }
@@ -158,6 +166,10 @@ $('logout').onclick = async () => {
     await api('/api/session/logout', { method: 'POST' });
     sessionEpoch++;
     document.dispatchEvent(new CustomEvent('reports-session-cleared'));
+    // Remove results and scan state acquired during the signed-out session.
+    // A later login must retrieve live rights instead of reusing cached answers.
+    try { localStorage.removeItem(storeKey); localStorage.removeItem(scanKey); } catch {}
+    storeKey = ''; scanKey = '';
     sessionRepository = ''; sessionGeneration = ''; sessionServer = '';
     chats = []; active = null; scan = null;
     $('password').value = '';
