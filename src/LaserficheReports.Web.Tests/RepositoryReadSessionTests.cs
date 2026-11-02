@@ -30,7 +30,7 @@ public sealed class RepositoryReadSessionTests
         store.DisplayUser = "other";
         Assert.False(await RepositoryReadSession.IsAuthorizedAsync(http, Repository, store, default));
         store.DisplayUser = "amjd";
-        store.Credentials = null;
+        store.Credential = null;
         Assert.False(await RepositoryReadSession.IsAuthorizedAsync(http, Repository, store, default));
     }
 
@@ -49,7 +49,7 @@ public sealed class RepositoryReadSessionTests
         http.Session.SetString("AuthenticationScopeMethod", "LFDS");
         http.Session.SetString("LfdsUser", "LFDS");
         store.DisplayUser = "LFDS";
-        store.Credentials = null;
+        store.Credential = null;
         Assert.False(await RepositoryReadSession.IsAuthorizedAsync(http, Repository, store, default));
         http.Session.SetString("AuthenticatedLaserficheUser", "amjd");
         http.Session.SetString("LfdsUser", "amjd");
@@ -80,21 +80,21 @@ public sealed class RepositoryReadSessionTests
         http.Session.SetString("AuthenticationScopeSubject", "identity-1");
         http.Session.SetString("ActiveRepositoryId", "A");
         http.Session.SetString("ReportsGeneration", "generation-1");
-        return (http, new Credentials { DisplayUser = "amjd", Credentials = new("amjd", "fixture") });
+        return (http, new Credentials { DisplayUser = "amjd", Credential = new("amjd", "fixture") });
     }
 
     private sealed class Credentials : ISessionCredentialStore
     {
         public string? DisplayUser;
-        public LaserficheCredential? Credentials;
+        public LaserficheCredential? Credential;
         public Task StoreAsync(string username, string password, CancellationToken ct = default)
-        { Credentials = new(username, password); DisplayUser = username; return Task.CompletedTask; }
+        { Credential = new(username, password); DisplayUser = username; return Task.CompletedTask; }
         public Task<LaserficheCredential?> TryGetAsync(CancellationToken ct = default) =>
-            Task.FromResult(Credentials);
+            Task.FromResult(Credential);
         public Task<string?> TryGetSignedInUserAsync(CancellationToken ct = default) =>
             Task.FromResult(DisplayUser);
         public Task ClearAsync(CancellationToken ct = default)
-        { DisplayUser = null; Credentials = null; return Task.CompletedTask; }
+        { DisplayUser = null; Credential = null; return Task.CompletedTask; }
     }
 
     private sealed class MemorySession : ISession
