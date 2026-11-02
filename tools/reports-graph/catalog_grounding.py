@@ -13,18 +13,18 @@ from scope_grounding import without_unasked_fields
 
 _LEAD = r"(?<!\w)[وفبل]{0,2}"
 # «كرت/بطاقة الفهرسة» and «كرت الأرشفة/الأرشيف» are what users call a template (2026-10-29).
-_TEMPLATE_CUE = (_LEAD + r"(?:ال)?(?:قالب|قوالب|تمبلت|تمبليت|تيمبلت|تمبلتس|تيمبلتس|تمبلات|تمبليتات|template|templates|"
-                 r"(?:كرت|كارت|بطاقه|كروت|كروته|بطاقات)\s+(?:ال)?(?:فهرس(?:ه)?|ارشفه|ارشيف)|"
-                 r"(?:index|archive|archiving|metadata)\s+cards?)(?:ها|ه|هم)?(?!\w)")
+_TEMPLATE_CUE = (_LEAD + r"(?:ال)?(?:قالب(?:\s+(?:ال)?فهرسه)?|قوالب|تيمبليت|تيمبليتات|تيكبليت|تمبلييت|تمبلت|تمبليت|تيمبلت|تمبلتس|تيمبلتس|تمبلات|تمبليتات|template|templates|"
+                 r"(?:كرت|كارت|بطاقه|كروت|كروته|بطاقات)\s+(?:ال)?(?:فهرس(?:ه|ت)?|ارشفه|ارشيف)|"
+                 r"(?:index|archive|archiving|metadata)\s+cards?|metadata\s+templates?)(?:ها|ه|هم)?(?!\w)")
 _TAG_CUE = _LEAD + r"(?:ال)?(?:وسم|وسوم|اوسمه|تاج|تاغ|tag|tags|tagged|labeled|labelled)(?:ها|ه|هم)?(?!\w)"
 # Negation words, Egyptian and English: «مالهاش قالب»، «لا تحتوي على كرت فهرسة»، «without a template».
-_NEGATORS = (r"(?:مش|مو|ما|ليس|ليست|لا|بدون|من\s+غير|غير|بلا|مالهاش|ملهاش|مالهوش|ملهوش|مفيهاش|ماعندهاش|معندهاش|ماعليهاش|"
+_NEGATORS = (r"(?:مش|مو|مب|موب|ما|ليس|ليست|لا|بدون|من\s+غير|غير|بلا|مالهاش|ملهاش|مالهوش|ملهوش|مفيهاش|ماعندهاش|معندهاش|ماعليهاش|"
              r"معليهاش|without|no|not|do\s+not|does\s+not|don'?t|doesn'?t|isn'?t|lacking|missing)")
 # Words between the cue and the name: «قالبها القرار»، «قالب اسمه "القرار"»، «قالبها مش القرار»، «template named X».
-_LINK = (r"\s*(?:(?:(?:اسمه|اسمها|بتاعه|بتاعها|بتاعتها|بتاعته|هو|هي|يساوي|يكون|تكون|is|named|called|equals|"
-         r"مش|ليس|ليست|غير|not|isn'?t|with|as|the)(?!\w)|[=:])\s*)*[\"'«“]?\s*")
+_LINK = (r"\s*(?:(?:(?:اسمه|اسمها|حقها|حقه|حقتها|حق|بتاعه|بتاعها|بتاعتها|بتاعته|هو|هي|يساوي|يكون|تكون|is|named|called|equals|"
+         r"مش|مو|مب|موب|ليس|ليست|غير|not|isn'?t|with|as|the)(?!\w)|[=:])\s*)*[\"'«“]?\s*")
 _NEGATION = _NEGATORS + r"\s+(?:\S+\s+){0,2}$"
-_LINK_NEGATION = re.compile(r"(?<!\w)(?:مش|ليس|ليست|غير|not|isn'?t)(?!\w)")
+_LINK_NEGATION = re.compile(r"(?<!\w)(?:مش|مو|مب|موب|ليس|ليست|غير|not|isn'?t)(?!\w)")
 
 
 def _name_pattern(name):
@@ -71,7 +71,11 @@ def template_mentions(question, catalog):
     """[(template name, negated)] named after a template cue word, or before it in English."""
     found = {}
     names = catalog.get("templates") or []
-    for name, negated in _cues(question, _TEMPLATE_CUE, names) + _named_before(question, r"templates?", names):
+    cued = _cues(question, _TEMPLATE_CUE, names)
+    if not any(name for name, _ in cued):
+        simple_cue = _TEMPLATE_CUE.replace(r"قالب(?:\s+(?:ال)?فهرسه)?", "قالب")
+        cued = _cues(question, simple_cue, names)
+    for name, negated in cued + _named_before(question, r"templates?", names):
         if name:
             found.setdefault(name, negated)
     return list(found.items())

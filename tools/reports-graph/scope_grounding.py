@@ -46,6 +46,11 @@ def folder_scope(question, templates=()):
     """(folder name, include subfolders) for exactly one «مجلد X» in the question, otherwise None."""
     text = _without_template_names(normalize_arabic(question), templates)
     matches = list(_FOLDER.finditer(text)) or list(_FOLDER_AFTER.finditer(text))
+    if not matches:
+        # Explicit current archive location is independent of the old archived-field concept.
+        archive = re.search(r"(?<!\w)(?:داخل|بداخل|جوا|جوه|في)\s+(مركز الوثائق والمحفوظات)(?!\w)", text)
+        if archive and not re.search(r"نقل|ارشف|تاريخ|متي|متى|(?<!\w)(?:مو|مب|موب|مش|ليس|ليست|ما|لا|غير|بدون)(?!\w)", text[:archive.start()]):
+            return _original_spelling(question, archive.group(1)), bool(re.search(_SUBFOLDERS, text[archive.end():]))
     if len(matches) != 1:
         return None
     name = matches[0].group("name").strip()

@@ -105,7 +105,7 @@ try {
     Invoke-Checked $python @('-m','PyInstaller','--noconfirm','--clean','--onedir','--name','LaserficheReports.Planner',
         '--distpath',"$stage\frozen",'--workpath',"$stage\pyinstaller-work",'--specpath',$stage,
         '--paths',"$source\tools\reports-graph",'--collect-all','langgraph','--collect-all','langchain_core',
-        '--collect-all','langchain_ollama','--copy-metadata','langchain-core','--copy-metadata','langchain-ollama',
+        '--add-data',"$source\tools\reports-graph\glossary.json;.",'--collect-all','langchain_ollama','--copy-metadata','langchain-core','--copy-metadata','langchain-ollama',
         "$source\tools\reports-graph\server.py")
     Copy-Item "$stage\frozen\LaserficheReports.Planner\*" "$payload\planner" -Recurse -Force
     # These can be produced by a developer publish. Exclude them before harvesting.
