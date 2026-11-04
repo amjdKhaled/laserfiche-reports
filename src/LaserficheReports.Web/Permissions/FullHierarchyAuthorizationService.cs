@@ -31,11 +31,18 @@ internal sealed class FullHierarchyAuthorizationService(IConfiguration configura
             throw new PermissionVerificationException(new(PermissionStatus.AuthenticationRequired));
         var options = configuration.GetSection("PermissionVerification").Get<PermissionVerificationOptions>() ?? new();
         var bindings = options.Repositories.Where(b => string.Equals(b.Key, repository.RepositoryId, StringComparison.OrdinalIgnoreCase)).ToArray();
-        if (bindings.Length != 1) throw new PermissionVerificationException(unavailable);
+        if (bindings.Length != 1)
+        {
+            logger.LogWarning("FullHierarchy unavailable Reason=repository_binding_missing_or_duplicate TraceId={TraceId}", context.TraceIdentifier);
+            throw new PermissionVerificationException(unavailable);
+        }
         var binding = bindings[0].Value;
         if (!string.Equals(binding.ApiServerUrl.TrimEnd('/'), repository.ServerUrl.TrimEnd('/'), StringComparison.OrdinalIgnoreCase) ||
             string.IsNullOrWhiteSpace(binding.ServerName) || string.IsNullOrWhiteSpace(binding.RepositoryName))
+        {
+            logger.LogWarning("FullHierarchy unavailable Reason=repository_binding_invalid TraceId={TraceId}", context.TraceIdentifier);
             throw new PermissionVerificationException(unavailable);
+        }
         using var budget = CancellationTokenSource.CreateLinkedTokenSource(ct);
         budget.CancelAfter(TimeSpan.FromSeconds(Math.Clamp(options.TimeoutSeconds, 2, 30)));
         var acquired = false;
