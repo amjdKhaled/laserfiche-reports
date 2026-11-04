@@ -35,6 +35,7 @@ function downloadFormats(window) {
   return [...openDetails(window).querySelectorAll('.details-formats button')].map(node => node.textContent);
 }
 const message = {
+  authorizationReceipt: 'a'.repeat(64),
   text: '# تقرير\n\n| البند | النتيجة | المرجع |\n| --- | --- | --- |\n| الحالة | تحت الإجراء | [1] |',
   generatedAt: '2026-10-03T18:00:00Z', scope: { detail: 'فُحصت 73 وثيقة؛ التقرير جزئي.' },
   sources: [{ entryId: 618, documentName: 'وثيقة أصلية', path: '\\قسم\\وثيقة', pageNumber: null,
@@ -237,6 +238,7 @@ test('answers carry one report download that holds every table, not a second one
   let exported, format;
   window.ReportsDownload.download=(result,question,extension)=>{exported=result;format=extension;};
   details.querySelector('button[aria-label="تحميل التقرير بصيغة HTML"]').click();
+  await new Promise(r=>setTimeout(r,10));
   assert.equal(format, 'html');
   assert(exported.text.includes('تحت الإجراء'));assert(exported.text.includes('مختلف'));assert.equal(exported.scope.detail,message.scope.detail);
   await window.happyDOM.abort();
@@ -259,7 +261,7 @@ test('multiple reports have separate rows, downloads and Web Client selections',
       const ids=JSON.parse(options.body).entryIds;requested.push(ids);
       return{urls:['https://desktop-k1svi53/laserfiche/Browse.aspx?db=RepoA#?search='+ids[0]],documentCount:1};
     }
-    return{answer:'تقريران',reports,sources:reports.flatMap(r=>r.sources),generatedAt:message.generatedAt};
+    return{authorizationReceipt:'a'.repeat(64),answer:'تقريران',reports,sources:reports.flatMap(r=>r.sources),generatedAt:message.generatedAt};
   }});
   window.ReportsDownload.download=report=>downloaded.push(report);
   window.eval(readFileSync(root+'app.js','utf8'));await new Promise(r=>setTimeout(r,20));
@@ -503,4 +505,26 @@ test('recycle bin reads current documents with session headers and clears data o
   await new Promise(r=>setTimeout(r,20));
   assert.equal(window.document.getElementById('recycle-result').textContent,'');
   await window.happyDOM.abort();
+});
+
+test('report export revalidates on the server and blocks a revoked report', async()=>{
+  const window=setup();
+  window.document.write(readFileSync(root+'index.html','utf8').replace(/<script[^>]*>[\s\S]*?<\/script>/g,''));
+  let rechecks=0,downloads=0;
+  window.fetch=async url=>{
+    if(url==='/api/reports/revalidate') { rechecks++; return {ok:false,status:403,json:async()=>({message:'الصلاحية لم تعد متاحة'})}; }
+    return {ok:true,status:200,json:async()=>url==='/api/session/status'
+      ? {authenticated:true,username:'tester',repository:'RepoA',server:'https://localhost'}
+      : {...message,answer:message.text}};
+  };
+  window.ReportsDownload.download=()=>downloads++;
+  window.eval(readFileSync(root+'app.js','utf8'));await new Promise(r=>setTimeout(r,20));
+  window.document.getElementById('question').value='سؤال';
+  window.document.getElementById('ask-form').dispatchEvent(new window.Event('submit',{cancelable:true}));
+  await new Promise(r=>setTimeout(r,20));
+  const details=openDetails(window);
+  details.querySelector('button[aria-label="تحميل التقرير بصيغة HTML"]').click();
+  await new Promise(r=>setTimeout(r,10));
+  assert.equal(rechecks,1);assert.equal(downloads,0);
+  assert(details.textContent.includes('الصلاحية لم تعد متاحة'));
 });

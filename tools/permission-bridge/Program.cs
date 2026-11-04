@@ -12,7 +12,7 @@ using Newtonsoft.Json;
 // The installed directory/credential file must be writable only by the service owner/admins.
 internal static class Program
 {
-    private sealed class Target { public int? Id { get; set; } public string Name { get; set; } public string Path { get; set; } public string Kind { get; set; } public bool OperationForbidden { get; set; } }
+    private sealed class Target { public int? Id { get; set; } public string Name { get; set; } public string Path { get; set; } public string Kind { get; set; } public bool OperationForbidden { get; set; } public bool RequireFullAncestorAccess { get; set; } }
     private sealed class Binding
     {
         public string ServerName { get; set; } public string RepositoryName { get; set; } public string ServiceCredentialFile { get; set; }
@@ -44,9 +44,10 @@ internal static class Program
             var input = JsonConvert.DeserializeObject<Input>(text, JsonSettings);
             Validate(input);
             string kind;
-            var status = Verify(input, out kind);
+            int[] chain;
+            var status = Verify(input, out kind, out chain);
             Console.Write(JsonConvert.SerializeObject(new { protocol = "permission-v1", requestId = input.RequestId,
-                repositoryId = input.RepositoryId, principalScope = input.PrincipalScope, status, entryKind = kind }));
+                repositoryId = input.RepositoryId, principalScope = input.PrincipalScope, status, entryKind = kind, verifiedChain = chain }));
             return 0;
         }
         catch (Exception)
@@ -80,9 +81,9 @@ internal static class Program
     private static bool Safe(string s, int max) => !string.IsNullOrWhiteSpace(s) && s.Length <= max &&
         !s.Any(char.IsControl) && s.IndexOfAny(new[] { '"', '{', '}', '[', ']', '*', '?' }) < 0;
 
-    private static string Verify(Input input, out string kind)
+    private static string Verify(Input input, out string kind, out int[] chain)
     {
-        kind = null;
+        kind = null; chain = null;
         var registration = new RepositoryRegistration(input.Binding.ServerName, input.Binding.RepositoryName);
         string sid = input.TrusteeSid;
         if (sid == null)
@@ -95,8 +96,8 @@ internal static class Program
                 sid = user.UserIdentity.ToString();
             }
         }
-        if (!input.Binding.AllowedTrusteeSids.Contains(sid, StringComparer.Ordinal)) return "Unknown";
-        if (input.Target.Id.HasValue && !input.Binding.AllowedEntryIds.Contains(input.Target.Id.Value)) return "Unknown";
+        if (!input.Target.RequireFullAncestorAccess && !input.Binding.AllowedTrusteeSids.Contains(sid, StringComparer.Ordinal)) return "Unknown";
+        if (!input.Target.RequireFullAncestorAccess && input.Target.Id.HasValue && !input.Binding.AllowedEntryIds.Contains(input.Target.Id.Value)) return "Unknown";
         using (var service = new Session())
         {
             service.IsSecure = true;
@@ -109,6 +110,28 @@ internal static class Program
             }
             var trustee = new AccountReference(new SecurityIdentifier(sid), service);
             if (!trustee.IsUser || trustee.ToSecurityIdentifier().ToString() != sid) return "Unknown";
+            if (input.Target.RequireFullAncestorAccess)
+            {
+                if (!input.Target.Id.HasValue) return "VerificationUnavailable";
+                using (var root = Entry.GetEntryInfo("\\", service))
+                {
+                    var result = HierarchyAuthorization.Evaluate(input.Target.Id.Value, root.Id, id =>
+                    {
+                        using (var item = Entry.GetEntryInfo(id, service))
+                        {
+                            var effective = Entry.GetEffectiveRights(id, trustee, service);
+                            var required = EntryRights.Browse | EntryRights.Read;
+                            return new HierarchyNode(item.Id, item.ParentId,
+                                item.EntryType == EntryType.Folder || item.EntryType == EntryType.RecordSeries,
+                                (effective & required) == required);
+                        }
+                    });
+                    if (result.Status == "Accessible") chain = result.Chain;
+                    if (result.Status == "DocumentAccessDenied") kind = "document";
+                    if (result.Status == "FolderAccessDenied") kind = "folder";
+                    return result.Status;
+                }
+            }
             // Resolve only one exact target. Never enumerate hidden rows or expose their names/counts.
             EntryInfo entry = null;
             try

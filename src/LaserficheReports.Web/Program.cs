@@ -75,6 +75,18 @@ builder.Services.AddScoped<LaserficheReports.Web.Permissions.ILaserficheSdkBridg
 builder.Services.AddScoped<LaserficheReports.Web.Permissions.ILaserfichePermissionVerifier,
     LaserficheReports.Web.Permissions.PermissionVerificationService>();
 builder.Services.AddScoped<ReportsChatService>();
+builder.Services.AddScoped<LaserficheReports.Web.Permissions.IFullHierarchyAuthorizationService,
+    LaserficheReports.Web.Permissions.FullHierarchyAuthorizationService>();
+builder.Services.AddScoped<LaserficheReports.Web.Permissions.ProtectedReadTracker>();
+builder.Services.AddScoped<IContentAuthorizationScope, LaserficheReports.Web.Permissions.ContentAuthorizationScope>();
+builder.Services.AddScoped<IFullHierarchyPolicy>(sp =>
+    sp.GetRequiredService<LaserficheReports.Web.Permissions.IFullHierarchyAuthorizationService>());
+builder.Services.AddTransient<LaserficheReports.Web.Permissions.HierarchyAuthorizationHandler>();
+builder.Services.AddHttpClient("LaserficheAuthenticated")
+    .AddHttpMessageHandler<LaserficheReports.Web.Permissions.HierarchyAuthorizationHandler>();
+
+builder.Services.AddSingleton<LaserficheReports.Web.Permissions.AuthorizationReceiptCache>();
+builder.Services.AddScoped<LaserficheReports.Web.Permissions.ReportAuthorizationReceipts>();
 builder.Services.AddScoped<LiveRepositoryReportService>();
 builder.Services.AddScoped<AuditTrailSource>();
 builder.Services.AddScoped<RecycleBinSource>();
@@ -393,13 +405,21 @@ app.MapGet("/api/reports/repository/folders/{folderId:int}/children", async (
     });
 });
 
+app.MapPost("/api/reports/revalidate", async (LaserficheReports.Web.Permissions.ReportRevalidationRequest request,
+    LaserficheReports.Web.Permissions.ReportAuthorizationReceipts receipts, CancellationToken ct) =>
+    await receipts.ValidateAsync(request.AuthorizationReceipt, ct)
+        ? Results.Ok(new { authorized = true })
+        : Results.Json(new { error = "report_authorization_expired", message = "تعذر التحقق من صلاحية التقرير المحفوظ. أعد تنفيذ السؤال." }, statusCode: 403));
+
 app.MapPost("/api/reports/chat", async (ChatQuestion request, ReportsChatService chat,
-    ISessionCredentialStore sessions, CancellationToken cancellationToken) =>
+    ISessionCredentialStore sessions, LaserficheReports.Web.Permissions.ReportAuthorizationReceipts receipts, CancellationToken cancellationToken) =>
 {
     if (await sessions.TryGetSignedInUserAsync(cancellationToken) is null) return Results.Unauthorized();
     try
     {
-        return Results.Ok(await chat.AskAsync(request.Question, cancellationToken, request.History));
+        var result = await chat.AskAsync(request.Question, cancellationToken,
+            request.History?.Where(turn => turn is null || turn.Role == "user" || turn.Kind == "clarification").ToArray());
+        return Results.Ok(result with { AuthorizationReceipt = await receipts.IssueAsync(result, cancellationToken) });
     }
     catch (UnauthorizedAccessException)
     {

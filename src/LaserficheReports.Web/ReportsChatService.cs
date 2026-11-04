@@ -13,6 +13,7 @@ internal sealed record Evidence(int EntryId, string DocumentName, string Path, i
     float Similarity, string Text, string TextSource);
 internal sealed record ChatResult(string Answer, IReadOnlyList<Evidence> Sources, AnswerScope? Scope = null)
 {
+    public string? AuthorizationReceipt { get; init; }
     public DateTimeOffset GeneratedAt { get; init; } = DateTimeOffset.UtcNow;
     public ReportQuality? Quality { get; init; }
     public int[] RelatedEntryIds { get; init; } = [];
@@ -38,7 +39,7 @@ internal sealed class ReportsChatService(
     IHttpClientFactory clients,
     LiveRepositoryReportService liveReports,
     QuestionRouter router, ILaserficheSearchService searches, ILogger<ReportsChatService> logger,
-    ILaserficheDocumentIngestionService? ingestion = null, ILaserfichePermissionVerifier? permissions = null)
+    ILaserficheDocumentIngestionService? ingestion = null, ILaserfichePermissionVerifier? permissions = null, ILaserficheDocumentService? documents = null, IContentAuthorizationScope? contentScope = null)
 {
     internal static async Task RefreshContentAsync(ILaserficheDocumentIngestionService ingestion,
         IEnumerable<int> entryIds, CancellationToken cancellationToken, ILaserfichePermissionVerifier? permissions = null)
@@ -243,7 +244,11 @@ internal sealed class ReportsChatService(
         await using (var connection = new NpgsqlConnection(OcrConnectionString()))
         {
             await connection.OpenAsync(cancellationToken);
-            await using var command = new NpgsqlCommand(rankedContent ? HybridRetrieval.Sql : DirectOcrSql, connection);
+            var retrievalSql = rankedContent ? HybridRetrieval.Sql : DirectOcrSql;
+            if (contentScope != null) retrievalSql = retrievalSql.Replace("and metadata ->> 'record_type' = 'document-chunk'",
+                "and metadata ->> 'record_type' = 'document-chunk' and metadata ->> 'authorization_scope' = @authorizationScope");
+            await using var command = new NpgsqlCommand(retrievalSql, connection);
+            if (contentScope != null) command.Parameters.AddWithValue("authorizationScope", contentScope.Scope);
             command.CommandTimeout = Math.Clamp(configuration.GetValue<int?>("Reports:SearchTimeoutSeconds") ?? 20, 5, 30);
             command.Parameters.Add(new NpgsqlParameter("embedding", NpgsqlTypes.NpgsqlDbType.Text)
                 { Value = (object?)literal ?? DBNull.Value });
@@ -284,6 +289,14 @@ internal sealed class ReportsChatService(
             {
                 var current = await entries.GetEntryAsync(candidateIds[index], token);
                 await entries.GetEntryFieldsAsync(candidateIds[index], token);
+                // Cached OCR never substitutes for current content permission. Verify every source page.
+                if (documents != null)
+                    foreach (var page in candidates.Where(c => c.EntryId == candidateIds[index]).Select(c => c.PageNumber).Distinct())
+                    {
+                        using var content = page is > 0
+                            ? await documents.GetPageImageAsync(candidateIds[index], page.Value, token)
+                            : await documents.StreamEdocAsync(candidateIds[index], token);
+                    }
                 currentEntries[index] = current;
             }
             catch (LaserficheException error) when (error.StatusCode is 403 or 404) { }

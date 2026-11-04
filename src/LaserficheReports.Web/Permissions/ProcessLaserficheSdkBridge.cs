@@ -50,7 +50,7 @@ internal sealed class ProcessLaserficheSdkBridge : ILaserficheSdkBridge
     }
 
     private sealed record Reply(string Protocol, string RequestId, string RepositoryId, string PrincipalScope,
-        string Status, string? EntryKind);
+        string Status, string? EntryKind, int[]? VerifiedChain);
     internal static PermissionDecision Parse(string json, string requestId, string repositoryId, string scope)
     {
         try
@@ -65,7 +65,10 @@ internal sealed class ProcessLaserficheSdkBridge : ILaserficheSdkBridge
                 status == PermissionStatus.FolderAccessDenied && reply.EntryKind != "folder" ||
                 status == PermissionStatus.NotFound && reply.EntryKind == null)
                 return new(PermissionStatus.VerificationUnavailable);
-            return new(status, reply.EntryKind);
+            if (reply.VerifiedChain != null && (reply.VerifiedChain.Length is < 1 or > 256 ||
+                reply.VerifiedChain.Any(id => id <= 0) || reply.VerifiedChain.Distinct().Count() != reply.VerifiedChain.Length ||
+                status != PermissionStatus.Accessible)) return new(PermissionStatus.VerificationUnavailable);
+            return new(status, reply.EntryKind, reply.VerifiedChain);
         }
         catch (JsonException) { return new(PermissionStatus.VerificationUnavailable); }
     }

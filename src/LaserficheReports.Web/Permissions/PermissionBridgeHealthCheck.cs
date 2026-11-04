@@ -8,8 +8,8 @@ internal sealed class PermissionBridgeHealthCheck(IConfiguration configuration) 
 {
     public Task<HealthCheckResult> CheckHealthAsync(HealthCheckContext context, CancellationToken cancellationToken = default)
     {
-        if (!configuration.GetValue<bool>("PermissionVerification:Enabled"))
-            return Task.FromResult(HealthCheckResult.Healthy("Permission verification disabled."));
+        if (!configuration.GetSection("PermissionVerification:Repositories").GetChildren().Any())
+            return Task.FromResult(HealthCheckResult.Unhealthy("Full hierarchy authorization requires a repository binding. Protected reads fail closed."));
         var installed = OperatingSystem.IsWindows() && Environment.Is64BitProcess && File.Exists(ProcessLaserficheSdkBridge.ExecutablePath);
         return Task.FromResult(installed
             ? HealthCheckResult.Healthy("Bridge payload present; live SDK connectivity, licensing and trustee acceptance are not established by this deployment check.")

@@ -94,6 +94,9 @@ function openSession(username, repository, server, generation) {
   catch { chats = []; }
   try { scan = JSON.parse(localStorage.getItem(scanKey) || 'null'); }
   catch { scan = null; }
+  chats.forEach(chat => chat.messages.forEach(message => { if (message.role === 'assistant') message.needsRevalidation = true; }));
+  // Inventories cannot be restored without re-reading their complete dependencies.
+  scan = null;
   active = null;
   $('login-layer').classList.add('hidden');
   document.dispatchEvent(new CustomEvent('reports-session-opened'));
@@ -259,7 +262,7 @@ function renderHistory() {
   listed.forEach(chat => {
     const button = el('button', chat.id === active ? 'selected' : '');
     button.append(sideIcon('clock'), el('span', 'side-label', chat.title), el('span', 'side-meta', whenAsked(chat.at)));
-    button.onclick = () => { active = chat.id; renderHistory(); renderMessages(); showTab('chat'); };
+    button.onclick = () => { active = chat.id; chat.messages.forEach(message => { if (message.role === 'assistant' && message.kind !== 'error' && !message.pending) message.needsRevalidation = true; }); renderHistory(); renderMessages(); showTab('chat'); };
     button.classList.add('history-open');
     button.title = chat.title;
     const row = el('div', chat.id === active ? 'history-row selected' : 'history-row');
@@ -409,6 +412,19 @@ function renderMessages() {
     container.append(welcome);
   } else {
     chat.messages.forEach((original, messageIndex) => {
+      if (original.needsRevalidation && original.kind !== 'error' && !original.pending) {
+        container.append(el('div', 'bubble', 'جاري التحقق من صلاحية التقرير المحفوظ...'));
+        if (!original.revalidating) {
+          original.revalidating = true;
+          revalidateReport(original, chat.messages[messageIndex - 1]?.text).then(() => {
+            original.needsRevalidation = false;
+          }).catch(() => {
+            Object.assign(original, { text: 'تعذر التحقق من صلاحية التقرير المحفوظ. أعد تنفيذ السؤال.',
+              sources: [], relatedEntryIds: [], reports: [], scope: null, kind: 'error', needsRevalidation: false });
+          }).finally(() => { delete original.revalidating; if (active === chat.id) renderMessages(); });
+        }
+        return;
+      }
       const parts = original.role === 'assistant' && original.reports?.length
         ? original.reports.map(report => ({...original, ...report, text: report.answer, reports: null})) : [original];
       parts.forEach((message, partIndex) => {
@@ -547,6 +563,19 @@ function showDetails(key) {
   });
   fillDetails(answers.get(key));
 }
+
+async function revalidateReport(message, question) {
+  if (message.scope?.mode === 'live-recycle-bin') {
+    // Deleted entries follow the native current-user Recycle Bin policy, not live ParentIds.
+    const fresh = await deletedDocumentsReport(question);
+    if (fresh.text !== message.text) throw new Error('تغيّرت نتائج سلة المحذوفات. أعد تنفيذ السؤال.');
+    return;
+  }
+  if (!message.authorizationReceipt) throw new Error('انتهت صلاحية التقرير المحفوظ. أعد تنفيذ السؤال.');
+  await api('/api/reports/revalidate', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ authorizationReceipt: message.authorizationReceipt }) });
+}
+
 function fillDetails(view) {
   const { message, count } = view;
   const drawer = $('details');
@@ -612,8 +641,8 @@ function fillDetails(view) {
   }
   if (rows) {
     const downloads = section(count === null ? 'تحميل التقرير كاملًا' : `تحميل قائمة ${rowsNoun(message.scope.mode)}`, 'down');
-    const download = format => {
-      try { ReportsDownload.download(message, view.reportQuestion, format); say(''); }
+    const download = async format => {
+      try { await revalidateReport(message, view.reportQuestion); ReportsDownload.download(message, view.reportQuestion, format); say(''); }
       catch (error) { say(error.message || 'تعذر التحميل'); }
     };
     const formats = el('div', 'details-formats');
@@ -625,7 +654,7 @@ function fillDetails(view) {
       formats.append(item);
     }
     const links = el('div', 'details-links');
-    const copyReport = button('', 'نسخ التقرير'); copyReport.onclick = copy(message.text, 'تم نسخ التقرير');
+    const copyReport = button('', 'نسخ التقرير'); copyReport.onclick = async () => { try { await revalidateReport(message, view.reportQuestion); await copy(message.text, 'تم نسخ التقرير')(); } catch (error) { say(error.message); } };
     // Printing uses the same designed document as PDF, with every table row (2026-10-28).
     const print = button('', 'طباعة'); print.onclick = () => download('pdf');
     const markdown = button('', 'Markdown'); markdown.onclick = () => download('md');
@@ -822,7 +851,7 @@ async function deletedDocumentsReport(question) {
       `${cell(formatRecycleDate(row.deletedAt) || row.deleted)} | ${cell(row.deletedBy)} | ${cell(formatRecycleDate(parseRecycleDate(row.created)) || row.created)} |`).join('\n')
       : '| — | لا توجد عناصر محذوفة مطابقة | — | — | — | — | — |');
   return { role: 'assistant', kind: 'answer', repositoryId: sessionRepository, generatedAt: new Date().toISOString(),
-    scope: { detail }, text: `# ${title}\n\n${detail}\n\n${table}` };
+    scope: { mode: 'live-recycle-bin', detail }, text: `# ${title}\n\n${detail}\n\n${table}` };
 }
 // While a question runs, the send button is a stop button. Stopping cancels the request, and the server
 // stops the search with it (the chat endpoint passes the request's cancellation token on).
@@ -863,7 +892,7 @@ $('ask-form').onsubmit = async event => {
     }
     const result = await api('/api/reports/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: stop.signal, body: JSON.stringify({ question, history: conversationHistory(chat.messages.slice(0, -2)) }) });
     if (epoch !== sessionEpoch || !chats.includes(chat)) return;
-    chat.messages[chat.messages.length - 1] = { role: 'assistant', kind: result.isClarification ? 'clarification' : 'answer', clarificationQuestion: result.clarificationQuestion, repositoryId: sessionRepository, relatedEntryIds: result.relatedEntryIds, reports: result.reports, text: result.answer, sources: result.sources, scope: result.scope, generatedAt: result.generatedAt, quality: result.quality };
+    chat.messages[chat.messages.length - 1] = { role: 'assistant', kind: result.isClarification ? 'clarification' : 'answer', clarificationQuestion: result.clarificationQuestion, repositoryId: sessionRepository, authorizationReceipt: result.authorizationReceipt, relatedEntryIds: result.relatedEntryIds, reports: result.reports, text: result.answer, sources: result.sources, scope: result.scope, generatedAt: result.generatedAt, quality: result.quality };
   } catch (error) {
     // A stopped question is an error turn, so the next question does not take it as context.
     if (stop.signal.aborted) {

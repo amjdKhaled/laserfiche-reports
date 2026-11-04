@@ -101,7 +101,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ILaserficheTemplateService, LaserficheTemplateService>();
         services.AddScoped<ILaserficheTagDefinitionService, LaserficheTagDefinitionService>();
         services.AddScoped<LaserficheAnalyticsService>();
-        services.AddScoped<ILaserficheAnalyticsService, CachedLaserficheAnalyticsService>();
+        services.AddScoped<ILaserficheAnalyticsService>(sp => sp.GetRequiredService<LaserficheAnalyticsService>());
 
         // ── Health checks ──────────────────────────────────────────────────────
         services.AddHealthChecks()

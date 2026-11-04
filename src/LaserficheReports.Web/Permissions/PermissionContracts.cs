@@ -5,17 +5,17 @@ namespace LaserficheReports.Web.Permissions;
 internal enum PermissionStatus
 {
     Accessible, DocumentAccessDenied, FolderAccessDenied, BrowseOnly, NotFound,
-    Ambiguous, Unknown, AuthenticationRequired, VerificationUnavailable
+    Ambiguous, Unknown, AuthenticationRequired, VerificationUnavailable, AncestorAccessDenied
 }
 
 // No names, paths, ACLs, counts or service identities leave the bridge.
-internal sealed record PermissionDecision(PermissionStatus Status, string? EntryKind = null)
+internal sealed record PermissionDecision(PermissionStatus Status, string? EntryKind = null, int[]? VerifiedChain = null)
 {
     internal const string Uncertain = "تعذر التحقق من وجود العنصر أو صلاحيات الوصول إليه حاليًا.";
     internal int HttpStatusCode => Status switch
     {
         PermissionStatus.Accessible => 200,
-        PermissionStatus.DocumentAccessDenied or PermissionStatus.FolderAccessDenied or PermissionStatus.BrowseOnly => 403,
+        PermissionStatus.DocumentAccessDenied or PermissionStatus.FolderAccessDenied or PermissionStatus.BrowseOnly or PermissionStatus.AncestorAccessDenied => 403,
         PermissionStatus.NotFound => 404,
         PermissionStatus.AuthenticationRequired => 401,
         PermissionStatus.Ambiguous => 409,
@@ -24,6 +24,7 @@ internal sealed record PermissionDecision(PermissionStatus Status, string? Entry
     internal string Message => Status switch
     {
         PermissionStatus.DocumentAccessDenied => "لا توجد لديك صلاحية على هذه الوثيقة.",
+        PermissionStatus.AncestorAccessDenied => "ليس لديك صلاحية لقراءة هذا العنصر.",
         PermissionStatus.FolderAccessDenied => "لا توجد لديك صلاحية على هذا المجلد.",
         PermissionStatus.BrowseOnly => "يمكنك رؤية العنصر، لكن لا توجد لديك صلاحية لقراءة محتواه.",
         PermissionStatus.NotFound when EntryKind == "document" => "الوثيقة المطلوبة غير موجودة.",
@@ -35,7 +36,7 @@ internal sealed record PermissionDecision(PermissionStatus Status, string? Entry
 }
 
 // OperationForbidden is evidence supplied ONLY by a backend catch of a real API 403.
-internal sealed record PermissionTarget(int? Id = null, string? Name = null, string? Path = null, string Kind = "all", bool OperationForbidden = false)
+internal sealed record PermissionTarget(int? Id = null, string? Name = null, string? Path = null, string Kind = "all", bool OperationForbidden = false, bool RequireFullAncestorAccess = false)
 {
     internal bool IsValid => (Id.HasValue ? 1 : 0) + (Name != null ? 1 : 0) + (Path != null ? 1 : 0) == 1 &&
         Id is not <= 0 && Kind is "document" or "folder" or "all" &&

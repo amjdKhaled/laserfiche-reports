@@ -18,7 +18,8 @@ internal sealed class AuthenticatedLaserfichePrincipalResolver(IHttpContextAcces
             await sessions.TryGetSignedInUserAsync(ct) == null) return null;
         var repository = await repositories.GetActiveRepositoryAsync(ct);
         var token = await auth.GetTokenAsync(repository, ct); // Session-scoped server-issued token; never a browser JWT.
-        var scope = Hash(repository.Key + "\n" + session.Id + "\n" + generation + "\n" + subject);
+        var repositoryScope = repository.ServerUrl.TrimEnd('/').ToUpperInvariant() + "\n" + repository.RepositoryId.ToUpperInvariant() + "\n" + repository.Key;
+        var scope = Hash(repositoryScope + "\n" + session.Id + "\n" + generation + "\n" + subject);
         if (session.GetString("AuthenticationScopeMethod") == "LFDS")
         {
             var identity = ReadSubject(token);
@@ -26,11 +27,11 @@ internal sealed class AuthenticatedLaserfichePrincipalResolver(IHttpContextAcces
             var matches = binding.Subjects.Where(m => m.Issuer == identity.Value.Issuer &&
                 m.Subject == identity.Value.Subject && !string.IsNullOrWhiteSpace(m.TrusteeSid)).ToArray();
             if (matches.Length != 1) return null;
-            return new(scope, Hash(repository.Key + "\n" + matches[0].TrusteeSid), null, matches[0].TrusteeSid);
+            return new(scope, Hash(repositoryScope + "\n" + matches[0].TrusteeSid), null, matches[0].TrusteeSid);
         }
         if (session.GetString("AuthenticationScopeMethod") != "Reports") return null;
         var credential = await sessions.TryGetAsync(ct);
-        return credential == null ? null : new(scope, Hash(repository.Key + "\n" + credential.Username.ToUpperInvariant()), credential, null);
+        return credential == null ? null : new(scope, Hash(repositoryScope + "\n" + credential.Username.ToUpperInvariant()), credential, null);
     }
 
     // This decoder is NOT a general JWT authenticator. Its only caller supplies a token
