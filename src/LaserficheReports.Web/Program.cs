@@ -427,7 +427,17 @@ app.MapPost("/api/reports/chat", async (ChatQuestion request, ReportsChatService
     }
     catch (LaserficheReports.Web.Permissions.PermissionVerificationException verification)
     {
-        return Results.Ok(verification.Decision.ToChatResult());
+        // Never present an unavailable authorization service as a successful
+        // answer. The UI must retain the actual error instead of caching a
+        // receipt-less report and later saying the saved report expired.
+        app.Logger.LogWarning("Report authorization blocked Status={Status} TraceId={TraceId}",
+            verification.Decision.Status, System.Diagnostics.Activity.Current?.TraceId.ToString() ?? "local");
+        return Results.Json(new
+        {
+            error = "report_authorization_" + verification.Decision.Status.ToString().ToLowerInvariant(),
+            stage = "authorization",
+            message = verification.Decision.Message
+        }, statusCode: verification.Decision.HttpStatusCode);
     }
     catch (AuditTrailException exception)
     {
