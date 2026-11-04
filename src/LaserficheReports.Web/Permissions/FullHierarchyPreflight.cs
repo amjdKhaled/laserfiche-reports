@@ -1,4 +1,4 @@
-using LaserficheReports.Domain.Common;
+using LaserficheReports.Application.DTOs;
 
 namespace LaserficheReports.Web.Permissions;
 
