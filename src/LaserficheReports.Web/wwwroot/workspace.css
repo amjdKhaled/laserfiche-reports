@@ -295,3 +295,8 @@ body,input,button,textarea,select{font-family:var(--isb-font)}
 @media(max-width:1100px){.shell{grid-template-columns:288px minmax(0,1fr)}.shell .topbar{gap:14px;padding:0 16px}.shell .topbar .brand span,.shell .topbar .account-user span{display:none}.shell .details-drawer{width:320px}}
 @media(max-width:760px){.shell{display:flex;flex-direction:column}.shell .topbar{height:auto;flex-wrap:wrap;gap:8px;padding:10px 14px}.shell .topbar .top-actions{margin-inline-start:0;flex-wrap:wrap}.shell .sidebar{flex:none;padding:10px 14px;border:0;border-bottom:1px solid var(--isb-border)}.shell .side-search,.shell .side-scroll,.shell .side-footer{display:none}.shell .new-chat{width:auto;gap:8px;padding:0 14px;font-size:13px;font-weight:600}.shell .new-chat span{display:inline}.shell .messages{padding:16px 14px}.shell .message.user{max-width:92%}.shell .details-drawer{width:100%}}
 @media print{.shell{display:block}.shell .details-drawer,.shell .answer-actions,.shell .answer-details{display:none!important}.shell .message.answer-card{box-shadow:none;border:0}}
+/* Identity v2 (2026-11-03): navy bands take the deep-sea to blue gradient with faint white dots fading in on the right;
+   the gold line, heights, paddings and type sizes stay as they were. */
+.shell .topbar,.login-brand{position:relative;isolation:isolate;background-color:var(--isb-deep-sea);background-image:var(--isb-hdr-gradient)}
+.login-brand{overflow:hidden}
+.shell .topbar::before,.login-brand::before{content:"";position:absolute;inset-block:0;left:45%;right:0;z-index:-1;background-image:var(--isb-hdr-dots);background-size:var(--isb-hdr-dots-size);-webkit-mask-image:var(--isb-hdr-dots-fade);mask-image:var(--isb-hdr-dots-fade);pointer-events:none}

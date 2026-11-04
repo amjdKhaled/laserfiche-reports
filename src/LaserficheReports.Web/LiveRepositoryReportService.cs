@@ -13,7 +13,21 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
 {
     internal const string Documents = "{LF:Name=\"*\", Type=D}";
     // Searches run as the signed-in user: author counted 49 documents where Admin counted all 444 (2026-10-28).
-    internal const string AccountScopeNote = "يشمل عدد الوثائق لك صلاحية الوصول لها.";
+    // They never reach the recycle bin either: 11 of last week's 14 documents were deleted (2026-11-03).
+    internal static string ScopeNote(bool entries = false, bool search = false)
+    {
+        var what = entries ? "العناصر" : "الوثائق";
+        return $"يقتصر {(search ? "البحث" : "العدد")} على {what} التي لديك صلاحية الوصول إليها، ولا يشمل {what} المحذوفة.";
+    }
+    // Arabic counted nouns: «وثيقة واحدة»، «وثيقتان»، «7 وثائق»، «43 وثيقة»; the last two digits decide (2026-11-03).
+    internal static string Counted(int count, bool entries = false, bool bold = true)
+    {
+        var (one, two, few, many, accusative) = entries
+            ? ("عنصر واحد", "عنصران", "عناصر", "عنصر", "عنصرًا") : ("وثيقة واحدة", "وثيقتان", "وثائق", "وثيقة", "وثيقة");
+        var tail = count % 100;
+        var number = bold ? $"**{count}**" : count.ToString(CultureInfo.InvariantCulture);
+        return count switch { 1 => one, 2 => two, _ => number + " " + (tail is >= 3 and <= 10 ? few : tail >= 11 ? accusative : many) };
+    }
     internal static string Term(string value, bool field = false)
     {
         if (string.IsNullOrWhiteSpace(value) || value.Length > 200 ||
@@ -352,42 +366,116 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
         "entryId" => "رقم الوثيقة", "name" => "اسم الوثيقة", "created" => "تاريخ الإنشاء", "modified" => "آخر تعديل",
         "template" => "القالب", "creator" => "المنشئ", "pageCount" => "عدد الصفحات", _ => field ?? ""
     };
+    private static readonly string[] ArabicDays = ["الأحد", "الاثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت"];
+    private static readonly string[] ArabicMonths = ["يناير", "فبراير", "مارس", "أبريل", "مايو", "يونيو", "يوليو", "أغسطس", "سبتمبر", "أكتوبر", "نوفمبر", "ديسمبر"];
+    // «1 نوفمبر 2026م», or «الأحد 1 نوفمبر 2026م» with the weekday (2026-11-03).
+    internal static string ArabicDate(DateOnly date, bool weekday = false) => (weekday ? ArabicDays[(int)date.DayOfWeek] + " " : "") +
+        string.Create(CultureInfo.InvariantCulture, $"{date.Day} {ArabicMonths[date.Month - 1]} {date.Year}م");
+    // An inclusive date range in words: one day, a whole month or year, or «من الأحد … إلى السبت …».
+    internal static string ArabicSpan(DateOnly first, DateOnly last) =>
+        first == last ? "يوم " + ArabicDate(first, true)
+        : first.Day == 1 && last == first.AddMonths(1).AddDays(-1) ? string.Create(CultureInfo.InvariantCulture, $"خلال شهر {ArabicMonths[first.Month - 1]} {first.Year}م")
+        : first.DayOfYear == 1 && last == first.AddYears(1).AddDays(-1) ? string.Create(CultureInfo.InvariantCulture, $"خلال عام {first.Year}م")
+        : "من " + ArabicDate(first, true) + " إلى " + ArabicDate(last, true);
+    // A period bound as the first or last day it lets through; a week is planned as from_period & before_period.
+    private static DateOnly? LowerBound(RepositoryFilter node) => node.Period is null || node.Conditions != null ? null
+        : node.Operator switch { "from_period" => node.Period.Bounds().Start, "after_period" => node.Period.Bounds().End, _ => null };
+    private static DateOnly? UpperBound(RepositoryFilter node) => node.Period is null || node.Conditions != null ? null
+        : node.Operator switch { "before_period" => node.Period.Bounds().Start.AddDays(-1), "through_period" => node.Period.Bounds().End.AddDays(-1), _ => null };
+    // The criteria line in formal Arabic (2026-11-03): «تاريخ الإنشاء من الأحد 1 نوفمبر 2026م إلى السبت 7 نوفمبر 2026م»
+    // replaced «من بداية الفترة 2026-11-01 إلى 2026-11-01 و … قبل الفترة 2026-11-08 إلى 2026-11-08», which read as two days.
     private static string SelectionSummary(QueryPlan plan)
     {
+        string Label(string? field) => field is null || StructuredRepositoryQuery.Builtins.Contains(field) ? FieldLabel(field) : "«" + field + "»";
+        string Period(RepositoryFilter node)
+        {
+            var period = node.Period!;
+            var (start, end) = period.Bounds();
+            var words = period.Day != null ? ArabicDate(start) : period.Month != null
+                ? string.Create(CultureInfo.InvariantCulture, $"شهر {ArabicMonths[start.Month - 1]} {start.Year}م")
+                : string.Create(CultureInfo.InvariantCulture, $"عام {start.Year}م");
+            return node.Operator switch
+            {
+                "in_period" => ArabicSpan(start, end.AddDays(-1)), "before_period" => "قبل " + words,
+                "from_period" => "ابتداءً من " + words, "through_period" => (period.Day != null ? "حتى " : "حتى نهاية ") + words,
+                _ => (period.Day != null ? "بعد " : "بعد نهاية ") + words
+            };
+        }
+        string Leaf(RepositoryFilter node)
+        {
+            if (node.Tag != null) return (node.Operator == "not_tag" ? "لا تحمل الوسم «" : "تحمل الوسم «") + node.Tag + "»";
+            if (node.Field == "template" && node.Operator is "is_empty" or "is_not_empty")
+                return node.Operator == "is_empty" ? "وثائق غير مرتبطة بقالب" : "وثائق مرتبطة بقالب";
+            if (node.Period != null) return FieldLabel(node.Field) + " " + Period(node);
+            static DateOnly? Literal(string? value) => DateOnly.TryParseExact(value, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var date) ? date : null;
+            var date = node.Operator?.StartsWith("date_", StringComparison.Ordinal) == true || node.Relative != null || node.UpperRelative != null ||
+                node.Field is "created" or "modified" || Literal(node.Value) != null;
+            // Dates in words, numbers as they are, text in «».
+            string Value(string? literal, RelativeDate? relative, bool quoted = false) =>
+                relative != null ? ArabicDate(RepositoryDates.Resolve(relative, RepositoryDates.Today()))
+                : Literal(literal) is DateOnly day ? ArabicDate(day) : quoted ? "«" + literal + "»" : literal ?? "";
+            var first = Value(node.Value, node.Relative);
+            return Label(node.Field) + " " + node.Operator switch
+            {
+                "equals" => date ? "في " + first : "يساوي " + Value(node.Value, null, true),
+                "not_equals" => date ? "ليس في " + first : "لا يساوي " + Value(node.Value, null, true),
+                "less_than" or "date_before" => (date ? "قبل " : "أقل من ") + first,
+                "greater_than" or "date_after" => (date ? "بعد " : "أكبر من ") + first,
+                "less_or_equal" => (date ? "حتى " : "أقل من أو يساوي ") + first,
+                "greater_or_equal" => (date ? "ابتداءً من " : "أكبر من أو يساوي ") + first,
+                "contains" => "يحتوي على «" + node.Value + "»", "starts_with" => "يبدأ بـ«" + node.Value + "»",
+                "is_empty" => "غير مُعبّأ", "is_not_empty" => "مُعبّأ",
+                _ => (date ? "من " : "بين ") + first + (date ? " إلى " : " و") + Value(node.Upper, node.UpperRelative)
+            };
+        }
+        // The conditions of an «and», nested «and»s flattened, with a lower and an upper period bound
+        // on the same field read as one range.
+        List<string> AllOf(RepositoryFilter group)
+        {
+            var nodes = new List<RepositoryFilter>();
+            void Flatten(RepositoryFilter node)
+            {
+                if (node.Conditions is { } children && node.Logic != "or") foreach (var child in children) Flatten(child);
+                else nodes.Add(node);
+            }
+            Flatten(group);
+            var used = new HashSet<RepositoryFilter>(ReferenceEqualityComparer.Instance);
+            var phrases = new List<string>();
+            foreach (var node in nodes)
+            {
+                if (!used.Add(node)) continue;
+                var partner = nodes.FirstOrDefault(other => !used.Contains(other) && other.Field == node.Field &&
+                    (LowerBound(node) != null && UpperBound(other) != null || UpperBound(node) != null && LowerBound(other) != null));
+                if (partner != null && (LowerBound(node) ?? LowerBound(partner)) is DateOnly first &&
+                    (UpperBound(node) ?? UpperBound(partner)) is DateOnly last && first <= last)
+                {
+                    used.Add(partner);
+                    phrases.Add(FieldLabel(node.Field) + " " + ArabicSpan(first, last));
+                }
+                else phrases.Add(Filter(node));
+            }
+            return phrases;
+        }
         string Filter(RepositoryFilter node)
         {
-            if (node.Conditions is { } children)
-                return "(" + string.Join(node.Logic == "or" ? " أو " : " و ", children.Select(Filter)) + ")";
-            if (node.Tag != null) return (node.Operator == "not_tag" ? "بدون الوسم: " : "الوسم: ") + node.Tag;
-            if (node.Field == "template" && node.Operator is "is_empty" or "is_not_empty")
-                return node.Operator == "is_empty" ? "بدون قالب (كرت فهرسة)" : "لها قالب";
-            if (node.Period != null)
-            {
-                var (start, end) = node.Period.Bounds();
-                var comparisonPeriod = node.Operator switch { "in_period" => "خلال", "before_period" => "قبل",
-                    "through_period" => "حتى نهاية", "from_period" => "من بداية", _ => "بعد نهاية" };
-                return $"{FieldLabel(node.Field)} {comparisonPeriod} الفترة {start:yyyy-MM-dd} إلى {end.AddDays(-1):yyyy-MM-dd}";
-            }
-            var comparison = node.Operator switch
-            {
-                "equals" => "يساوي", "not_equals" => "لا يساوي", "less_than" or "date_before" => "قبل / أقل من",
-                "greater_than" or "date_after" => "بعد / أكبر من", "less_or_equal" => "أقل من أو يساوي",
-                "greater_or_equal" => "أكبر من أو يساوي", "contains" => "يحتوي", "starts_with" => "يبدأ بـ",
-                "is_empty" => "فارغ", "is_not_empty" => "غير فارغ", _ => "بين"
-            };
-            string Value(string? literal, RelativeDate? relative) => relative is null ? literal ?? "" :
-                RepositoryDates.Resolve(relative, RepositoryDates.Today()).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
-            return $"{FieldLabel(node.Field)} {comparison} {Value(node.Value, node.Relative)}" +
-                (node.Upper != null || node.UpperRelative != null ? " و " + Value(node.Upper, node.UpperRelative) : "");
+            if (node.Conditions is not { } children) return Leaf(node);
+            var phrases = node.Logic == "or" ? children.Select(Filter).ToList() : AllOf(node);
+            return phrases.Count == 1 ? phrases[0] : "(" + string.Join(node.Logic == "or" ? " أو " : " و", phrases) + ")";
         }
         var parts = new List<string>();
-        if (plan.Filters != null) parts.Add(Filter(plan.Filters));
-        if (plan.FolderName != null || plan.FolderId != null) parts.Add("المجلد: " + (plan.FolderName ?? plan.FolderId!.Value.ToString()) +
-            (plan.IncludeSubfolders ? " والمجلدات الفرعية" : " فقط"));
-        if (plan.Name != null) parts.Add("اسم الوثيقة: " + plan.Name);
-        if (plan.Template != null) parts.Add("القالب: " + plan.Template);
-        if (plan.Field != null) parts.Add(FieldLabel(plan.Field) + " = " + plan.Value);
-        return parts.Count == 0 ? "" : "معيار البحث: " + ReportSupport.Cell(string.Join("؛ ", parts)) + "\n\n";
+        if (plan.FolderName != null || plan.FolderId != null)
+            parts.Add((plan.FolderName != null ? "مجلد «" + plan.FolderName + "»" : "المجلد رقم " + plan.FolderId) +
+                (plan.IncludeSubfolders ? " وجميع المجلدات الفرعية داخله" : " فقط، دون المجلدات الفرعية"));
+        if (plan.Name != null) parts.Add("اسم الوثيقة: «" + plan.Name + "»");
+        if (plan.Template != null) parts.Add("القالب: «" + plan.Template + "»");
+        if (plan.Field != null) parts.Add(Label(plan.Field) + " يساوي «" + plan.Value + "»");
+        if (plan.Filters != null) parts.AddRange(plan.Filters.Conditions != null && plan.Filters.Logic != "or" ? AllOf(plan.Filters) : [Filter(plan.Filters)]);
+        // One condition stays on the line; several become a list.
+        return parts.Count switch
+        {
+            0 => "", 1 => "نطاق البحث: " + ReportSupport.Cell(parts[0]) + "\n\n",
+            _ => "نطاق البحث:\n" + string.Join("\n", parts.Select(part => "- " + ReportSupport.Cell(part))) + "\n\n"
+        };
     }
 
     internal async Task<object> CatalogAsync(CancellationToken ct)
@@ -549,11 +637,26 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
         var evidence = result.Items.Select(i => new Evidence(i.EntryId, i.Name, i.FullPath, null, 1,
             $"الاسم: {i.Name}\nالمسار: {i.FullPath}", "laserfiche-metadata-live")).ToArray();
         var latest = plan.Operation is "latest_created" or "latest_modified";
-        var detail = latest ? $"عُرضت **{result.Items.Count}** وثيقة حسب أحدث تاريخ { (plan.Operation == "latest_created" ? "إنشاء" : "تعديل") }." : result.IsTotalCountExact ? $"عدد النتائج المطابقة: **{result.TotalCount}** — {AccountScopeNote}" :
-            "تعذر تأكيد إجمالي النتائج من استجابة المستودع؛ العدد الإجمالي غير متاح.";
-        if (!latest && result.HasNextPage) detail += $" عُرضت {result.Items.Count} نتيجة فقط؛ هذه ليست القائمة الكاملة.";
         // Folder contents and folder listings name each row's type: a subfolder is not a document (2026-10-29).
         var withType = plan.EntryType is "all" or "folder" || plan.Operation == "folders";
+        var by = plan.Operation == "latest_created" ? "تاريخ الإنشاء" : "تاريخ التعديل";
+        var detail = latest ? result.Items.Count switch
+            {
+                0 => "لا توجد نتائج مطابقة للشروط الحالية.", 1 => $"أحدث وثيقة حسب {by}.", 2 => $"أحدث وثيقتين حسب {by}.",
+                var shown => $"أحدث {Counted(shown)} حسب {by}."
+            }
+            : !result.IsTotalCountExact ? "تعذّر تحديد العدد الإجمالي للنتائج."
+            : result.TotalCount == 0 ? "لا توجد نتائج مطابقة للشروط الحالية. " + ScopeNote(withType, search: true)
+            : $"عدد النتائج: {Counted(result.TotalCount, withType)}. {ScopeNote(withType)}";
+        if (!latest && result.HasNextPage)
+        {
+            var first = result.Items.Count switch
+            {
+                1 => "أول نتيجة", 2 => "أول نتيجتين",
+                var shown => $"أول {shown} " + (shown % 100 is >= 3 and <= 10 ? "نتائج" : "نتيجة")
+            };
+            detail += result.IsTotalCountExact ? $" تُعرض {first} من أصل {result.TotalCount}." : $" تُعرض {first}، وتوجد نتائج أخرى غير معروضة.";
+        }
         var tableRows = string.Join("\n", result.Items.Select((i, index) =>
             $"| {i.EntryId} | {ReportSupport.Cell(i.Name)} | " + (withType ? (i.EntryType is LFEntryType.Folder or LFEntryType.RecordSeries ? "مجلد" : "وثيقة") + " | " : "") +
             $"{Date(i.CreationTime)} | {Date(i.LastModifiedTime)} | {Pages(i.PageCount, electronic[index])} | [{index + 1}] |"));
@@ -562,7 +665,7 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
         {
             var candidates = RepositorySuggestions.Closest(plan.Question ?? plan.Field ?? plan.Filters?.Field ?? "",
                 (await SchemaAsync(ct)).Values.Select(f => f.Name));
-            emptyAdvice = "\n\nلم أجد مطابقات للشروط الحالية. " + (candidates.Length > 0
+            emptyAdvice = "\n\n" + (candidates.Length > 0
                 ? "هل تقصد أحد هذه الحقول: " + string.Join("، ", candidates.Select(n => "«" + ReportSupport.Cell(n) + "»")) + "، أم تريد تعديل القيمة أو الفترة؟"
                 : "هل تريد تعديل قيمة الحقل، أم الفترة، أم نطاق المجلد؟")
                 + " هذه اقتراحات للتوضيح؛ لم أنفذ بحثًا بشروط بديلة.";

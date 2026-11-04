@@ -18,7 +18,8 @@ _TEMPLATE_CUE = (_LEAD + r"(?:ال)?(?:قالب|قوالب|تمبلت|تمبلي
                  r"(?:index|archive|archiving|metadata)\s+cards?)(?:ها|ه|هم)?(?!\w)")
 _TAG_CUE = _LEAD + r"(?:ال)?(?:وسم|وسوم|اوسمه|تاج|تاغ|tag|tags|tagged|labeled|labelled)(?:ها|ه|هم)?(?!\w)"
 # Negation words, Egyptian and English: «مالهاش قالب»، «لا تحتوي على كرت فهرسة»، «without a template».
-_NEGATORS = (r"(?:مش|مو|ما|ليس|ليست|لا|بدون|من\s+غير|غير|بلا|مالهاش|ملهاش|مالهوش|ملهوش|مفيهاش|ماعندهاش|معندهاش|ماعليهاش|"
+# «ما هي/ما هو» asks a question: «ما هي الملفات المؤرشفة» counted every document as not archived (2026-11-02).
+_NEGATORS = (r"(?:مش|مو|ما(?!\s+(?:هي|هو|هم|هما)(?!\w))|ليس|ليست|لا|بدون|من\s+غير|غير|بلا|مالهاش|ملهاش|مالهوش|ملهوش|مفيهاش|ماعندهاش|معندهاش|ماعليهاش|"
              r"معليهاش|without|no|not|do\s+not|does\s+not|don'?t|doesn'?t|isn'?t|lacking|missing)")
 # Words between the cue and the name: «قالبها القرار»، «قالب اسمه "القرار"»، «قالبها مش القرار»، «template named X».
 _LINK = (r"\s*(?:(?:(?:اسمه|اسمها|بتاعه|بتاعها|بتاعتها|بتاعته|هو|هي|يساوي|يكون|تكون|is|named|called|equals|"

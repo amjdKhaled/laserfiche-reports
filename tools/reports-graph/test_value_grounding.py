@@ -93,6 +93,12 @@ class GlossaryTests(unittest.TestCase):
         self.assertEqual(ARCHIVED, ground("الوثائق المؤرشفة")["filters"])
         self.assertEqual(ARCHIVED, ground("how many archived documents are there?")["filters"])
 
+    def test_what_are_is_a_question_not_a_negation(self):
+        self.assertEqual(ARCHIVED, ground("ما هي الملفات المؤرشفة ؟")["filters"])
+        self.assertEqual(ARCHIVED, ground("ما هى الوثائق المؤرشفة")["filters"])
+        self.assertEqual(ARCHIVED, ground("ما هو الملف المؤرشف")["filters"])
+        self.assertEqual(UNDER_ACTION, ground("ما هي الملفات تحت الاجراء")["filters"])
+
     def test_archived_keeps_the_template(self):
         template = {"field": "template", "operator": "equals", "value": "القرار"}
         guessed = {"logic": "and", "conditions": [template, {"field": "حالة الطلب", "operator": "equals", "value": "مؤرشفة"}]}
@@ -114,6 +120,8 @@ class GlossaryTests(unittest.TestCase):
     def test_negated_term_stays_with_the_planner(self):
         planned = plan()
         self.assertIs(planned, ground_field_values(planned, "الوثائق اللي مش مؤرشفة", CATALOG, GLOSSARY))
+        self.assertIs(planned, ground_field_values(planned, "ما هي الوثائق اللي مش مؤرشفة", CATALOG, GLOSSARY))
+        self.assertIs(planned, ground_field_values(planned, "الملفات اللي ما اتأرشفت", CATALOG, GLOSSARY))
 
     def test_term_needs_its_field(self):
         catalog = {**CATALOG, "fields": [f for f in CATALOG["fields"] if f["name"] != "هل تريد ارشفة الوثيقة؟"]}

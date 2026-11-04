@@ -38,6 +38,7 @@
   load('logo', '/isb-logo.jpg', 'image/jpeg');
   load('regular', '/brand/font/ReadexPro-Regular.ttf', 'font/ttf');
   load('semibold', '/brand/font/ReadexPro-SemiBold.ttf', 'font/ttf');
+ 
   function html(message, question) {
     const reportTitle = message.title || 'تقرير وثائق Laserfiche';
     const scopeText = root.ReportsMarkdown.render(message.scope?.detail || 'نطاق التقرير غير مسجل؛ راجع المصادر وحدود الإجابة.',0).textContent;
@@ -50,7 +51,8 @@
       .map(([name, weight]) => `@font-face{font-family:'Readex Pro';font-weight:${weight};src:url(${assets[name].url}) format('truetype')}`).join('');
     const logo = assets.logo ? `<div class="report-logo"><img src="${assets.logo.url}" alt="ISB"></div>` : '';
     const style = `${fonts}*{box-sizing:border-box}body{font-family:'Readex Pro','Segoe UI',Tahoma,sans-serif;max-width:1100px;margin:32px auto;padding:0 24px;color:#142633;background:#fff;font-size:14px;line-height:1.85;-webkit-print-color-adjust:exact;print-color-adjust:exact}` +
-      `.report-header{display:flex;align-items:center;gap:18px;padding:18px 24px;background:#0B3954;border-bottom:4px solid #C29A2E;border-radius:14px 14px 0 0;color:#fff}` +
+      `.report-header{position:relative;isolation:isolate;overflow:hidden;display:flex;align-items:center;gap:18px;padding:18px 24px;background:#0B3954 linear-gradient(100deg,#0B3954 55%,#14618A);border-bottom:4px solid #C29A2E;border-radius:14px 14px 0 0;color:#fff}` +
+      `.report-header::before{content:"";position:absolute;top:0;bottom:0;left:45%;right:0;z-index:-1;background-image:radial-gradient(rgba(255,255,255,.12) 1.2px,transparent 1.4px);background-size:14px 14px;-webkit-mask-image:linear-gradient(to right,transparent,#000);mask-image:linear-gradient(to right,transparent,#000)}` +
       `.report-logo{flex:none;background:#fff;border-radius:10px;padding:5px 8px;line-height:0}.report-logo img{height:42px;width:auto}` +
       `.report-brand{margin:0;font-size:12px;color:rgba(255,255,255,.78)}h1{margin:0;font-size:22px;font-weight:600;line-height:1.55;color:#fff}` +
       `.report-info{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:4px 18px;margin:0 0 18px;padding:14px 24px;background:#F0F5F8;border:1px solid #E3EAF0;border-top:0;border-radius:0 0 14px 14px;font-size:13px}.report-info dt{color:#4A5C69}.report-info dd{margin:0;overflow-wrap:anywhere}` +

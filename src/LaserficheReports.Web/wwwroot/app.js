@@ -16,9 +16,16 @@ let documentsPage = 1;
 let hasMoreDocuments = false;
 let historySaved = true;
 const activeRequests = new Set();
+// Each chat runs its own question (chat id → its stop controller): a new chat can ask while another is
+// answering, and the stop button stops only the open chat's question (2026-11-03). The server still runs
+// one Laserfiche search at a time per session.
+const runningQuestions = new Map();
 let signingOut = false;
 function save() {
-  try { localStorage.setItem(storeKey, JSON.stringify(chats.slice(0, 30))); historySaved = true; }
+  // Another chat may still be answering; its waiting message is stored as stopped, so a reload never shows it waiting forever.
+  const stored = chats.slice(0, 30).map(chat => chat.messages.some(message => message.pending) ? { ...chat, messages: chat.messages.map(message =>
+    message.pending ? { role: 'assistant', kind: 'error', text: 'تم إيقاف السؤال قبل اكتمال الإجابة.' } : message) } : chat);
+  try { localStorage.setItem(storeKey, JSON.stringify(stored)); historySaved = true; }
   catch { historySaved = false; }
 }
 function el(tag, className, value) {
@@ -203,8 +210,8 @@ function whenAsked(time) {
   const days = Math.round((day(new Date()) - day(new Date(time))) / 86400000);
   return days <= 0 ? 'اليوم' : days === 1 ? 'أمس' : days === 2 ? 'منذ يومين' : days <= 10 ? `منذ ${days} أيام` : new Date(time).toLocaleDateString('ar-EG', { day: 'numeric', month: 'short' });
 }
+// A ready report opens its own chat, so it runs even while another chat is answering.
 function runReadyReport(question) {
-  if (stopQuestion) return;
   active = null;
   $('side-search').value = '';
   showTab('chat');
@@ -375,6 +382,7 @@ function renderMessages() {
   const container = $('messages');
   container.replaceChildren();
   answers.clear();
+  setAnswering();
   const chat = chats.find(c => c.id === active);
   if (!chat || !chat.messages.length) {
     const welcome = el('div', 'welcome');
@@ -398,7 +406,7 @@ function renderMessages() {
         container.append(item);
         return;
       }
-      if (message.pending && stopQuestion) { container.append(pendingCard(message)); return; }
+      if (message.pending && runningQuestions.has(chat.id)) { container.append(pendingCard(message)); return; }
       const sourcePrefix = `source-${chat.id}-${messageIndex}-${partIndex}`;
       const bubble = el('div', 'bubble');
       const article = ReportsMarkdown.render(message.text || '', message.sources?.length || 0, sourcePrefix);
@@ -616,7 +624,8 @@ function fillDetails(view) {
   const scope = section(count === null ? 'نطاق التقرير' : 'ماذا عُدّ بالضبط', 'search');
   const text = el('div', 'details-text');
   if (count === null) { if (message.scope?.detail) text.append(ReportsMarkdown.render(message.scope.detail, 0)); }
-  else view.body.querySelectorAll('.report-body > p').forEach(paragraph => text.append(paragraph.cloneNode(true)));
+  // A search scope with several conditions is a list under «نطاق البحث:» (2026-11-03).
+  else view.body.querySelectorAll('.report-body > p, .report-body > ul').forEach(paragraph => text.append(paragraph.cloneNode(true)));
   if (text.childNodes.length) scope.append(text);
   const facts = el('dl');
   const fact = (term, value) => {
@@ -785,7 +794,15 @@ async function deletedDocumentsReport(question) {
   rows.sort((a, b) => (b.deletedAt?.getTime() || 0) - (a.deletedAt?.getTime() || 0));
   const title = [type === 'Folder' ? 'المجلدات المحذوفة' : type === 'Document' ? 'الوثائق المحذوفة' : 'العناصر المحذوفة',
     folder ? 'من مجلد ' + folder : null, period?.label, deleter ? 'حذفها ' + deleter : null].filter(Boolean).join(' — ');
-  const detail = `عدد النتائج المطابقة: **${rows.length}** — يشمل عدد الوثائق لك صلاحية الوصول لها.`;
+  // «عدد الوثائق المحذوفة: **12** وثيقة.», with Arabic number agreement (2026-11-03).
+  const [what, nouns] = type === 'Folder' ? ['المجلدات', ['مجلد واحد', 'مجلدان', 'مجلدات', 'مجلد', 'مجلدًا']]
+    : type === 'Document' ? ['الوثائق', ['وثيقة واحدة', 'وثيقتان', 'وثائق', 'وثيقة', 'وثيقة']]
+    : ['العناصر', ['عنصر واحد', 'عنصران', 'عناصر', 'عنصر', 'عنصرًا']];
+  const tail = rows.length % 100;
+  const counted = rows.length === 1 ? nouns[0] : rows.length === 2 ? nouns[1]
+    : `**${rows.length}** ${tail >= 3 && tail <= 10 ? nouns[2] : tail >= 11 ? nouns[4] : nouns[3]}`;
+  const detail = (rows.length ? `عدد ${what} المحذوفة: ${counted}.` : `لا توجد ${what} محذوفة مطابقة.`) +
+    ` تُعرض من سلة المحذوفات ${what} التي لديك صلاحية الوصول إليها.`;
   const cell = value => String(value ?? '').trim()
     ? String(value).replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/\r?\n/g, ' ') : '—';
   const table = '| رقم الوثيقة | الاسم | النوع | المكان الأصلي | تاريخ الحذف | حذفها | تاريخ الإنشاء |\n| --- | --- | --- | --- | --- | --- | --- |\n' +
@@ -797,18 +814,18 @@ async function deletedDocumentsReport(question) {
 }
 // While a question runs, the send button is a stop button. Stopping cancels the request, and the server
 // stops the search with it (the chat endpoint passes the request's cancellation token on).
-let stopQuestion = null;
-function setAnswering(answering) {
+function setAnswering() {
+  const answering = runningQuestions.has(active);
   const send = $('send');
   send.classList.toggle('is-stop', answering);
   send.type = answering ? 'button' : 'submit';
   send.title = answering ? 'إيقاف الإجابة' : 'إرسال';
   send.setAttribute('aria-label', send.title);
 }
-$('send').addEventListener('click', () => stopQuestion?.abort());
+$('send').addEventListener('click', () => runningQuestions.get(active)?.abort());
 $('ask-form').onsubmit = async event => {
   event.preventDefault();
-  if (stopQuestion) return;
+  if (runningQuestions.has(active)) return;
   const question = $('question').value.trim();
   if (!question) return;
   if (!active) {
@@ -821,8 +838,8 @@ $('ask-form').onsubmit = async event => {
   chat.at = Date.now();
   chat.messages.push({ role: 'user', text: question });
   $('question').value = '';
-  const stop = stopQuestion = new AbortController();
-  setAnswering(true);
+  const stop = new AbortController();
+  runningQuestions.set(chat.id, stop);
   chat.messages.push({ role: 'assistant', pending: true, text: 'جاري البحث في الوثائق وتحضير الإجابة...' });
   renderHistory(); renderMessages();
   try {
@@ -852,8 +869,10 @@ $('ask-form').onsubmit = async event => {
     chat.messages[chat.messages.length - 1] = { role: 'assistant', kind: 'error', errorCode: error.code, text: `تعذر إكمال السؤال: ${error.message}` };
   } finally {
     pendingOperations--;
-    if (stopQuestion === stop) { stopQuestion = null; setAnswering(false); }
-    if (epoch === sessionEpoch) { save(); renderMessages(); }
+    if (runningQuestions.get(chat.id) === stop) runningQuestions.delete(chat.id);
+    // Only the open chat is redrawn: a question finishing in another chat leaves the reader where they are.
+    if (epoch === sessionEpoch) { save(); if (chat.id === active) renderMessages(); }
+    setAnswering();
   }
 };
 function resendPendingQuestion() {
