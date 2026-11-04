@@ -341,6 +341,27 @@ app.MapGet("/api/embeddings/status", async (ITextEmbeddingService embeddings,
     }
 });
 
+// Read-only, authenticated preflight: a "ready" result only establishes that
+// installation/binding data is present, NOT that SDK licensing or permissions work.
+app.MapGet("/api/reports/authorization/status", async (
+    IRepositoryContext repositories, IConfiguration configuration, CancellationToken ct) =>
+{
+    var repository = await repositories.GetActiveRepositoryAsync(ct);
+    var options = configuration.GetSection("PermissionVerification")
+        .Get<LaserficheReports.Web.Permissions.PermissionVerificationOptions>() ?? new();
+    var executable = LaserficheReports.Web.Permissions.ProcessLaserficheSdkBridge.ExecutablePath;
+    var payloadPresent = OperatingSystem.IsWindows() && Environment.Is64BitProcess && File.Exists(executable);
+    var status = LaserficheReports.Web.Permissions.FullHierarchyPreflight.Check(repository, options, payloadPresent);
+    return Results.Ok(new
+    {
+        stage = "authorization_preflight",
+        status,
+        note = status == "ready_for_live_validation"
+            ? "تم العثور على الإعدادات وملفات SDK. لا تزال تجربة Laserfiche الفعلية مطلوبة."
+            : "إعداد التحقق من الصلاحيات غير مكتمل؛ لن تُعرض نتائج غير مؤكدة."
+    });
+});
+
 // Read-only diagnostics use the same selected repository and active session as chat.
 app.MapGet("/api/reports/planning-catalog", async (LiveRepositoryReportService reports,
     IRepositoryContext repositories, ISessionCredentialStore sessions, CancellationToken cancellationToken) =>
