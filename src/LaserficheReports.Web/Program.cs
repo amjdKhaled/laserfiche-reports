@@ -43,6 +43,18 @@ builder.Configuration.AddJsonFile(
 builder.Configuration.AddEnvironmentVariables();
 
 builder.Logging.AddSimpleConsole(options => options.IncludeScopes = true);
+try
+{
+    builder.Logging.AddProvider(new FileLoggerProvider(builder.Configuration["Logging:File:Directory"] is { Length: > 0 } logDirectory
+        ? logDirectory
+        : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "LaserficheReports", "logs")));
+    builder.Logging.AddFilter<FileLoggerProvider>("Microsoft", LogLevel.Warning);
+    builder.Logging.AddFilter<FileLoggerProvider>("System", LogLevel.Warning);
+}
+catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+{
+    Console.Error.WriteLine("File logging is unavailable: " + error.Message);
+}
 builder.Services.AddDataProtection();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddDistributedMemoryCache();
@@ -54,20 +66,44 @@ builder.Services.AddSession(options =>
     options.IdleTimeout = TimeSpan.FromHours(8);
 });
 builder.Services.AddLaserficheInfrastructure(builder.Configuration);
+builder.Services.AddHealthChecks().AddCheck<LaserficheReports.Web.Permissions.PermissionBridgeHealthCheck>("permission-bridge-deployment");
+builder.Services.AddSingleton<LaserficheReports.Web.Permissions.PermissionVerificationGate>();
+builder.Services.AddScoped<LaserficheReports.Web.Permissions.IAuthenticatedLaserfichePrincipalResolver,
+    LaserficheReports.Web.Permissions.AuthenticatedLaserfichePrincipalResolver>();
+builder.Services.AddScoped<LaserficheReports.Web.Permissions.ILaserficheSdkBridge,
+    LaserficheReports.Web.Permissions.ProcessLaserficheSdkBridge>();
+builder.Services.AddScoped<LaserficheReports.Web.Permissions.ILaserfichePermissionVerifier,
+    LaserficheReports.Web.Permissions.PermissionVerificationService>();
 builder.Services.AddScoped<ReportsChatService>();
+builder.Services.AddScoped<LaserficheReports.Web.Permissions.IFullHierarchyAuthorizationService,
+    LaserficheReports.Web.Permissions.FullHierarchyAuthorizationService>();
+builder.Services.AddScoped<LaserficheReports.Web.Permissions.ProtectedReadTracker>();
+builder.Services.AddScoped<IContentAuthorizationScope, LaserficheReports.Web.Permissions.ContentAuthorizationScope>();
+builder.Services.AddScoped<IFullHierarchyPolicy>(sp =>
+    sp.GetRequiredService<LaserficheReports.Web.Permissions.IFullHierarchyAuthorizationService>());
+builder.Services.AddTransient<LaserficheReports.Web.Permissions.HierarchyAuthorizationHandler>();
+builder.Services.AddHttpClient("LaserficheAuthenticated")
+    .AddHttpMessageHandler<LaserficheReports.Web.Permissions.HierarchyAuthorizationHandler>();
+
+builder.Services.AddSingleton<LaserficheReports.Web.Permissions.AuthorizationReceiptCache>();
+builder.Services.AddScoped<LaserficheReports.Web.Permissions.ReportAuthorizationReceipts>();
 builder.Services.AddScoped<LiveRepositoryReportService>();
 builder.Services.AddScoped<AuditTrailSource>();
+builder.Services.AddScoped<RecycleBinSource>();
+builder.Services.AddSingleton<RecycleBinConfiguration>();
+builder.Services.AddScoped<AuditSessionCredentials>();
+builder.Services.AddSingleton<AuditTrailConfiguration>();
 builder.Services.AddScoped<QuestionRouter>();
 builder.Services.AddTransient<GraphCorrelationHandler>();
 builder.Services.AddHttpClient("ReportsGraph", client =>
 {
-    var baseUrl = builder.Configuration["ReportsGraph:BaseUrl"] ?? "http://127.0.0.1:8766";
+    var baseUrl = builder.Configuration["ReportsGraph:BaseUrl"] ?? "http://127.0.0.1:5050";
     var uri = new Uri(baseUrl);
     if (uri.Scheme != Uri.UriSchemeHttp ||
         uri.Host is not ("127.0.0.1" or "localhost" or "::1"))
         throw new InvalidOperationException("ReportsGraph:BaseUrl must be local HTTP.");
     client.BaseAddress = new Uri(uri.AbsoluteUri.TrimEnd('/') + "/");
-    var graphTimeout = builder.Configuration.GetValue<int?>("ReportsGraph:TimeoutSeconds") ?? 0;
+    var graphTimeout = builder.Configuration.GetValue<int?>("ReportsGraph:TimeoutSeconds") ?? 3600;
     client.Timeout = graphTimeout <= 0 ? Timeout.InfiniteTimeSpan : TimeSpan.FromSeconds(graphTimeout);
 }).AddHttpMessageHandler<GraphCorrelationHandler>().ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
 {
@@ -86,7 +122,7 @@ app.Use(async (context, next) =>
     var original = context.RequestAborted;
     using var budget = CancellationTokenSource.CreateLinkedTokenSource(original);
     var path = context.Request.Path;
-    var requestTimeout = path.StartsWithSegments("/api/reports/chat") ? builder.Configuration.GetValue<int?>("Reports:RequestTimeoutSeconds") ?? 0 :
+    var requestTimeout = ReportTimeouts.IsReportRequest(path) ? builder.Configuration.GetValue<int?>("Reports:RequestTimeoutSeconds") ?? 3600 :
         path.StartsWithSegments("/api/ingestion") ? 1800 : path.Value?.EndsWith("/status") == true ? 10 : 60;
     if (requestTimeout > 0) budget.CancelAfter(TimeSpan.FromSeconds(requestTimeout));
     context.RequestAborted = budget.Token;
@@ -98,7 +134,7 @@ app.Use(async (context, next) =>
         var timeout = ex is OperationCanceledException or TimeoutException;
         context.Response.StatusCode = timeout ? 504 : ex is ArgumentException ? 400 : 503;
         await context.Response.WriteAsJsonAsync(new { error = timeout ? "request_timeout" : "service_unavailable",
-            message = timeout ? "تعذر إكمال الطلب خلال الوقت المحدد." :
+            message = timeout ? "تعذر إكمال الطلب خلال الوقت المحدد، ولم تُعرض نتائج غير مؤكدة. أعد إرسال السؤال." :
                 ex is ArgumentException ? "تعذر تنفيذ الطلب. تحقق من المعلومات المدخلة." : "الخدمة المطلوبة غير متاحة حاليًا. أعد المحاولة لاحقًا." }, original);
     }
     finally
@@ -121,9 +157,7 @@ app.Logger.LogInformation(
 // Never serve its document index to a remote browser.
 app.Use(async (context, next) =>
 {
-    var address = context.Connection.RemoteIpAddress;
-    if (address is null || !System.Net.IPAddress.IsLoopback(
-        address.IsIPv4MappedToIPv6 ? address.MapToIPv4() : address))
+    if (!LocalAccess.IsLocalMachine(context.Connection.RemoteIpAddress))
     {
         context.Response.StatusCode = StatusCodes.Status403Forbidden;
         return;
@@ -131,10 +165,8 @@ app.Use(async (context, next) =>
     if (HttpMethods.IsPost(context.Request.Method) &&
         context.Request.Headers.TryGetValue("Origin", out var origin))
     {
-        if (!Uri.TryCreate(origin.ToString(), UriKind.Absolute, out var source) ||
-            source.Host is not ("127.0.0.1" or "localhost" or "::1") ||
-            source.Scheme != context.Request.Scheme ||
-            source.Port != context.Request.Host.Port)
+        if (!LocalAccess.IsTrustedOrigin(origin.ToString(), context.Request.Scheme,
+                context.Request.Host.Port, Environment.MachineName))
         {
             context.Response.StatusCode = StatusCodes.Status403Forbidden;
             return;
@@ -151,6 +183,8 @@ app.Use(async (context, next) =>
     var cookie = context.Request.Cookies[".LaserficheReports.Session"] ?? "new-session";
     var gate = sessionGates[(StringComparer.Ordinal.GetHashCode(cookie) & int.MaxValue) % sessionGates.Length];
     var acquired = false;
+    var mutatesSession = context.Request.Path.StartsWithSegments("/api/session") ||
+        context.Request.Path.Equals(new PathString("/api/audit-trail/credentials"));
     if (!await gate.WaitAsync(TimeSpan.FromSeconds(5), context.RequestAborted))
     {
         context.Response.StatusCode = 409;
@@ -175,7 +209,25 @@ app.Use(async (context, next) =>
             await context.Response.WriteAsJsonAsync(new { error = "session_scope_changed", message = "تغيّر المستودع في جلسة أخرى. أعد تسجيل الدخول إلى المستودع المطلوب." });
             return;
         }
-        if (!context.Request.Path.StartsWithSegments("/api/session"))
+        // Never permit a report or document read to fall through to the
+        // machine's disk/service credentials. Validate the completed interactive
+        // session before an endpoint can reach the Repository API.
+        if (RepositoryReadSession.IsRepositoryReadPath(context.Request.Path))
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            if (!await RepositoryReadSession.IsAuthorizedAsync(context, repository,
+                context.RequestServices.GetRequiredService<ISessionCredentialStore>(), context.RequestAborted))
+            {
+                context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                await context.Response.WriteAsJsonAsync(new
+                {
+                    error = "session_identity_unverified",
+                    message = "تعذر التحقق من هوية حساب Laserfiche الحالي. سجّل الدخول مرة أخرى."
+                });
+                return;
+            }
+        }
+        if (!mutatesSession)
         {
             gate.Release();
             acquired = false;
@@ -187,10 +239,32 @@ app.Use(async (context, next) =>
         context.Response.StatusCode = 401;
         await context.Response.WriteAsJsonAsync(new { error = "session_expired", message = "تعذر تجديد جلسة Laserfiche. سجّل الدخول مرة أخرى." });
     }
+    catch (LaserficheReports.Web.Permissions.PermissionVerificationException error) when (!context.Response.HasStarted)
+    {
+        context.Response.StatusCode = error.Decision.HttpStatusCode;
+        await context.Response.WriteAsJsonAsync(new { error = "entry_verification", message = error.Message });
+    }
     catch (LaserficheException error) when (!context.Response.HasStarted)
     {
+        // Fallback is restricted to an observed, failed entry/folder operation. There is
+        // intentionally no public privileged verification endpoint or client-supplied identity.
+        var routeKey = context.Request.RouteValues.ContainsKey("entryId") ? "entryId" : "folderId";
+        if (error.StatusCode is 403 or 404 &&
+            int.TryParse(context.Request.RouteValues[routeKey]?.ToString(), out var targetId) && targetId > 0)
+        {
+            var decision = await context.RequestServices.GetRequiredService<LaserficheReports.Web.Permissions.ILaserfichePermissionVerifier>()
+                .VerifyAsync(new(Id: targetId, Kind: routeKey == "folderId" ? "folder" : "document", OperationForbidden: error.StatusCode == 403), context.RequestAborted);
+            context.Response.StatusCode = decision.HttpStatusCode;
+            await context.Response.WriteAsJsonAsync(new { error = "entry_verification", message = decision.Message });
+            return;
+        }
         context.Response.StatusCode = error.StatusCode is 401 or 403 or 404 ? error.StatusCode : 502;
         await context.Response.WriteAsJsonAsync(new { error = RepositoryReadError.Message(error), upstreamStatus = error.StatusCode, requestId = context.TraceIdentifier });
+    }
+    catch (RecycleBinException error) when (!context.Response.HasStarted)
+    {
+        context.Response.StatusCode = 503;
+        await context.Response.WriteAsJsonAsync(new { error = "recycle_bin_unavailable", message = error.Message });
     }
     catch (AuditTrailException error) when (!context.Response.HasStarted)
     {
@@ -211,6 +285,8 @@ app.Use(async (context, next) =>
         }
     }
 });
+app.MapAuditTrailSetup();
+app.MapRecycleBin();
 app.UseDefaultFiles();
 app.UseStaticFiles(new StaticFileOptions
 {
@@ -229,6 +305,7 @@ app.MapGet("/api/app/status", (IConfiguration config) => Results.Ok(new
 }));
 
 app.MapReportSessions();
+app.MapReportSso();
 app.MapReportLinks();
 
 app.MapGet("/api/graph/status", async (IHttpClientFactory factory, CancellationToken cancellationToken) =>
@@ -268,7 +345,7 @@ app.MapGet("/api/embeddings/status", async (ITextEmbeddingService embeddings,
 app.MapGet("/api/reports/planning-catalog", async (LiveRepositoryReportService reports,
     IRepositoryContext repositories, ISessionCredentialStore sessions, CancellationToken cancellationToken) =>
 {
-    if (await sessions.TryGetAsync(cancellationToken) is null) return Results.Unauthorized();
+    if (await sessions.TryGetSignedInUserAsync(cancellationToken) is null) return Results.Unauthorized();
     var repository = await repositories.GetActiveRepositoryAsync(cancellationToken);
     return Results.Ok(new { repositoryId = repository.RepositoryId, generatedAt = DateTimeOffset.UtcNow,
         catalog = await reports.CatalogAsync(cancellationToken) });
@@ -297,7 +374,7 @@ app.MapPost("/api/reports/availability", async (AvailabilityRequest request, Liv
 app.MapGet("/api/reports/documents", async (int? page, string? search, ReportsChatService chat,
     ISessionCredentialStore sessions, CancellationToken cancellationToken) =>
 {
-    if (await sessions.TryGetAsync(cancellationToken) is null) return Results.Unauthorized();
+    if (await sessions.TryGetSignedInUserAsync(cancellationToken) is null) return Results.Unauthorized();
     if (page is < 1 or > 1_000_000 || search?.Length > 200)
         return Results.BadRequest(new { error = "Invalid page or search query." });
     return Results.Ok(await chat.ListAsync(page ?? 1, search, cancellationToken));
@@ -309,7 +386,7 @@ app.MapGet("/api/reports/repository/folders/{folderId:int}/children", async (
     int folderId, ILaserficheEntryService entries, IRepositoryContext repositories,
     ISessionCredentialStore sessions, CancellationToken cancellationToken) =>
 {
-    if (await sessions.TryGetAsync(cancellationToken) is null) return Results.Unauthorized();
+    if (await sessions.TryGetSignedInUserAsync(cancellationToken) is null) return Results.Unauthorized();
     if (folderId < 0) return Results.BadRequest(new { error = "Folder ID cannot be negative." });
     var rootId = folderId == 0
         ? await entries.GetRootEntryIdAsync(cancellationToken)
@@ -328,17 +405,29 @@ app.MapGet("/api/reports/repository/folders/{folderId:int}/children", async (
     });
 });
 
+app.MapPost("/api/reports/revalidate", async (LaserficheReports.Web.Permissions.ReportRevalidationRequest request,
+    LaserficheReports.Web.Permissions.ReportAuthorizationReceipts receipts, CancellationToken ct) =>
+    await receipts.ValidateAsync(request.AuthorizationReceipt, ct)
+        ? Results.Ok(new { authorized = true })
+        : Results.Json(new { error = "report_authorization_expired", message = "تعذر التحقق من صلاحية التقرير المحفوظ. أعد تنفيذ السؤال." }, statusCode: 403));
+
 app.MapPost("/api/reports/chat", async (ChatQuestion request, ReportsChatService chat,
-    ISessionCredentialStore sessions, CancellationToken cancellationToken) =>
+    ISessionCredentialStore sessions, LaserficheReports.Web.Permissions.ReportAuthorizationReceipts receipts, CancellationToken cancellationToken) =>
 {
-    if (await sessions.TryGetAsync(cancellationToken) is null) return Results.Unauthorized();
+    if (await sessions.TryGetSignedInUserAsync(cancellationToken) is null) return Results.Unauthorized();
     try
     {
-        return Results.Ok(await chat.AskAsync(request.Question, cancellationToken, request.History));
+        var result = await chat.AskAsync(request.Question, cancellationToken,
+            request.History?.Where(turn => turn is null || turn.Role == "user" || turn.Kind == "clarification").ToArray());
+        return Results.Ok(result with { AuthorizationReceipt = await receipts.IssueAsync(result, cancellationToken) });
     }
     catch (UnauthorizedAccessException)
     {
         return Results.Json(new { error = "session_expired", message = "تعذر تجديد جلسة Laserfiche. سجّل الدخول مرة أخرى." }, statusCode: 401);
+    }
+    catch (LaserficheReports.Web.Permissions.PermissionVerificationException verification)
+    {
+        return Results.Ok(verification.Decision.ToChatResult());
     }
     catch (AuditTrailException exception)
     {
@@ -419,7 +508,7 @@ app.MapGet("/api/laserfiche/documents/{entryId:int}/pages/{pageNumber:int}/image
     HttpContext httpContext,
     CancellationToken cancellationToken) =>
 {
-    if (await sessions.TryGetAsync(cancellationToken) is null) return Results.Unauthorized();
+    if (await sessions.TryGetSignedInUserAsync(cancellationToken) is null) return Results.Unauthorized();
     if (entryId <= 0 || pageNumber <= 0)
     {
         return Results.BadRequest(new { error = "Entry ID and page number must be positive." });
@@ -448,9 +537,10 @@ app.MapPost("/api/ingestion/laserfiche/{entryId:int}", async (
     int entryId,
     ILaserficheDocumentIngestionService ingestion,
     ISessionCredentialStore sessions,
+    LaserficheReports.Web.Permissions.ILaserfichePermissionVerifier permissions,
     CancellationToken cancellationToken) =>
 {
-    if (await sessions.TryGetAsync(cancellationToken) is null) return Results.Unauthorized();
+    if (await sessions.TryGetSignedInUserAsync(cancellationToken) is null) return Results.Unauthorized();
     if (entryId <= 0)
     {
         return Results.BadRequest(new { error = "Entry ID must be positive." });
@@ -503,6 +593,12 @@ app.MapPost("/api/ingestion/laserfiche/{entryId:int}", async (
     }
     catch (LaserficheException exception)
     {
+        if (exception.StatusCode is 403 or 404)
+        {
+            var decision = await permissions.VerifyAsync(new(Id: entryId, Kind: "document", OperationForbidden: exception.StatusCode == 403), cancellationToken);
+            return Results.Json(new { error = "entry_verification", message = decision.Message, preservedExistingIndex = true },
+                statusCode: decision.HttpStatusCode);
+        }
         app.Logger.LogWarning(exception, "Laserfiche ingestion failed for Entry {EntryId}.", entryId);
         var operation = exception.Message.Contains("entry fields", StringComparison.OrdinalIgnoreCase)
             ? "entry_fields"

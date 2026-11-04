@@ -5,6 +5,7 @@ using LaserficheReports.Application.DTOs;
 using LaserficheReports.Domain.Entities;
 using LaserficheReports.Domain.Exceptions;
 using Npgsql;
+using LaserficheReports.Web.Permissions;
 
 namespace LaserficheReports.Web;
 
@@ -12,6 +13,7 @@ internal sealed record Evidence(int EntryId, string DocumentName, string Path, i
     float Similarity, string Text, string TextSource);
 internal sealed record ChatResult(string Answer, IReadOnlyList<Evidence> Sources, AnswerScope? Scope = null)
 {
+    public string? AuthorizationReceipt { get; init; }
     public DateTimeOffset GeneratedAt { get; init; } = DateTimeOffset.UtcNow;
     public ReportQuality? Quality { get; init; }
     public int[] RelatedEntryIds { get; init; } = [];
@@ -20,7 +22,8 @@ internal sealed record ChatResult(string Answer, IReadOnlyList<Evidence> Sources
     public string? ClarificationQuestion { get; init; }
 }
 internal sealed record ReportSection(string Title, string Answer, IReadOnlyList<Evidence> Sources, AnswerScope? Scope,
-    int[] RelatedEntryIds, ReportQuality? Quality, bool IsClarification = false, string? ClarificationQuestion = null);
+    int[] RelatedEntryIds, ReportQuality? Quality, bool IsClarification = false, string? ClarificationQuestion = null,
+    string? ResultType = null);
 internal sealed record ReportQuality(string Status, bool QuoteVerification, string SemanticReview,
     string PromptVersion, int ModelCalls);
 internal sealed record IndexedDocument(int EntryId, string Name, string Path, string Status,
@@ -36,15 +39,17 @@ internal sealed class ReportsChatService(
     IHttpClientFactory clients,
     LiveRepositoryReportService liveReports,
     QuestionRouter router, ILaserficheSearchService searches, ILogger<ReportsChatService> logger,
-    ILaserficheDocumentIngestionService? ingestion = null)
+    ILaserficheDocumentIngestionService? ingestion = null, ILaserfichePermissionVerifier? permissions = null, ILaserficheDocumentService? documents = null, IContentAuthorizationScope? contentScope = null)
 {
     internal static async Task RefreshContentAsync(ILaserficheDocumentIngestionService ingestion,
-        IEnumerable<int> entryIds, CancellationToken cancellationToken)
+        IEnumerable<int> entryIds, CancellationToken cancellationToken, ILaserfichePermissionVerifier? permissions = null)
     {
         foreach (var entryId in entryIds.Distinct())
         {
             cancellationToken.ThrowIfCancellationRequested();
-            await ingestion.IngestMetadataAsync(entryId, cancellationToken);
+            try { await ingestion.IngestMetadataAsync(entryId, cancellationToken); }
+            catch (LaserficheException error) when (permissions != null && error.StatusCode is 403 or 404)
+            { throw new PermissionVerificationException(await permissions.VerifyAsync(new(Id: entryId, Kind: "document", OperationForbidden: error.StatusCode == 403), cancellationToken)); }
         }
     }
 
@@ -97,7 +102,7 @@ internal sealed class ReportsChatService(
 
         var repository = await repositories.GetActiveRepositoryAsync(cancellationToken);
         using var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        var requestTimeout = configuration.GetValue<int?>("Reports:RequestTimeoutSeconds") ?? 0;
+        var requestTimeout = configuration.GetValue<int?>("Reports:RequestTimeoutSeconds") ?? 3600;
         if (requestTimeout > 0) budget.CancelAfter(TimeSpan.FromSeconds(requestTimeout));
         cancellationToken = budget.Token;
         if (history is { Length: > 8 } || (history?.Any(t => t is null || t.Role is not ("user" or "assistant") || t.Text is null || t.Text.Length > 3000 ||
@@ -116,6 +121,7 @@ internal sealed class ReportsChatService(
         foreach (var plan in request.Reports)
         {
             ChatResult result;
+            var resultType = plan.ResultType;
             try { result = plan.Operation == "clarify"
                 ? new ChatResult(request.Clarification ?? "وضح معيار هذا التقرير.", [])
                   { IsClarification = true, ClarificationQuestion = request.ClarificationQuestion ?? question }
@@ -124,15 +130,23 @@ internal sealed class ReportsChatService(
             {
                 result = new ChatResult(clarification.Message, []) { IsClarification = true, ClarificationQuestion = question };
             }
+            catch (PermissionVerificationException verification)
+            {
+                result = verification.Decision.ToChatResult();
+                resultType = null;
+            }
             catch (Exception error) when (request.Reports.Length > 1 && !cancellationToken.IsCancellationRequested &&
-                error is AuditTrailException or LaserficheException or NpgsqlException or HttpRequestException or InvalidOperationException or ArgumentException)
+                error is RecycleBinException or AuditTrailException or LaserficheException or NpgsqlException or HttpRequestException or InvalidOperationException or ArgumentException)
             {
                 logger.LogWarning("Report section failed Operation={Operation} ErrorType={ErrorType} Reason={Reason}", plan.Operation, error.GetType().Name,
-                    error is ArgumentException or AuditTrailException ? error.Message : "upstream failure");
-                result = new ChatResult(error is ArgumentException or AuditTrailException ? error.Message : "تعذر إكمال هذا التقرير؛ لم تُعرض نتائج أو أعداد غير مؤكدة.", []);
+                    error is ArgumentException or RecycleBinException or AuditTrailException ? error.Message : "upstream failure");
+                result = new ChatResult(error is ArgumentException or RecycleBinException or AuditTrailException ? error.Message : "تعذر إكمال هذا التقرير؛ لم تُعرض نتائج أو أعداد غير مؤكدة.", []);
+                resultType = null;
             }
+            // The page draws a count card or a table card from the plan's result type (2026-10-28).
             sections.Add(new ReportSection(plan.Title ?? "تقرير", result.Answer, result.Sources, result.Scope,
-                result.RelatedEntryIds, result.Quality, result.IsClarification, result.ClarificationQuestion));
+                result.RelatedEntryIds, result.Quality, result.IsClarification, result.ClarificationQuestion,
+                result.IsClarification ? "clarification" : resultType));
         }
         // Structured facts, counts and tables need no second model call.
         var allSources = new List<Evidence>();
@@ -159,7 +173,7 @@ internal sealed class ReportsChatService(
         var watch = System.Diagnostics.Stopwatch.StartNew();
         if (plan.Operation == "clarify")
             return new ChatResult("حدد اسم الحقل وقيمته كما تظهر في Laserfiche، أو رقم الوثيقة المطلوب تحليلها.", []);
-        if (plan.Operation is not ("audit" or "search" or "folders" or "metadata" or "availability" or "templates" or "schema" or "folder_information" or "recent" or "latest_created" or "latest_modified" or "created" or "modified" or "group" or "content"))
+        if (plan.Operation is not ("audit" or "recycle_bin" or "search" or "folders" or "metadata" or "availability" or "templates" or "schema" or "folder_information" or "recent" or "latest_created" or "latest_modified" or "created" or "modified" or "group" or "content"))
             throw new ArgumentException("لم أتعرف على الطلب. حدد الحقل وقيمته أو رقم الوثيقة والمعلومة المطلوبة.");
         if (plan.Name != null && (plan.Operation == "metadata" || plan.RequireUnique || plan.Content))
         {
@@ -199,7 +213,7 @@ internal sealed class ReportsChatService(
         }
         // Refresh before retrieval, not in the background after returning an old
         // answer. Ingestion checks live access and writes document chunks atomically.
-        await RefreshContentAsync(ingestion, requestedEntries, cancellationToken);
+        await RefreshContentAsync(ingestion, requestedEntries, cancellationToken, permissions);
         logger.LogInformation("Stage=LIVE_CONTENT_REFRESH Documents={Documents}", requestedEntries.Length);
         var hasEntryFilter = requestedEntries.Length > 0;
         var candidateLimit = Math.Clamp(configuration.GetValue<int?>("Reports:CandidateLimit") ?? 240, 24, 1000);
@@ -230,7 +244,11 @@ internal sealed class ReportsChatService(
         await using (var connection = new NpgsqlConnection(OcrConnectionString()))
         {
             await connection.OpenAsync(cancellationToken);
-            await using var command = new NpgsqlCommand(rankedContent ? HybridRetrieval.Sql : DirectOcrSql, connection);
+            var retrievalSql = rankedContent ? HybridRetrieval.Sql : DirectOcrSql;
+            if (contentScope != null) retrievalSql = retrievalSql.Replace("and metadata ->> 'record_type' = 'document-chunk'",
+                "and metadata ->> 'record_type' = 'document-chunk' and metadata ->> 'authorization_scope' = @authorizationScope");
+            await using var command = new NpgsqlCommand(retrievalSql, connection);
+            if (contentScope != null) command.Parameters.AddWithValue("authorizationScope", contentScope.Scope);
             command.CommandTimeout = Math.Clamp(configuration.GetValue<int?>("Reports:SearchTimeoutSeconds") ?? 20, 5, 30);
             command.Parameters.Add(new NpgsqlParameter("embedding", NpgsqlTypes.NpgsqlDbType.Text)
                 { Value = (object?)literal ?? DBNull.Value });
@@ -260,12 +278,27 @@ internal sealed class ReportsChatService(
         }
 
         logger.LogInformation("Stage=SUPABASE Tool=GetOcrContent DurationMs={DurationMs} Passages={Passages}", watch.ElapsedMilliseconds, candidates.Count);
-        var authorized = liveSelected;
-        var candidateIds = candidates.Select(c => c.EntryId).Distinct().Where(id => !authorized.ContainsKey(id)).Take(evidenceLimit).ToArray();
+        // Recheck even entries selected before ingestion: access may have changed during OCR.
+        // Stored snippets and a successful search are never an authorization cache.
+        var authorized = new Dictionary<int, LFEntry>();
+        var candidateIds = candidates.Select(c => c.EntryId).Distinct().Take(evidenceLimit).ToArray();
         var currentEntries = new LFEntry?[candidateIds.Length];
         await Parallel.ForEachAsync(Enumerable.Range(0, candidateIds.Length), new ParallelOptions { MaxDegreeOfParallelism = 4, CancellationToken = cancellationToken }, async (index, token) =>
         {
-            try { currentEntries[index] = await entries.GetEntryAsync(candidateIds[index], token); }
+            try
+            {
+                var current = await entries.GetEntryAsync(candidateIds[index], token);
+                await entries.GetEntryFieldsAsync(candidateIds[index], token);
+                // Cached OCR never substitutes for current content permission. Verify every source page.
+                if (documents != null)
+                    foreach (var page in candidates.Where(c => c.EntryId == candidateIds[index]).Select(c => c.PageNumber).Distinct())
+                    {
+                        using var content = page is > 0
+                            ? await documents.GetPageImageAsync(candidateIds[index], page.Value, token)
+                            : await documents.StreamEdocAsync(candidateIds[index], token);
+                    }
+                currentEntries[index] = current;
+            }
             catch (LaserficheException error) when (error.StatusCode is 403 or 404) { }
         });
         foreach (var current in currentEntries.OfType<LFEntry>().Where(e => e.EntryType == LFEntryType.Document)) authorized[current.Id] = current;

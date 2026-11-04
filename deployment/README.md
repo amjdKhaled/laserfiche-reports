@@ -1,22 +1,22 @@
 # تشغيل تقارير ليزرفيش محليًا ونقلها
 
-**الموديل الافتراضي: `gpt-oss:20b`.** للنقل الأسهل إلى Windows دون SDK أو
+**الموديل الافتراضي: `qwen3-vl:8b-instruct`، وخدمة الذكاء على المنفذ `5050`.** للنقل الأسهل إلى Windows دون SDK أو
 Visual Studio على الجهاز الثاني، استخدم [حزمة النقل](TRANSFER.md):
 `deployment/windows/build-package.ps1` ثم فك ZIP وافتح `Install.cmd`.
 الحزمة تفحص تحميل النموذج الحقيقي قبل تسجيل التشغيل التلقائي.
 
 ## Windows بدون Visual Studio
 
-التثبيت مرة واحدة يحتاج .NET 8 SDK وPython 3.11 x64 وOllama المثبت عندك.
+التثبيت مرة واحدة يحتاج .NET 8 SDK وPython 3.11 أو 3.12 أو 3.13 (x64) وOllama المثبت عندك.
 بعده يعمل البرنامج المنشور بدون Visual Studio أو dotnet run، ويبدأ تلقائيًا
 عند دخول **نفس مستخدم Windows**. هذه مهمة بدء دخول، وليست خدمة تعمل قبل تسجيل الدخول.
 
-1. أوقف تشغيل الويب و`start.ps1` القديمين بـ Ctrl+C لتفريغ المنافذ 5187 و8766.
+1. أوقف تشغيل الويب و`start.ps1` القديمين بـ Ctrl+C لتفريغ المنافذ 5187 و5050.
 2. تأكد أن نماذج Ollama التي تستخدمها موجودة وأن Laserfiche وSupabase يعملان.
 3. من مجلد المشروع:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\deployment\windows\install.ps1 -Model gpt-oss:20b
+powershell -ExecutionPolicy Bypass -File .\deployment\windows\install.ps1 -Model qwen3-vl:8b-instruct
 ```
 
 التثبيت في `%LOCALAPPDATA%\LaserficheReports`. ينسخ إعدادات `appsettings.Local.json`
@@ -35,6 +35,46 @@ powershell -ExecutionPolicy Bypass -File .\deployment\windows\unregister.ps1
 
 السكربت يحفظ الملفات والبيانات؛ لا يزيل Laserfiche أو Supabase أو نماذج Ollama.
 التثبيت يحتاج أن تسمح سياسة Windows بتسجيل Scheduled Task للمستخدم الحالي.
+
+## الاستضافة في IIS وزرار Reports في Web Client
+
+بعد `install.ps1`، شغّل من PowerShell **كمسؤول** وبنفس مستخدم Windows:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\deployment\windows\install-iis.ps1
+```
+
+ينشر السكربت الويب في `C:\LaserficheReports\web` وينشئ موقع IIS `LaserficheReports`
+على `https://<اسم الجهاز>:5188` بشهادة المنفذ 443 نفسها (مثل Dashboard). تبقى Scheduled Task
+مسؤولة عن خدمة الذكاء على `127.0.0.1:5050` وOllama فقط (`--no-web`). ويضيف زر
+**Reports** إلى شريط Laserfiche Web Client عبر `deploy-webclient-button.ps1`.
+يقبل التطبيق الطلبات من جهاز الخادم نفسه فقط، وأي جهاز آخر يتلقى 403.
+
+**الدخول الموحد LFDS (مثل Dashboard):** شغّل من PowerShell كمسؤول:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\deployment\windows\enable-lfds-sso.ps1
+```
+
+يضيف السكربت `https://<اسم الجهاز>:5188/login/Callback` إلى `WhitelistedRedirectUris` في إعدادات
+Repository API ويعيد تدوير app pool الخاص بها، ثم يضبط في `appsettings.Local.json` القيم
+`AuthenticationMode = LfdsSso` و`ApplicationBaseUrl` و`Sso:LfdsBaseUrl`، ويعيد نشر زر Reports.
+يفتح الزر `/launch?repository=<المستودع المفتوح>`، فيدخل Reports بمستخدم LFDS نفسه دون كلمة مرور
+عبر `/LFRepositoryAPI/v2/Authorize` (Authorization Code + PKCE). جلسة SSO لا تخزن كلمة مرور، وعند
+انتهاء الرمز تُعاد عملية الدخول الموحد ولا يُستخدم حساب الخدمة. يأخذ كل ملف نسخة احتياطية قبل تعديله،
+و`-Disable` يعيد نموذج كلمة المرور. إذا تغيّر اسم الجهاز أو المنفذ فأعد تشغيل السكربت.
+
+**السجلات والمهل:** يكتب الويب سجلًا يوميًا في `C:\ProgramData\LaserficheReports\logs\web-yyyyMMdd.log`
+(يُحتفظ به 14 يومًا)، وخدمة الذكاء في `%LOCALAPPDATA%\LaserficheReports\logs\services.log`. يغلق Repository API
+جلسة Laserfiche الخاملة بعد `SessionIdleTimeout` (15 دقيقة افتراضيًا)؛ لذلك تُبقي الصفحة المفتوحة الجلسة حيّة
+كل 5 دقائق ما دام المستخدم نشطًا خلال الساعة الأخيرة، وإن أُغلقت الجلسة يُعاد فتحها تلقائيًا (أو يُعاد الدخول
+الموحد ويُرسل السؤال مرة أخرى). مهلة تحليل السؤال 180 ثانية (`--planner-timeout-seconds` في `supervise.py`)،
+ومهلة الطلب كاملًا 600 ثانية (`Reports:RequestTimeoutSeconds`).
+
+**للتحديث بعد `git pull`:** لا يكفي `iisreset` وحده، لأن IIS يشغّل النسخة المنشورة وليس
+كود المشروع. أعد تشغيل `install-iis.ps1`، أو انشر الويب في مجلد مؤقت وانسخه فوق
+`C:\LaserficheReports\web` بعد وضع `app_offline.htm` فيه، مع إبقاء `appsettings.Local.json` كما هو.
+إن لم يكن على `dotnet` الموجود في PATH أي SDK فاستخدم `C:\Program Files (x86)\dotnet\dotnet.exe`.
 
 ## Docker Desktop / Docker Engine
 
@@ -60,7 +100,7 @@ Windows استخدم `host.docker.internal` مع المنفذ المنشور ا�
 
 ```powershell
 docker compose up -d --build
-docker compose exec reports ollama pull gpt-oss:20b
+docker compose exec reports ollama pull qwen3-vl:8b-instruct
 docker compose exec reports ollama pull nomic-embed-text-v2-moe
 ```
 

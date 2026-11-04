@@ -1,0 +1,15 @@
+{
+  "description": "Business words of the repository owner that are no field value. Each term adds its condition when the question uses one of its words (Arabic spelling is normalized; a negated word is left to the planner). A term whose field the repository lacks is ignored.",
+  "terms": [
+    {
+      "words": ["مؤرشفة", "مؤرشف", "مؤرشفين", "مؤرشفات", "اتأرشفت", "اتأرشف", "تمت أرشفتها", "تم أرشفتها", "archived"],
+      "condition": {"field": "هل تريد ارشفة الوثيقة؟", "operator": "equals", "value": "نعم"},
+      "note": "قرار صاحب المستودع 2026-10-29: الوثيقة مؤرشفة عندما يكون «هل تريد ارشفة الوثيقة؟» = «نعم» (كلها في \\المركز الوطني للوثائق و المحفوظات\\مركز الوثائق والمحفوظات)."
+    },
+    {
+      "words": ["القرارات", "قرارات", "decisions"],
+      "condition": {"field": "template", "operator": "equals", "value": "القرار"},
+      "note": "«القرارات» = وثائق قالب «القرار» (2026-10-29: «القرارات المؤرشفة» رجعت مرة من غير القالب). الشرط على القالب يُتجاهل لو القالب مش في المستودع."
+    }
+  ]
+}

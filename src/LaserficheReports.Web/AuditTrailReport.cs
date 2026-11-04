@@ -71,16 +71,17 @@ internal static class AuditTrailReport
                 "userName" => e.UserName, "eventType" => e.EventType, "outcome" => e.Outcome,
                 _ => e.EntryId?.ToString(CultureInfo.InvariantCulture) ?? "غير مرتبط بوثيقة" };
             var groups = selected.GroupBy(Key).OrderByDescending(g => g.Count()).ThenBy(g => g.Key, StringComparer.Ordinal).ToArray();
+            var shownGroups = plan.Shown(groups);
             table = "| " + query.GroupBy + " | عدد الأحداث |\n| --- | --- |\n" +
-                string.Join("\n", groups.Skip((plan.Page - 1) * plan.Limit).Take(plan.Limit).Select(g => $"| {Cell(query.GroupBy == "eventType" ? Label(g.Key) + " (" + g.Key + ")" : g.Key)} | {g.Count()} |")) +
-                $"\n\n| إجمالي المجموعات | الصفحة |\n| --- | --- |\n| {groups.Length} | {plan.Page} |\n";
+                string.Join("\n", shownGroups.Select(g => $"| {Cell(query.GroupBy == "eventType" ? Label(g.Key) + " (" + g.Key + ")" : g.Key)} | {g.Count()} |")) +
+                "\n\n" + plan.ShownFooter("إجمالي المجموعات", groups.Length, shownGroups.Length) + "\n";
         }
         else
         {
-            var rows = selected.OrderByDescending(e => e.EventTime).Skip((plan.Page - 1) * plan.Limit).Take(plan.Limit);
+            var rows = plan.Shown(selected.OrderByDescending(e => e.EventTime));
             table = "| وقت الحدث (الرياض) | العملية | المستخدم | رقم الإدخال | الاسم وقت الحدث | النتيجة المسجلة |\n| --- | --- | --- | --- | --- | --- |\n" +
                 string.Join("\n", rows.Select(e => $"| {TimeZoneInfo.ConvertTimeBySystemTimeZoneId(e.EventTime, "Asia/Riyadh"):yyyy-MM-dd HH:mm:ss} | {Cell(Label(e.EventType))} | {Cell(e.UserName)} | {e.EntryId?.ToString() ?? "—"} | {Cell(e.EntryName)} | {Cell(e.Outcome)} |")) +
-                $"\n\n| إجمالي الأحداث المطابقة داخل التقرير | الصفحة |\n| --- | --- |\n| {selected.Length} | {plan.Page} |\n";
+                "\n\n" + plan.ShownFooter("إجمالي الأحداث المطابقة داخل التقرير", selected.Length, rows.Length) + "\n";
         }
         table += "\n\n| نطاق البيانات وحدودها | القيمة |\n| --- | --- |\n" +
             $"| المصدر | {Cell(data.ScopeDescription)} |\n| وقت اكتمال التصدير UTC | {data.ExportedAt:O} |\n" +

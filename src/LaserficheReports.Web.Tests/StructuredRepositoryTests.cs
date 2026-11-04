@@ -22,6 +22,19 @@ public class StructuredRepositoryTests
     }
 
     [Fact]
+    public void DocumentsWithoutATemplateExcludeEveryRepositoryTemplate()
+    {
+        string Compile(string operation) => StructuredRepositoryQuery.Compile(
+            new RepositoryFilter(Field: "template", Operator: operation), [], Today, templates: ["القرار", "General"]);
+        Assert.Equal("({LF:Name=\"*\", Type=D} - ({[القرار]:[]} | {[General]:[]}))", Compile("is_empty"));
+        Assert.Equal("({[القرار]:[]} | {[General]:[]})", Compile("is_not_empty"));
+        Assert.Equal("({LF:Name=\"*\", Type=D} - {[القرار]:[]})", StructuredRepositoryQuery.Compile(
+            new RepositoryFilter(Field: "template", Operator: "not_equals", Value: "القرار"), [], Today, templates: ["القرار", "General"]));
+        Assert.Throws<ArgumentException>(() => StructuredRepositoryQuery.Compile(
+            new RepositoryFilter(Field: "template", Operator: "is_empty"), [], Today));
+    }
+
+    [Fact]
     public void CalendarPeriodsCoverTheWholeYearMonthAndLeapDay()
     {
         string Compile(string operation, CalendarPeriod period) => StructuredRepositoryQuery.Compile(

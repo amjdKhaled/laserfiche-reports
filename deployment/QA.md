@@ -98,7 +98,7 @@ and live repository results remain separate acceptance work.
 Confirm the installed planner version:
 
 ```powershell
-(Invoke-RestMethod http://127.0.0.1:8766/health).plannerVersion
+(Invoke-RestMethod http://127.0.0.1:5050/health).plannerVersion
 ```
 
 Expected: `live-plan-v7.5`.

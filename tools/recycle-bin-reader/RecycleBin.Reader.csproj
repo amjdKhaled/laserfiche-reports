@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType><TargetFramework>net48</TargetFramework><PlatformTarget>x64</PlatformTarget>
+    <LangVersion>latest</LangVersion><AssemblyName>LaserficheReports.RecycleBin</AssemblyName>
+    <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects><CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Laserfiche.SDK.RepositoryAccess" Version="12.0.2608.7" GeneratePathProperty="true" />
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies.net48" Version="1.0.3" PrivateAssets="all" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+  </ItemGroup>
+  <Target Name="CopySdkLicense" AfterTargets="Build">
+    <Error Condition="'$(PkgLaserfiche_SDK_RepositoryAccess)' == ''" Text="SDK package path is missing. Restore packages and re-evaluate the reader project before building." />
+    <Copy SourceFiles="$(PkgLaserfiche_SDK_RepositoryAccess)/EULA.md" DestinationFiles="$(TargetDir)Laserfiche-SDK-EULA.md" />
+  </Target>
+</Project>

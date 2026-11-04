@@ -86,6 +86,7 @@ try {
         }
     }
     Invoke-Checked dotnet @('publish',"$source\src\LaserficheReports.Web",'-c','Release','-r','win-x64','--self-contained','true','-o',"$payload\web","-p:Version=$Version")
+    & "$source\deployment\windows\test-permission-bridge.ps1" -WebPath "$payload\web"
     Invoke-Checked dotnet @('publish',"$source\installer\Reports.Service",'-c','Release','-r','win-x64','--self-contained','true','-o',$payload,"-p:Version=$Version")
     foreach ($project in @('Reports.BA','Reports.SafetyActions')) { Invoke-Checked dotnet @('build',"$source\installer\$project",'-c','Release') }
     Copy-Item "$source\installer\Reports.BA\bin\Release\net48\*" $baStage -Recurse -Force
@@ -104,7 +105,7 @@ try {
     Invoke-Checked $python @('-m','PyInstaller','--noconfirm','--clean','--onedir','--name','LaserficheReports.Planner',
         '--distpath',"$stage\frozen",'--workpath',"$stage\pyinstaller-work",'--specpath',$stage,
         '--paths',"$source\tools\reports-graph",'--collect-all','langgraph','--collect-all','langchain_core',
-        '--collect-all','langchain_ollama','--copy-metadata','langchain-core','--copy-metadata','langchain-ollama',
+        '--add-data',"$source\tools\reports-graph\glossary.json;.",'--collect-all','langchain_ollama','--copy-metadata','langchain-core','--copy-metadata','langchain-ollama',
         "$source\tools\reports-graph\server.py")
     Copy-Item "$stage\frozen\LaserficheReports.Planner\*" "$payload\planner" -Recurse -Force
     # These can be produced by a developer publish. Exclude them before harvesting.

@@ -59,7 +59,7 @@ internal static class ReportLinks
             ISessionCredentialStore sessions, ILaserficheSearchService searches, ILaserficheRepositoryService repositoryService,
             IConfiguration config, ILoggerFactory loggerFactory, CancellationToken ct) =>
         {
-            if (await sessions.TryGetAsync(ct) is null) return Results.Unauthorized();
+            if (await sessions.TryGetSignedInUserAsync(ct) is null) return Results.Unauthorized();
             var repository = await repositories.GetActiveRepositoryAsync(ct);
             if (!string.Equals(request.RepositoryId, repository.RepositoryId, StringComparison.OrdinalIgnoreCase))
                 return Results.Conflict(new { error = "افتح المستودع الخاص بالتقرير أولًا." });

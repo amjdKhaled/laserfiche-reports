@@ -67,35 +67,62 @@
   --isb-shadow-sm: 0 2px 10px rgba(0, 0, 0, 0.18);
   --isb-card-shadow: 0 1px 2px rgba(20, 38, 51, 0.06), 0 8px 24px -16px rgba(20, 38, 51, 0.25);
 
-  /* ---------- الزخرفة (النجمة الثمانية) ---------- */
-  /* نفس assets/header-pattern-tile.svg بس جوه الـ CSS، عشان يشتغل من أي فولدر */
+  /* ---------- خلفية الهيدر (v2: تدرّج + نقط) ---------- */
+  /* نفس isb-header.css و assets/header-background-gradient-dots.svg */
+  --isb-hdr-gradient: linear-gradient(100deg, #0B3954 55%, #14618A);
+  --isb-hdr-dots: radial-gradient(rgba(255, 255, 255, 0.12) 1.2px, transparent 1.4px);
+  --isb-hdr-dots-size: 14px 14px;
+  --isb-hdr-dots-fade: linear-gradient(to right, transparent, #000);
+
+  /* ---------- الزخرفة القديمة (النجمة الثمانية) ---------- */
+  /* اتشالت من الهيدر في v2، ولسه موجودة هنا عشان صفحات المعاينات القديمة
+     نفس assets/header-pattern-tile.svg بس جوه الـ CSS، عشان يشتغل من أي فولدر */
   --isb-pattern: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2264%22%20height%3D%2264%22%20viewBox%3D%220%200%2064%2064%22%3E%3Cg%20fill%3D%22none%22%20stroke%3D%22%23FFFFFF%22%20stroke-opacity%3D%220.10%22%20stroke-width%3D%221.3%22%3E%3Crect%20x%3D%2220%22%20y%3D%2220%22%20width%3D%2224%22%20height%3D%2224%22%2F%3E%3Crect%20x%3D%2220%22%20y%3D%2220%22%20width%3D%2224%22%20height%3D%2224%22%20transform%3D%22rotate%2845%2032%2032%29%22%2F%3E%3C%2Fg%3E%3C%2Fsvg%3E");
   --isb-pattern-size: 64px 64px;
 }
 
 /* =====================================================================
-   الهيدر الجاهز: كحلي + زخرفة النجمة + خط ذهبي تحت
+   الهيدر الجاهز (v2): تدرّج من الكحلي للأزرق + نقط بيضا خفيفة + خط ذهبي تحت
+   (نفس isb-header.css، بس بالمتغيرات. لو المكان مش بيقبل var() زي Laserfiche استخدم isb-header.css)
    <header class="isb-hdr">
      <div class="isb-logo"><img src="logo.png" alt="isb"></div>
      <div class="isb-titles"><div class="isb-title">Title</div>
-       <div class="isb-meta"><span>No.</span><span class="isb-pill">Status</span></div></div>
+       <div class="isb-meta"><span class="isb-no">No.</span><span class="isb-pill">Status</span></div></div>
      <div class="isb-title-ar">العنوان</div>
    </header>
    ===================================================================== */
 .isb-hdr {
+  position: relative;
+  overflow: hidden;
   display: flex;
   align-items: center;
   gap: 24px;
   padding: 26px 28px 24px;
   background-color: var(--isb-deep-sea);
-  background-image: var(--isb-pattern);
-  background-size: var(--isb-pattern-size);
-  background-position: right top;
+  background-image: var(--isb-hdr-gradient);
   border-bottom: 4px solid var(--isb-gold);
-  border-radius: var(--isb-radius) var(--isb-radius) 0 0;
+  border-radius: var(--isb-radius-lg) var(--isb-radius-lg) 0 0;
   color: var(--isb-on-dark);
+  direction: ltr;
   font-family: var(--isb-font);
 }
+.isb-hdr::before,
+.isb-dark-surface::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 45%;
+  right: 0;
+  background-image: var(--isb-hdr-dots);
+  background-size: var(--isb-hdr-dots-size);
+  -webkit-mask-image: var(--isb-hdr-dots-fade);
+  mask-image: var(--isb-hdr-dots-fade);
+  pointer-events: none;
+  z-index: 0;
+}
+.isb-hdr > *,
+.isb-dark-surface > * { position: relative; z-index: 1; }
 .isb-logo {
   flex: 0 0 auto;
   background: #FFFFFF;
@@ -106,16 +133,21 @@
 }
 .isb-logo img { height: 64px; width: auto; display: block; }
 .isb-titles { flex: 1 1 auto; min-width: 0; }
-.isb-title { font-size: 22px; font-weight: 600; line-height: 1.3; }
-.isb-title-ar { font-size: 26px; font-weight: 600; line-height: 1.3; direction: rtl; }
+.isb-title { font-size: 24px; font-weight: 700; line-height: 1.3; }
+.isb-title-ar { flex: 0 0 auto; font-size: 28px; font-weight: 700; line-height: 1.3; direction: rtl; text-align: right; }
 .isb-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 8px; font-size: 13px; color: var(--isb-on-dark-muted); font-weight: 500; }
 .isb-pill { padding: 2px 11px; border-radius: 999px; font-size: 12.5px; font-weight: 500; background: var(--isb-on-dark-pill); color: #FFFFFF; }
+@media (max-width: 760px) {
+  .isb-hdr { flex-wrap: wrap; padding: 20px 18px; }
+  .isb-title-ar { width: 100%; text-align: left; font-size: 22px; }
+}
 
-/* أي مساحة كحلي تانية (شريط جانبي، بانر) تاخد نفس الزخرفة */
+/* أي مساحة كحلي تانية (شريط جانبي، بانر) تاخد نفس خلفية الهيدر، من غير الخط الذهبي */
 .isb-dark-surface {
+  position: relative;
+  overflow: hidden;
   background-color: var(--isb-deep-sea);
-  background-image: var(--isb-pattern);
-  background-size: var(--isb-pattern-size);
+  background-image: var(--isb-hdr-gradient);
   color: var(--isb-on-dark);
 }
 

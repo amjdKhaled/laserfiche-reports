@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="3200" height="400" viewBox="0 0 3200 400">
+  <!-- خلفية عريضة v2 (تدرّج + نقط) من غير الخط الذهبي، للبانرات أو الشريط الجانبي -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="0" gradientTransform="rotate(10 0.5 0.5)">
+      <stop offset="0.55" stop-color="#0B3954"/>
+      <stop offset="1" stop-color="#14618A"/>
+    </linearGradient>
+    <pattern id="dots" width="28" height="28" patternUnits="userSpaceOnUse">
+      <circle cx="14" cy="14" r="2.6" fill="#FFFFFF" fill-opacity="0.12"/>
+    </pattern>
+    <linearGradient id="fade" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="1"/>
+    </linearGradient>
+    <mask id="m">
+      <rect x="1440" width="1760" height="400" fill="url(#fade)"/>
+    </mask>
+  </defs>
+  <rect width="3200" height="400" fill="url(#bg)"/>
+  <rect x="1440" width="1760" height="400" fill="url(#dots)" mask="url(#m)"/>
+</svg>

@@ -60,7 +60,7 @@ an existing document in this mode updates its metadata evidence without
 deleting its existing OCR page chunks.
 
 1. Run local Supabase and Ollama. Ensure `nomic-embed-text-v2-moe` and
-   `gpt-oss:20b` are installed in Ollama.
+   `qwen3-vl:8b-instruct` are installed in Ollama.
 2. Copy `src/LaserficheReports.Web/appsettings.Local.example.json` to
    `src/LaserficheReports.Web/appsettings.Local.json` and enter your existing
    Laserfiche and local PostgreSQL details. Do not commit the private file.
@@ -75,7 +75,7 @@ powershell -ExecutionPolicy Bypass -File .\tools\reports-graph\setup.ps1
 5. In a dedicated PowerShell window start the answer graph:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\reports-graph\start.ps1 -Model gpt-oss:20b
+powershell -ExecutionPolicy Bypass -File .\tools\reports-graph\start.ps1 -Model qwen3-vl:8b-instruct
 ```
 
 6. In another PowerShell window start .NET:
@@ -180,7 +180,7 @@ Set the local repository and PostgreSQL connection in
     "EmbeddingDimensions": 768,
     "ChunkSize": 1200,
     "OcrCorrectionEnabled": true,
-    "OcrCorrectionModel": "qwen2.5:7b",
+    "OcrCorrectionModel": "qwen3-vl:8b-instruct",
     "TimeoutSeconds": 600,
     "ChunkOverlap": 80
   }
@@ -396,7 +396,7 @@ table headings, currency/units, workflow execution, filenames versus page conten
 incomplete multipart answers and comparisons across both requested documents.
 
 ```powershell
-.\tools\reports-graph\.venv\Scripts\python.exe .\tools\reports-graph\evaluate.py --model gpt-oss:20b
+.\tools\reports-graph\.venv\Scripts\python.exe .\tools\reports-graph\evaluate.py --model qwen3-vl:8b-instruct
 ```
 
 The evaluator verifies expected status, required/allowed references and quotation contents;
@@ -408,7 +408,7 @@ The v2 pipeline adds schema-constrained answer composition, a separate semantic
 review, query-focused source windows, and hybrid lexical/vector retrieval with RRF.
 Read [AI reports architecture](docs/AI_REPORTS_ARCHITECTURE.md) for implementation,
 primary research sources, limits and local evaluation instructions. Restart both
-the web application and LangGraph after updating; `/health` on port 8766 reports
+the web application and LangGraph after updating; `/health` on port 5050 reports
 `promptVersion: reports-grounded-v2.1`. Semantic review is a model check, not a guarantee.
 
 The extraction prompt preserves negation, exceptions, conditions and units, and
@@ -773,7 +773,7 @@ To capture a real failed request, restart **both** the web application (with a b
 and the graph, reproduce the question, and collect the local planning diagnostic:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\reports-graph\start.ps1 -Model gpt-oss:20b -TimeoutSeconds 0 -PlannerTimeoutSeconds 0 -PlannerTracePath .\logs\planner-trace.jsonl
+powershell -ExecutionPolicy Bypass -File .\tools\reports-graph\start.ps1 -Model qwen3-vl:8b-instruct -TimeoutSeconds 0 -PlannerTimeoutSeconds 0 -PlannerTracePath .\logs\planner-trace.jsonl
 # After reproducing the question, run in another terminal at the repository root:
 powershell -ExecutionPolicy Bypass -File .\tools\reports-graph\diagnose.ps1
 ```

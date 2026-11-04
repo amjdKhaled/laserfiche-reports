@@ -72,7 +72,8 @@ internal static class StructuredRepositoryQuery
     internal static bool IsDate(string type) => type.Equals("Date", StringComparison.OrdinalIgnoreCase) || type.Equals("DateTime", StringComparison.OrdinalIgnoreCase);
     internal static bool IsNumber(string type) => new[] { "Integer", "LongInteger", "Number", "Decimal", "Double", "ShortInteger", "Long", "Short" }.Contains(type, StringComparer.OrdinalIgnoreCase);
 
-    internal static string Compile(RepositoryFilter filter, IEnumerable<LFFieldDefinition> schema, DateOnly today, int depth = 0, IEnumerable<string>? tags = null)
+    internal static string Compile(RepositoryFilter filter, IEnumerable<LFFieldDefinition> schema, DateOnly today, int depth = 0, IEnumerable<string>? tags = null,
+        IEnumerable<string>? templates = null)
     {
         if (depth > 5) throw new ArgumentException("الفلاتر متداخلة أكثر من الحد المسموح.");
         if (filter.Conditions is { } conditions)
@@ -80,7 +81,7 @@ internal static class StructuredRepositoryQuery
             if (filter.Logic is not ("and" or "or") || conditions.Length is < 1 or > 20 || filter.Field != null || filter.Operator != null ||
                 filter.Value != null || filter.Upper != null || filter.Relative != null || filter.UpperRelative != null || filter.Tag != null || filter.Period != null)
                 throw new ArgumentException("مجموعة شروط غير صالحة.");
-            return "(" + string.Join(filter.Logic == "and" ? " & " : " | ", conditions.Select(c => Compile(c, schema, today, depth + 1, tags))) + ")";
+            return "(" + string.Join(filter.Logic == "and" ? " & " : " | ", conditions.Select(c => Compile(c, schema, today, depth + 1, tags, templates))) + ")";
         }
         if (filter.Tag is not null)
         {
@@ -139,6 +140,24 @@ internal static class StructuredRepositoryQuery
                 return number.ToString(CultureInfo.InvariantCulture);
             }
             return LiveRepositoryReportService.Term(literal);
+        }
+        if (field == "template" && filter.Operator is "is_empty" or "is_not_empty")
+        {
+            // «الوثائق اللي مالهاش كرت فهرسة» (2026-10-29): documents minus every template in the repository, with the
+            // same {[template]:[]} clause a template report uses; no separate "no template" syntax is assumed.
+            if (filter.Value != null || filter.Relative != null || filter.Upper != null || filter.UpperRelative != null)
+                throw new ArgumentException("فحص القالب لا يأخذ قيمة.");
+            var names = templates?.Distinct(StringComparer.Ordinal).ToArray() ?? throw new ArgumentException("تعريفات القوالب غير متاحة.");
+            if (names.Length == 0) return filter.Operator == "is_empty" ? "{LF:Name=\"*\", Type=D}" : "{LF:ID=0}";
+            var any = "(" + string.Join(" | ", names.Select(t => $"{{[{LiveRepositoryReportService.Term(t, true)}]:[]}}")) + ")";
+            return filter.Operator == "is_empty" ? $"({{LF:Name=\"*\", Type=D}} - {any})" : any;
+        }
+        if (field == "template" && filter.Operator == "not_equals")
+        {
+            // «قالبها مش القرار» includes documents without a template, so it is a set difference, not TemplateName<>.
+            var excluded = templates?.SingleOrDefault(t => ReportSupport.MatchKey(t) == ReportSupport.MatchKey(filter.Value ?? ""))
+                ?? throw new ArgumentException("القالب المطلوب غير موجود في المستودع الحالي.");
+            return $"({{LF:Name=\"*\", Type=D}} - {{[{LiveRepositoryReportService.Term(excluded, true)}]:[]}})";
         }
         if (filter.Operator is "is_empty" or "is_not_empty")
         {

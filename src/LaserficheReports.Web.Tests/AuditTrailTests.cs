@@ -8,6 +8,8 @@ using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
+using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.Http;
 
 namespace LaserficheReports.Web.Tests;
 
@@ -112,6 +114,33 @@ public class AuditTrailTests
         Assert.Equal(1, fixture.Exports);
     }
     [Fact]
+    public async Task RepositoryLoginCanUseSeparateSessionWindowsAuditIdentity()
+    {
+        using var fixture = new Fixture();
+        fixture.Credentials = new("repositoryAdmin", "lf-password");
+        var context = new DefaultHttpContext { Session = new AuditSetupTests.MemorySession() };
+        var store = new AuditSessionCredentials(new HttpContextAccessor { HttpContext = context }, new EphemeralDataProtectionProvider());
+        store.Store("DOMAIN\\auditor", "windows-password");
+        var rows = await fixture.Source(store).ReadAsync(default);
+        Assert.Equal(2, rows.Events.Count);Assert.Equal("auditor", fixture.Identity!.UserName);
+        Assert.Equal("DOMAIN", fixture.Identity.Domain);Assert.Equal("repositoryAdmin", fixture.Credentials.Username);
+    }
+    [Fact]
+    public async Task DisabledConnectorDoesNotClaimLaserficheAuditingIsDisabled()
+    {
+        using var fixture = new Fixture();
+        var source = new AuditTrailSource(new ConfigurationBuilder().Build(), fixture, fixture, NullLogger<AuditTrailSource>.Instance);
+        Assert.Contains("disabled", JsonSerializer.Serialize(await source.CatalogAsync(default)));
+        Assert.Empty(fixture.Requests);
+    }
+    [Fact]
+    public async Task LateNetworkShareVisibilityIsRetriedWithoutExportingAgain()
+    {
+        using var fixture = new Fixture();fixture.DelayFile = true;
+        var result = await fixture.Source().ReadAsync(default);
+        Assert.Equal(2, result.Events.Count);Assert.Equal(1, fixture.Exports);
+    }
+    [Fact]
     public void UnsupportedSelectorsAndMixedOutputFailValidation()
     {
         Assert.Throws<ArgumentException>(() => new QueryPlan("search", Audit: new()).ValidateIntent());
@@ -127,11 +156,11 @@ public class AuditTrailTests
         public LaserficheCredential? Credentials = new("ACME\\alice", "secret");
         public NetworkCredential? Identity;
         public int Exports, StatusChecks;
-        public bool FailExport, PascalCase, WriteFile = true;
+        public bool FailExport, PascalCase, DelayFile, WriteFile = true;
         public HttpStatusCode ResponseCode = HttpStatusCode.OK;
         public List<HttpRequestMessage> Requests = [];
         public Fixture() => Directory.CreateDirectory(Root);
-        public AuditTrailSource Source()
+        public AuditTrailSource Source(AuditSessionCredentials? credentials = null)
         {
             var config = new Dictionary<string, string?> {
                 ["AuditTrail:Enabled"] = "true", ["AuditTrail:BaseUrl"] = "https://audit.example/AuditTrail",
@@ -140,7 +169,7 @@ public class AuditTrailTests
                 ["AuditTrail:Repositories:Repo:ExportDirectory"] = Root,
                 ["AuditTrail:Repositories:Repo:ScopeDescription"] = "Saved report test window" };
             foreach (var column in Mapping().Columns) config["AuditTrail:Repositories:Repo:Columns:" + column.Key] = column.Value;
-            var source = new AuditTrailSource(new ConfigurationBuilder().AddInMemoryCollection(config).Build(), this, this, NullLogger<AuditTrailSource>.Instance);
+            var source = new AuditTrailSource(new ConfigurationBuilder().AddInMemoryCollection(config).Build(), this, this, NullLogger<AuditTrailSource>.Instance, credentials);
             source.HandlerFactory = credentials => { Identity = credentials; return new Handler(this); };
             return source;
         }
@@ -165,7 +194,11 @@ public class AuditTrailTests
                 {
                     statusChecks++; fixture.StatusChecks++;
                     var state = fixture.FailExport ? 5 : statusChecks == 1 ? 1 : 2;
-                    if (state == 2 && fixture.WriteFile) File.WriteAllText(Path.Combine(fixture.Root, filename!), Csv);
+                    if (state == 2 && fixture.WriteFile) {
+                        var path = Path.Combine(fixture.Root, filename!);
+                        if (fixture.DelayFile) _ = Task.Run(async () => { await Task.Delay(80); await File.WriteAllTextAsync(path, Csv); });
+                        else File.WriteAllText(path, Csv);
+                    }
                     body = new { State = state, Completion = state == 2 ? 100 : 50 };
                 }
                 return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = JsonContent.Create(body, body.GetType(), options: new JsonSerializerOptions { PropertyNamingPolicy = fixture.PascalCase ? null : JsonNamingPolicy.CamelCase }) });

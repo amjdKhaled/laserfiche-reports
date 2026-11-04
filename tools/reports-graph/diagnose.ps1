@@ -2,7 +2,7 @@
 param(
     [string]$TracePath = '.\logs\planner-trace.jsonl',
     [string]$OutputPath = '.\logs\planner-diagnostics.json',
-    [string]$GraphUrl = 'http://127.0.0.1:8766'
+    [string]$GraphUrl = 'http://127.0.0.1:5050'
 )
 $ErrorActionPreference = 'Stop'
 $uri = [Uri]$GraphUrl

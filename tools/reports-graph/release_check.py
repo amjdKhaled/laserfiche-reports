@@ -73,7 +73,7 @@ def verify(result, kind, field, condition):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--base-url', default='http://127.0.0.1:8766')
+    parser.add_argument('--base-url', default='http://127.0.0.1:5050')
     parser.add_argument('--output', required=True)
     args = parser.parse_args()
     results = []
@@ -83,8 +83,8 @@ def main():
         with opener.open(args.base_url.rstrip('/') + '/health', timeout=10) as response:
             health = json.load(response)
         model = health.get('model')
-        if health.get('status') != 'ready' or model != 'gpt-oss:20b':
-            raise RuntimeError('Ready graph with gpt-oss:20b is required: ' + str(health))
+        if health.get('status') != 'ready' or not model:
+            raise RuntimeError('A ready graph with a loaded model is required: ' + str(health))
         for question, kind, field, condition in CASES:
             payload = {'question': question, 'catalog': CATALOG, 'today': '2026-10-12', 'timezone': 'Asia/Riyadh', 'history': []}
             request = Request(args.base_url.rstrip('/') + '/route', data=json.dumps(payload, ensure_ascii=False).encode(), headers={'Content-Type': 'application/json'})

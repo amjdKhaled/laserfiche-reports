@@ -43,6 +43,12 @@ public interface ILaserficheAuthService
         InvalidateTokenAsync(repository);
 
     /// <summary>
+    /// Identifies the Laserfiche session behind the current request's token. Requests with
+    /// the same key share one Laserfiche session, which runs one search at a time.
+    /// </summary>
+    string SessionKey(RepositoryDescriptor repository) => repository.Key;
+
+    /// <summary>
     /// Removes ALL cached tokens belonging to the current HTTP session, across every
     /// repository. Call this on Sign Out / Change Account so a token acquired by the
     /// previous account can never be reused by the next login in the same browser

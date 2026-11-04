@@ -104,6 +104,16 @@ internal sealed class SessionCredentialStore : ISessionCredentialStore
     }
 
     /// <inheritdoc />
+    public async Task<string?> TryGetSignedInUserAsync(CancellationToken cancellationToken = default)
+    {
+        // An LFDS single sign-on session is identified by the token, not a stored password.
+        var session = _httpContextAccessor.HttpContext?.Session;
+        if (session?.GetString("AuthenticationScopeMethod") == "LFDS")
+            return session.GetString("LfdsUser");
+        return (await TryGetAsync(cancellationToken).ConfigureAwait(false))?.Username;
+    }
+
+    /// <inheritdoc />
     public Task ClearAsync(CancellationToken cancellationToken = default)
     {
         var session = _httpContextAccessor.HttpContext?.Session;

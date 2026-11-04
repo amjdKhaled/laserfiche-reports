@@ -53,7 +53,7 @@ public class ReportTests
         var query = new Searches { Response = (_, _, _) => PagedResult<LFSearchResult>.Empty };
         var result = await Create(new Entries(0), query).CreateAsync("repo",
             new QueryPlan("search", Name: "missing", RequiresFilter: true, CountOnly: true), [], default);
-        Assert.Contains("عدد النتائج المطابقة: **0**", result.Answer);
+        Assert.Contains("لا توجد نتائج مطابقة للشروط الحالية. " + LiveRepositoryReportService.ScopeNote(search: true), result.Answer);
         Assert.Contains("| رقم الوثيقة |", result.Answer);
         Assert.Contains("اقتراحات للتوضيح", result.Answer);
         Assert.Single(query.Calls);
@@ -95,7 +95,7 @@ public class ReportTests
         Assert.True(queries.ReadAll);
         Assert.Equal(73, answer.RelatedEntryIds.Length);
         Assert.Contains("| رقم الوثيقة | اسم الوثيقة | تاريخ الإنشاء | آخر تعديل | عدد الصفحات | المرجع |", answer.Answer);
-        Assert.Contains("الوسم: قيد الفحص", answer.Answer);
+        Assert.Contains("نطاق البحث: تحمل الوسم «قيد الفحص»", answer.Answer);
         Assert.Equal(1, tags.Calls);
         await Assert.ThrowsAsync<ArgumentException>(() => service.CreateAsync("repo", new QueryPlan("search",
             Filters: new(Tag: "غير معرف", Operator: "has_tag"), CountOnly: true), [], default));
@@ -157,7 +157,7 @@ public class ReportTests
         Assert.Contains("| 73 |", result.Answer);
         Assert.DoesNotContain("| المسار |", result.Answer);
         Assert.DoesNotContain("Date / month", result.Answer);
-        Assert.DoesNotContain("ليست القائمة الكاملة", result.Answer);
+        Assert.DoesNotContain("تُعرض أول", result.Answer);
     }
 
     [Fact]
@@ -218,9 +218,9 @@ public class ReportTests
         var query = new Searches();
         var entryService = new Entries(73);
         var service = Create(entryService, query);
-        var result = await service.CreateAsync("repo", new QueryPlan("search"), [], default);
+        var result = await service.CreateAsync("repo", new QueryPlan("search", Limit: 20), [], default);
         Assert.Contains("**73**", result.Answer);
-        Assert.Contains("ليست القائمة الكاملة", result.Answer);
+        Assert.Contains("تُعرض أول 20 نتيجة من أصل 73.", result.Answer);
         Assert.False(result.Scope!.Exhaustive);
         Assert.Equal(20, result.Sources.Count);
         Assert.False(entryService.Enumerated);
@@ -239,7 +239,7 @@ public class ReportTests
         await Create(new Entries(73), query).CreateAsync("repo", new QueryPlan("search",
             "ماهي الوثائق التي إجراء الوثيقة", "تحت الإجراء"), [], default);
         Assert.Contains("{[]:[إجراء الوثيقة]=\"تحت الإجراء\"}", query.Expression);
-        Assert.False(query.ReadAll);
+        Assert.True(query.ReadAll); // a listing without a requested size reads every match
     }
 
     [Fact]
@@ -336,7 +336,7 @@ public class ReportTests
             : PagedResult<LFSearchResult>.Empty };
         var result = await Create(entries, query).CreateAsync("repo",
             new QueryPlan("search", "إجراء الوثيقة", "تحت الاجراء"), [], default);
-        Assert.Contains("**2**", result.Answer);
+        Assert.Contains("عدد النتائج: وثيقتان.", result.Answer);
         Assert.Equal(new[] { 1, 2 }, result.RelatedEntryIds);
         Assert.True(query.ReadAll);
         Assert.Empty(entries.FieldCalls);
@@ -407,7 +407,7 @@ public class ReportTests
         await Assert.ThrowsAsync<ArgumentException>(() => Create(new Entries(73), new Searches())
             .CreateAsync("repo", new QueryPlan("search", "غير معروف", "قيمة"), [], default));
         var result = await Create(new Entries(73), new Searches { Exact = false })
-            .CreateAsync("repo", new QueryPlan("search"), [], default);
+            .CreateAsync("repo", new QueryPlan("search", Limit: 20), [], default);
         Assert.DoesNotContain("**73**", result.Answer);
         Assert.Contains("غير متاح", result.Answer);
     }
@@ -461,9 +461,11 @@ public class ReportTests
         Assert.Equal(new[] { 619 }, result.Reports[1].RelatedEntryIds);
         Assert.All(result.Reports, report =>
         {
+            Assert.Equal("documents", report.ResultType);
             Assert.Single(report.Sources);
             Assert.StartsWith("\\قسم\\وثيقة", report.Sources[0].Path);
-            Assert.Contains("2026-10-06 11:00:00 +03:00", report.Answer);
+            Assert.Contains("| 2026-10-06 11:00:00 |", report.Answer);
+            Assert.DoesNotContain("+03:00", report.Answer);
             Assert.DoesNotContain("**73**", report.Answer);
         });
         Assert.Equal(new[] { "health", "route" }, graph.Paths);
@@ -505,21 +507,110 @@ public class ReportTests
     }
 
     [Fact]
-    public async Task CountOnlyExecutesOneLiveSearchWithoutPerEntryDetails()
+    public async Task CountOnlyReadsEveryRowInOneLiveSearchAndFillsPageCounts()
     {
-        var entries = new Entries(73);
+        var entries = new Entries(73) { PageCount = 4 };
         var searches = new Searches();
         var report = await Create(entries, searches).CreateAsync("repo", new QueryPlan("search", CountOnly: true,
             Filters: new RepositoryFilter("الإدارة", "equals", "المحاسبة")), [], default);
         Assert.Contains("**73**", report.Answer);
         Assert.Single(searches.Calls);
-        Assert.Equal(50, searches.Limits[0]);
-        Assert.Empty(entries.EntryCalls);
+        Assert.True(searches.ReadAll);
+        Assert.Equal(73, entries.EntryCalls.Count);
+        Assert.Contains("| 4 | [73] |", report.Answer);
         Assert.Contains("[الإدارة]=\"المحاسبة\"", searches.Expression);
         Assert.Contains("| رقم الوثيقة | اسم الوثيقة | تاريخ الإنشاء | آخر تعديل | عدد الصفحات | المرجع |", report.Answer);
-        Assert.Contains("ليست القائمة الكاملة", report.Answer);
-        Assert.Equal(20, report.RelatedEntryIds.Length);
+        Assert.DoesNotContain("تُعرض أول", report.Answer);
+        Assert.Equal(73, report.RelatedEntryIds.Length);
     }
+
+    [Fact]
+    public async Task ListingWithoutARequestedSizeReadsEveryRowAndStatesTheTotal()
+    {
+        var entries = new Entries(73) { PageCount = 4 };
+        var searches = new Searches();
+        var report = await Create(entries, searches).CreateAsync("repo", new QueryPlan("search",
+            Filters: new RepositoryFilter("الإدارة", "equals", "المحاسبة")), [], default);
+        Assert.Single(searches.Calls);
+        Assert.True(searches.ReadAll);
+        Assert.Contains("نطاق البحث: «الإدارة» يساوي «المحاسبة»", report.Answer);
+        Assert.Contains("عدد النتائج: **73** وثيقة. " + LiveRepositoryReportService.ScopeNote(), report.Answer);
+        Assert.DoesNotContain("تعذّر تحديد", report.Answer);
+        Assert.DoesNotContain("تُعرض أول", report.Answer);
+        Assert.Equal(73, report.RelatedEntryIds.Length);
+    }
+
+    [Theory]
+    [InlineData(QueryPlan.DefaultLimit, true)]
+    [InlineData(10, false)]
+    public void ListingsReadEveryRowUnlessTheQuestionAskedForASize(int limit, bool complete) =>
+        Assert.Equal(complete, new QueryPlan("search", Limit: limit).CompleteListing);
+
+    [Theory]
+    [InlineData("created", "تاريخ الإنشاء")]
+    [InlineData("modified", "آخر تعديل")]
+    [InlineData("رقم المعاملة", "رقم المعاملة")]
+    public void CriteriaLineNamesBuiltInFieldsInArabic(string field, string label) =>
+        Assert.Equal(label, LiveRepositoryReportService.FieldLabel(field));
+
+    [Theory]
+    [InlineData("2026-11-01", "2026-11-07", "من الأحد 1 نوفمبر 2026م إلى السبت 7 نوفمبر 2026م")]
+    [InlineData("2026-11-02", "2026-11-02", "يوم الاثنين 2 نوفمبر 2026م")]
+    [InlineData("2026-10-01", "2026-10-31", "خلال شهر أكتوبر 2026م")]
+    [InlineData("2026-01-01", "2026-12-31", "خلال عام 2026م")]
+    public void DateRangesReadInArabicWords(string first, string last, string expected) =>
+        Assert.Equal(expected, LiveRepositoryReportService.ArabicSpan(DateOnly.Parse(first, System.Globalization.CultureInfo.InvariantCulture),
+            DateOnly.Parse(last, System.Globalization.CultureInfo.InvariantCulture)));
+
+    [Theory]
+    [InlineData(1, false, "وثيقة واحدة")]
+    [InlineData(2, false, "وثيقتان")]
+    [InlineData(7, false, "**7** وثائق")]
+    [InlineData(43, false, "**43** وثيقة")]
+    [InlineData(100, false, "**100** وثيقة")]
+    [InlineData(103, false, "**103** وثائق")]
+    [InlineData(12, true, "**12** عنصرًا")]
+    [InlineData(200, true, "**200** عنصر")]
+    public void CountsUseArabicNumberAgreement(int count, bool entries, string expected) =>
+        Assert.Equal(expected, LiveRepositoryReportService.Counted(count, entries));
+
+    [Fact]
+    public async Task WeekBoundsReadAsOneRangeAndSeveralConditionsAsAList()
+    {
+        // calendar_grounding.py plans «هذا الأسبوع» as from_period Sunday & before_period next Sunday.
+        var week = new RepositoryFilter(Logic: "and", Conditions: [
+            new RepositoryFilter("created", "from_period", Period: new CalendarPeriod(2026, 11, 1)),
+            new RepositoryFilter("created", "before_period", Period: new CalendarPeriod(2026, 11, 8))]);
+        var report = await Create(new Entries(73), new Searches()).CreateAsync("repo", new QueryPlan("search",
+            Filters: new RepositoryFilter(Logic: "and", Conditions: [new RepositoryFilter("الإدارة", "equals", "المحاسبة"), week])), [], default);
+        Assert.Contains("نطاق البحث:\n- «الإدارة» يساوي «المحاسبة»\n- تاريخ الإنشاء من الأحد 1 نوفمبر 2026م إلى السبت 7 نوفمبر 2026م\n\n", report.Answer);
+        Assert.DoesNotContain("الفترة", report.Answer);
+    }
+
+    [Theory]
+    [InlineData("search", true, false, true)]
+    [InlineData("created", true, false, true)]
+    [InlineData("search", false, false, false)]
+    [InlineData("search", true, true, false)]
+    [InlineData("recent", true, false, false)]
+    public void CountsReadEveryRowButNotRecentLimitsOrContent(string operation, bool count, bool content, bool complete) =>
+        Assert.Equal(complete, new QueryPlan(operation, CountOnly: count, Content: content).CompleteCount);
+
+    [Theory]
+    [InlineData(3, false, "3")]
+    [InlineData(2, true, "2")]
+    [InlineData(0, false, "0")]
+    [InlineData(0, true, "0 · ملف إلكتروني")]
+    [InlineData(null, false, "—")]
+    public void PageCountCellNamesElectronicFilesInsteadOfLeavingThemBlank(int? pages, bool electronic, string expected) =>
+        Assert.Equal(expected, LiveRepositoryReportService.Pages(pages, electronic));
+
+    [Theory]
+    [InlineData("2026-10-28T08:36:05+03:00", "2026-10-28 08:36:05")]
+    [InlineData("2026-10-28T05:36:05Z", "2026-10-28 08:36:05")]
+    [InlineData("2026-10-27T23:30:00+00:00", "2026-10-28 02:30:00")]
+    public void DatesAreShownInSaudiTimeWithoutAnOffset(string stored, string expected) =>
+        Assert.Equal(expected, LiveRepositoryReportService.Date(DateTimeOffset.Parse(stored, System.Globalization.CultureInfo.InvariantCulture)));
 
     [Theory]
     [InlineData(true)]
@@ -531,7 +622,23 @@ public class ReportTests
         var report = await Create(new Entries(0), searches).CreateAsync("repo", new QueryPlan("search", CountOnly: true), [], default);
         Assert.Contains("| رقم الوثيقة | اسم الوثيقة |", report.Answer);
         Assert.Contains("لم يتم العثور على نتائج مطابقة", report.Answer);
-        Assert.Equal(exact, report.Answer.Contains("عدد النتائج المطابقة: **0**"));
+        Assert.Equal(exact, report.Answer.Contains("لا توجد نتائج مطابقة للشروط الحالية."));
+        Assert.Equal(!exact, report.Answer.Contains("تعذّر تحديد العدد الإجمالي للنتائج."));
+    }
+
+    [Fact]
+    public async Task FolderContentsNameEachRowsType()
+    {
+        var searches = new Searches { Response = (_, _, _) => new PagedResult<LFSearchResult>
+        {
+            Items = [new() { EntryId = 7, Name = "الأرشيف", EntryType = LFEntryType.Folder },
+                new() { EntryId = 671, Name = "Testerrr", EntryType = LFEntryType.Document, PageCount = 2 }],
+            TotalCount = 2, IsTotalCountExact = true
+        } };
+        var report = await Create(new Entries(0), searches).CreateAsync("repo", new QueryPlan("search", EntryType: "all"), [], default);
+        Assert.Contains("| رقم الإدخال | الاسم | النوع |", report.Answer);
+        Assert.Contains("| 7 | الأرشيف | مجلد |", report.Answer);
+        Assert.Contains("| 671 | Testerrr | وثيقة |", report.Answer);
     }
 
     [Fact]
@@ -644,7 +751,7 @@ public class ReportTests
             new QueryPlan("search", FolderName: "مركز الوثائق والمحفوظات", IncludeSubfolders: true,
                 CountOnly: true, RequiresFilter: true, ResultType: "count"), [], default);
         Assert.Contains("**73**", result.Answer);
-        Assert.Contains("معيار البحث: المجلد: مركز الوثائق والمحفوظات والمجلدات الفرعية", result.Answer);
+        Assert.Contains("نطاق البحث: مجلد «مركز الوثائق والمحفوظات» وجميع المجلدات الفرعية داخله", result.Answer);
         Assert.Equal(2, query.Calls.Count);
         Assert.Contains("Type=F}", query.Calls[0]);
         Assert.Contains("LF:Lookin=", query.Calls[1]);
@@ -653,16 +760,42 @@ public class ReportTests
         Assert.Equal(50, query.Limits[1]);
     }
 
-    [Theory]
-    [InlineData(0)]
-    [InlineData(2)]
-    public async Task MissingOrAmbiguousFolderNeverBecomesZeroDocumentCount(int found)
+    [Fact]
+    public async Task MissingFolderNeverBecomesZeroDocumentCount()
     {
-        var query = new Searches { Response = (_, _, _) => new PagedResult<LFSearchResult>
-            { Items = Enumerable.Range(1, found).Select(id => new LFSearchResult { EntryId = id }).ToArray(), TotalCount = found } };
+        var query = new Searches { Response = (_, _, _) => PagedResult<LFSearchResult>.Empty };
         await Assert.ThrowsAsync<RepositoryScopeClarificationException>(() => Create(new Entries(73), query).CreateAsync("repo",
             new QueryPlan("search", FolderName: "الأرشيف", CountOnly: true, RequiresFilter: true), [], default));
-        Assert.Single(query.Calls);
+        // The spelling-tolerant name search, then the exact name; no document count is attempted.
+        Assert.Equal(2, query.Calls.Count);
+        Assert.All(query.Calls, call => Assert.Contains("Type=F}", call));
+    }
+
+    [Fact]
+    public async Task EveryFolderWithTheRequestedNameIsSearched()
+    {
+        var query = new Searches { Response = (expression, _, _) => expression.Contains("Type=F}")
+            ? new PagedResult<LFSearchResult> { Items = [
+                new() { EntryId = 90, Name = "الأرشيف", EntryType = LFEntryType.Folder },
+                new() { EntryId = 91, Name = "الارشيف", EntryType = LFEntryType.Folder },
+                new() { EntryId = 92, Name = "الأرشيف القديم", EntryType = LFEntryType.Folder }], TotalCount = 3 }
+            : new PagedResult<LFSearchResult> { Items = [new() { EntryId = 618 }], TotalCount = 12 } };
+        var result = await Create(new Entries(73), query).CreateAsync("repo",
+            new QueryPlan("search", FolderName: "الأرشيف", CountOnly: true, RequiresFilter: true, ResultType: "count"), [], default);
+        Assert.Contains("**12**", result.Answer);
+        Assert.Equal("{LF:Name=\"?ل?رش?ف\", Type=F}", query.Calls[0]);
+        // Entries fake paths are \قسم\وثيقة {id}; the search syntax doubles each backslash.
+        Assert.Contains("({LF:Lookin=\"" + Escaped(90) + "\", Subfolders=N} | {LF:Lookin=\"" + Escaped(91) + "\", Subfolders=N})", query.Calls[1]);
+        Assert.DoesNotContain("وثيقة 92", query.Calls[1]);
+        static string Escaped(int id) => $"\\قسم\\وثيقة {id}".Replace("\\", "\\\\");
+    }
+
+    [Fact]
+    public void FolderNamePatternAbsorbsArabicSpellingVariants()
+    {
+        Assert.Equal("?لو?رد", LiveRepositoryReportService.FolderNamePattern("الوارد"));
+        Assert.Equal("مدرس? ?لمستقبل", LiveRepositoryReportService.FolderNamePattern("مدرسة المستقبل"));
+        Assert.Equal(ReportSupport.MatchKey("مدرسة الإدارة العليا"), ReportSupport.MatchKey("مدرسه الاداره العلىا"));
     }
 
     [Fact]
@@ -675,8 +808,8 @@ public class ReportTests
             graph, Create(entries, queries), new QuestionRouter(graph), queries, Microsoft.Extensions.Logging.Abstractions.NullLogger<ReportsChatService>.Instance);
         var answer = await chat.AskAsync("كم وثيقة في مجلد الأرشيف؟", default);
         Assert.Contains("اسم المجلد الصحيح أو رقمه", answer.Answer);
-        Assert.DoesNotContain("عدد النتائج المطابقة: **0**", answer.Answer);
-        Assert.Equal(2, queries.Calls.Count);
+        Assert.DoesNotContain("لا توجد نتائج مطابقة", answer.Answer);
+        Assert.Equal(3, queries.Calls.Count); // Spelling-tolerant and exact folder lookups, then suggestions.
     }
 
     [Fact]

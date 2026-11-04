@@ -34,6 +34,7 @@ namespace LaserficheReports.Infrastructure.Configuration;
 /// </remarks>
 public static class ReportsConfigPaths
 {
+    public static SemaphoreSlim WriteLock { get; } = new(1, 1);
     /// <summary>Product configuration folder name under ProgramData.</summary>
     public const string ProductFolderName = "LaserficheReports";
 

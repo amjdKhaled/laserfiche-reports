@@ -10,9 +10,33 @@
   </ItemGroup>
   <ItemGroup>
     <Content Update="appsettings.Local.json" CopyToPublishDirectory="Never" />
+    <Content Include="../../docs/FULL-HIERARCHY-AUTHORIZATION.md" Link="permission-bridge/FULL-HIERARCHY-AUTHORIZATION.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../../docs/PERMISSION-VERIFICATION.md" Link="permission-bridge/README.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../../deployment/windows/protect-permission-service-credential.ps1" Link="permission-bridge/protect-service-credential.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../../deployment/windows/test-permission-bridge.ps1" Link="permission-bridge/test-deployment.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="LaserficheReports.Web.Tests" />
   </ItemGroup>
+  <Target Name="BuildRecycleBinReader" AfterTargets="Build" Condition="'$(OS)' == 'Windows_NT'">
+    <!-- A first restore creates NuGet imports. Build must use a new project evaluation,
+         otherwise fresh checkouts lack package paths and the net48 reference assemblies. -->
+    <MSBuild Projects="$(MSBuildProjectDirectory)/../../tools/recycle-bin-reader/RecycleBin.Reader.csproj" Targets="Restore" RemoveProperties="NoBuild;NoRestore;RuntimeIdentifier;SelfContained;PublishSingleFile;PublishTrimmed;TargetFramework;TargetFrameworks;PublishReadyToRun;OutputPath;PublishDir" Properties="Configuration=$(Configuration);ReportsReaderPhase=Restore" />
+    <MSBuild Projects="$(MSBuildProjectDirectory)/../../tools/recycle-bin-reader/RecycleBin.Reader.csproj" Targets="Build" RemoveProperties="NoBuild;NoRestore;RuntimeIdentifier;SelfContained;PublishSingleFile;PublishTrimmed;TargetFramework;TargetFrameworks;PublishReadyToRun;OutputPath;PublishDir" Properties="Configuration=$(Configuration);ReportsReaderPhase=Build" />
+    <ItemGroup><RecycleReaderFiles Include="$(MSBuildProjectDirectory)/../../tools/recycle-bin-reader/bin/$(Configuration)/net48/**/*" /></ItemGroup>
+    <Copy SourceFiles="@(RecycleReaderFiles)" DestinationFiles="@(RecycleReaderFiles->'$(TargetDir)recycle-bin/%(RecursiveDir)%(Filename)%(Extension)')" />
+  </Target>
+  <Target Name="BuildPermissionBridge" AfterTargets="Build" Condition="'$(OS)' == 'Windows_NT'">
+    <MSBuild Projects="$(MSBuildProjectDirectory)/../../tools/permission-bridge/Permission.Bridge.csproj" Targets="Restore" RemoveProperties="NoBuild;NoRestore;RuntimeIdentifier;SelfContained;PublishSingleFile;PublishTrimmed;TargetFramework;TargetFrameworks;PublishReadyToRun;OutputPath;PublishDir" Properties="Configuration=$(Configuration);ReportsBridgePhase=Restore" />
+    <MSBuild Projects="$(MSBuildProjectDirectory)/../../tools/permission-bridge/Permission.Bridge.csproj" Targets="Build" RemoveProperties="NoBuild;NoRestore;RuntimeIdentifier;SelfContained;PublishSingleFile;PublishTrimmed;TargetFramework;TargetFrameworks;PublishReadyToRun;OutputPath;PublishDir" Properties="Configuration=$(Configuration);ReportsBridgePhase=Build" />
+    <ItemGroup><PermissionBridgeFiles Include="$(MSBuildProjectDirectory)/../../tools/permission-bridge/bin/$(Configuration)/net48/**/*" /></ItemGroup>
+    <Copy SourceFiles="@(PermissionBridgeFiles)" DestinationFiles="@(PermissionBridgeFiles->'$(TargetDir)permission-bridge/%(RecursiveDir)%(Filename)%(Extension)')" />
+  </Target>
+  <Target Name="PublishPermissionBridge" AfterTargets="Publish" DependsOnTargets="BuildPermissionBridge" Condition="'$(OS)' == 'Windows_NT'">
+    <Copy SourceFiles="@(PermissionBridgeFiles)" DestinationFiles="@(PermissionBridgeFiles->'$(PublishDir)permission-bridge/%(RecursiveDir)%(Filename)%(Extension)')" />
+  </Target>
+  <Target Name="PublishRecycleBinReader" AfterTargets="Publish" DependsOnTargets="BuildRecycleBinReader" Condition="'$(OS)' == 'Windows_NT'">
+    <Copy SourceFiles="@(RecycleReaderFiles)" DestinationFiles="@(RecycleReaderFiles->'$(PublishDir)recycle-bin/%(RecursiveDir)%(Filename)%(Extension)')" />
+  </Target>
 </Project>
 

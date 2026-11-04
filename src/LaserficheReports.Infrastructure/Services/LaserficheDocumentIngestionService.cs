@@ -13,6 +13,7 @@ namespace LaserficheReports.Infrastructure.Services;
 
 internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIngestionService
 {
+    private readonly IContentAuthorizationScope? _contentScope;
     private const string Source = "laserfiche-reports";
     private const string RecordType = "document-metadata";
 
@@ -37,7 +38,7 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
         IOptions<SupabaseOptions> options,
         IOptions<LocalAiOptions> localAiOptions,
         IOptions<PaddleOcrOptions> ocrOptions,
-        ILogger<LaserficheDocumentIngestionService> logger)
+        ILogger<LaserficheDocumentIngestionService> logger, IContentAuthorizationScope? contentScope = null)
     {
         _entries = entries;
         _documents = documents;
@@ -49,6 +50,7 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
         _localAiOptions = localAiOptions.Value;
         _ocrOptions = ocrOptions.Value;
         _logger = logger;
+        _contentScope = contentScope;
     }
 
     public async Task<DocumentIngestionResult> IngestMetadataAsync(
@@ -85,7 +87,7 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
             .GetEntryFieldsAsync(entryId, cancellationToken)
             .ConfigureAwait(false);
 
-        if (!_ocrOptions.Enabled)
+        if (!_ocrOptions.Enabled && _contentScope == null)
         {
             var current = await TryGetCurrentIndexAsync(repository.RepositoryId, entry, fields,
                 cancellationToken).ConfigureAwait(false);
@@ -265,7 +267,7 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
             // merely because the local OCR worker is temporarily unavailable.
             throw ocrFailure;
         }
-        if (!hasUsableText && !_ocrOptions.Enabled)
+        if (!hasUsableText && !_ocrOptions.Enabled && _contentScope == null)
         {
             await using var existingConnection = new NpgsqlConnection(_options.PostgresConnectionString);
             await existingConnection.OpenAsync(cancellationToken).ConfigureAwait(false);
@@ -360,6 +362,12 @@ internal sealed class LaserficheDocumentIngestionService : ILaserficheDocumentIn
                 _localAiOptions.EmbeddingModel,
                 _localAiOptions.EffectiveEmbeddingDimensions);
 
+            if (_contentScope != null)
+            {
+                var scoped = System.Text.Json.Nodes.JsonNode.Parse(chunkMetadata)!;
+                scoped["authorization_scope"] = _contentScope.Scope;
+                chunkMetadata = scoped.ToJsonString();
+            }
             await InsertChunkAsync(
                 connection,
                 transaction,

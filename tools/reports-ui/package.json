@@ -2,6 +2,6 @@
   "name": "laserfiche-reports-ui-tests",
   "private": true,
   "type": "module",
-  "scripts": { "test": "node --test report.test.mjs" },
+  "scripts": { "test": "node --test --test-timeout=30000 report.test.mjs" },
   "devDependencies": { "happy-dom": "20.14.5" }
 }

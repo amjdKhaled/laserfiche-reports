@@ -1,0 +1,252 @@
+{
+  "description": "Authored synthetic-catalog real-model acceptance cases. NOT executed in the development environment; not an accuracy claim. Use semantic_catalog.example.json. Expected dates use the fixed Asia/Riyadh reference day.",
+  "today": "2026-11-02",
+  "cases": [
+    {
+      "id": "created-saudi",
+      "question": "وش الملفات اللي انعملت اليوم؟",
+      "expect": {
+        "operation": "search",
+        "filters": {
+          "field": "created",
+          "operator": "in_period",
+          "period": {
+            "year": 2026,
+            "month": 11,
+            "day": 2
+          }
+        }
+      }
+    },
+    {
+      "id": "modified-typo",
+      "question": "عطني الوثايق اللي اتعدلت البارح",
+      "expect": {
+        "operation": "search",
+        "filters": {
+          "field": "modified",
+          "operator": "in_period",
+          "period": {
+            "year": 2026,
+            "month": 11,
+            "day": 1
+          }
+        }
+      }
+    },
+    {
+      "id": "created-month",
+      "question": "ورني الملفات اللي انضافت هالشهر",
+      "expect": {
+        "operation": "search",
+        "filters": {
+          "field": "created",
+          "operator": "in_period",
+          "period": {
+            "year": 2026,
+            "month": 11
+          }
+        }
+      }
+    },
+    {
+      "id": "mixed-template",
+      "question": "طلعلي documents اللي template حقها القرار",
+      "expect": {
+        "operation": "search",
+        "template": "القرار"
+      }
+    },
+    {
+      "id": "card-possessive",
+      "question": "الملفات اللي كرت فهرستها القرار",
+      "expect": {
+        "operation": "search",
+        "template": "القرار"
+      }
+    },
+    {
+      "id": "template-transliteration",
+      "question": "وثائق تيكبليت القرار",
+      "expect": {
+        "operation": "search",
+        "template": "القرار"
+      }
+    },
+    {
+      "id": "no-template",
+      "question": "الملفات اللي ما عليها كرت فهرسة",
+      "expect": {
+        "operation": "search",
+        "filters": {
+          "field": "template",
+          "operator": "is_empty"
+        }
+      }
+    },
+    {
+      "id": "template-negation",
+      "question": "الوثائق اللي قالبها موب القرار",
+      "expect": {
+        "operation": "search",
+        "filters": {
+          "field": "template",
+          "operator": "not_equals",
+          "value": "القرار"
+        }
+      }
+    },
+    {
+      "id": "container-file",
+      "question": "ابي اللي جوه ملف الوارد",
+      "expect": {
+        "operation": "search",
+        "folderName": "الوارد",
+        "entryType": "all"
+      }
+    },
+    {
+      "id": "recursive-folder",
+      "question": "أبي أشوف وش داخل فولدر الوارد وكل اللي تحته",
+      "expect": {
+        "operation": "search",
+        "folderName": "الوارد",
+        "includeSubfolders": true
+      }
+    },
+    {
+      "id": "archive-location",
+      "question": "الوثائق الموجودة داخل مركز الوثائق والمحفوظات",
+      "expect": {
+        "operation": "search",
+        "folderName": "مركز الوثائق والمحفوظات",
+        "absent": [
+          "template"
+        ]
+      }
+    },
+    {
+      "id": "archive-existing",
+      "question": "وش الوثائق المؤرشفة؟",
+      "expect": {
+        "operation": "search",
+        "filters": {
+          "field": "هل تريد ارشفة الوثيقة؟",
+          "operator": "equals",
+          "value": "نعم"
+        },
+        "absent": [
+          "folderName"
+        ]
+      }
+    },
+    {
+      "id": "current-deleted",
+      "question": "وش الملفات اللي انحذفت؟",
+      "expect": {
+        "operation": "recycle_bin",
+        "absent": [
+          "filters"
+        ]
+      }
+    },
+    {
+      "id": "deleted-date-unavailable",
+      "question": "كم ملف انحذف البارح؟",
+      "expect": {
+        "operation": "clarify"
+      }
+    },
+    {
+      "id": "scan-not-deletion",
+      "question": "الملفات اللي تم مسحها سكانر أمس",
+      "expect": {
+        "operation": "clarify"
+      }
+    },
+    {
+      "id": "status-mixed",
+      "question": "الملفات اللي status حقها pending",
+      "expect": {
+        "operation": "search",
+        "filters": {
+          "field": "حالة الطلب",
+          "operator": "equals",
+          "value": "Pending"
+        }
+      }
+    },
+    {
+      "id": "approval-negative",
+      "question": "طلبات التدريب اللي مو مقبولة",
+      "expect": {
+        "operation": "search",
+        "template": "طلب التدريب",
+        "includes": [
+          {
+            "field": "حالة الطلب",
+            "operator": "not_equals",
+            "value": "Accepted"
+          }
+        ],
+        "absent_value": "Rejected"
+      }
+    },
+    {
+      "id": "neither-state",
+      "question": "الطلبات اللي لا انقبلت ولا انرفضت",
+      "expect": {
+        "operation": "search",
+        "filters": {
+          "logic": "and",
+          "conditions": [
+            {
+              "field": "حالة الطلب",
+              "operator": "not_equals",
+              "value": "Accepted"
+            },
+            {
+              "field": "حالة الطلب",
+              "operator": "not_equals",
+              "value": "Rejected"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "vague-date",
+      "question": "الملفات اللي توها انضافت",
+      "expect": {
+        "operation": "clarify"
+      }
+    },
+    {
+      "id": "followup-count",
+      "question": "طيب كم عددهم؟",
+      "expect": {
+        "operation": "search",
+        "countOnly": true,
+        "template": "طلب التدريب",
+        "includes": [
+          {
+            "field": "حالة الطلب",
+            "operator": "equals",
+            "value": "Accepted"
+          }
+        ]
+      },
+      "history": [
+        {
+          "role": "user",
+          "text": "اعرض وثائق قالب طلب التدريب التي حقل حالة الطلب فيها Accepted"
+        },
+        {
+          "role": "assistant",
+          "kind": "answer",
+          "text": "عُرضت وثائق قالب طلب التدريب المطابقة لحالة الطلب Accepted."
+        }
+      ]
+    }
+  ]
+}

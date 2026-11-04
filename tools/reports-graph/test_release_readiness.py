@@ -34,7 +34,7 @@ class ReleaseReadinessTests(unittest.TestCase):
         self.assertEqual(len(options), 1)
 
     def test_release_suite_contains_every_advertised_question(self):
-        script = (Path(__file__).parents[2] / 'src/LaserficheReports.Web/wwwroot/app.js').read_text()
+        script = (Path(__file__).parents[2] / 'src/LaserficheReports.Web/wwwroot/app.js').read_text(encoding='utf-8')
         for question, *_ in CASES[:3]:
             self.assertIn(question, script)
 
