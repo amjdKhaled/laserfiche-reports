@@ -122,7 +122,7 @@ def main():
                 "review": case.get("review", False), "note": case.get("note")}
         try:
             payload = {"question": case["question"], "catalog": catalog, "today": suite["today"],
-                       "timezone": "Asia/Riyadh", "history": []}
+                       "timezone": "Asia/Riyadh", "history": case.get("history", [])}
             response = plan_reports(model, payload, budget_seconds=args.timeout, max_tokens=1536,
                                     review_intent=True, interpret_intent=False)
             plans = response["reports"]

@@ -87,6 +87,28 @@ class GroundCatalogScopeTests(unittest.TestCase):
         grounded = ground_catalog_scope(plan, "الوثائق اللي عليها وسم تم الرفض و Approval Status قيمتها Rejected", CATALOG)
         self.assertEqual({"logic": "and", "conditions": [stated, {"tag": "تم الرفض", "operator": "has_tag"}]}, grounded["filters"])
 
+    def test_tag_keeps_explicit_period_and_numeric_conditions(self):
+        period = {"field": "انتهاء صلاحية السجل", "operator": "through_period", "period": {"year": 2042}}
+        numeric = {"field": "التكلفة", "operator": "less_or_equal", "value": "500"}
+        plan = {**SEARCH, "filters": {"logic": "and", "conditions": [period, numeric]}}
+        catalog = {**CATALOG, "tags": [{"name": "قيد المتابعة"}]}
+        for year in ("2042", "٢٠٤٢", "۲۰۴۲"):
+            with self.subTest(year=year):
+                result = ground_catalog_scope(plan, f"كم سجل ينتهي حتى {year} وعليه وسم قيد المتابعة وتكلفته 500 أو أقل؟", catalog)
+                self.assertEqual({"logic": "and", "conditions": [period, numeric,
+                    {"tag": "قيد المتابعة", "operator": "has_tag"}]}, result["filters"])
+        self.assertEqual([period, numeric], plan["filters"]["conditions"])
+
+    def test_unasked_period_is_not_kept_from_a_tag_name_or_another_number(self):
+        period = {"field": "انتهاء صلاحية السجل", "operator": "through_period", "period": {"year": 2042}}
+        plan = {**SEARCH, "filters": period}
+        cases = (("اعرض الوثائق التي عليها وسم Test", CATALOG, "Test"),
+                 ("اعرض الوثائق التي عليها وسم Test وتكلفتها 12042", CATALOG, "Test"),
+                 ("اعرض الوثائق التي عليها وسم أرشيف 2042", {**CATALOG, "tags": [{"name": "أرشيف 2042"}]}, "أرشيف 2042"))
+        for question, catalog, tag in cases:
+            with self.subTest(question=question):
+                self.assertEqual({"tag": tag, "operator": "has_tag"}, ground_catalog_scope(plan, question, catalog)["filters"])
+
     def test_two_named_templates_are_either_template(self):
         for question in ("وثائق قالب القرار أو قالب التعميم", "documents with template القرار or template التعميم"):
             with self.subTest(question=question):
@@ -114,6 +136,12 @@ class FolderContentsTests(unittest.TestCase):
     def test_folder_name_is_not_turned_into_a_field_condition(self):
         plan = {**self.PLAN, "filters": {"field": "Status", "operator": "equals", "value": "Rejected"}}
         self.assertIsNone(ground_folder_scope(plan, "الوثائق في مجلد الطلبات المرفوضة")["filters"])
+
+    def test_folder_keeps_an_explicit_period_without_repeating_its_full_field_name(self):
+        period = {"field": "انتهاء صلاحية السجل", "operator": "through_period", "period": {"year": 2042}}
+        plan = {**self.PLAN, "filters": period}
+        result = ground_folder_scope(plan, "كم سجل في مجلد الوارد التي تنتهي حتى 2042؟")
+        self.assertEqual(period, result["filters"])
 
     def test_contents_include_subfolders_documents_stay_documents(self):
         cases = {"ايه الملفات اللي جوا فولدر استخراج الحقول و النصوص بالعربي": "all",

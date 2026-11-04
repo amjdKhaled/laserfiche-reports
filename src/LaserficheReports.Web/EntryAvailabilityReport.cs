@@ -1,6 +1,7 @@
 using System.Text;
 using LaserficheReports.Application.Interfaces;
 using LaserficheReports.Domain.Exceptions;
+using LaserficheReports.Web.Permissions;
 
 namespace LaserficheReports.Web;
 
@@ -9,7 +10,7 @@ internal sealed record AvailabilityRequest(int[]? EntryIds);
 internal static class EntryAvailabilityReport
 {
     internal static async Task<ChatResult> CreateAsync(ILaserficheEntryService entries, string repositoryId,
-        QueryPlan plan, IReadOnlyList<int> ids, CancellationToken ct)
+        QueryPlan plan, IReadOnlyList<int> ids, CancellationToken ct, ILaserfichePermissionVerifier? permissions = null)
     {
         plan.ValidateIntent();
         if (ids.Count is < 1 or > 50 || ids.Any(id => id <= 0) || !ids.SequenceEqual(plan.EntryIds ?? []))
@@ -29,10 +30,22 @@ internal static class EntryAvailabilityReport
             }
             catch (LaserficheException error) when (error.StatusCode == 403)
             {
+                if (permissions != null)
+                {
+                    var decision = await permissions.VerifyAsync(new(Id: id, OperationForbidden: true), token);
+                    rows[index] = $"| {id} | — | {decision.Message} | — |";
+                    return;
+                }
                 rows[index] = $"| {id} | غير متاح | رفض الصلاحية (403) | الخادم رفض القراءة؛ لا يثبت أن الإدخال محذوف أو مفقود |";
             }
             catch (LaserficheException error) when (error.StatusCode == 404)
             {
+                if (permissions != null)
+                {
+                    var decision = await permissions.VerifyAsync(new(Id: id), token);
+                    rows[index] = $"| {id} | — | {decision.Message} | — |";
+                    return;
+                }
                 rows[index] = $"| {id} | غير متاح | تعذر العثور عليه أو إظهاره (404) | لا يمكن تمييز الحذف من إخفاء الصلاحيات بهذا الرد؛ يلزم فحص السلة أو التدقيق |";
             }
             // Authentication, network and server failures invalidate the report;

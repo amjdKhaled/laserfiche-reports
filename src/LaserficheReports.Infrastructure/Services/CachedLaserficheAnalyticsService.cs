@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
-using System.Security.Claims;
+using System.Security.Cryptography;
+using System.Text;
 using LaserficheReports.Application.DTOs;
 using LaserficheReports.Application.Interfaces;
 using Microsoft.AspNetCore.Http;
@@ -41,6 +42,9 @@ internal sealed class CachedLaserficheAnalyticsService : ILaserficheAnalyticsSer
     public async Task<RepositoryStatsDto> GetRepositoryStatsAsync(CancellationToken cancellationToken = default)
     {
         var key = await GetCacheKeyAsync(cancellationToken).ConfigureAwait(false);
+        // Never use a shared "fallback" identity for user-scoped repository
+        // snapshots. Outside a verified browser session, read live without caching.
+        if (key is null) return await _inner.GetRepositoryStatsAsync(cancellationToken).ConfigureAwait(false);
         if (_cache.TryGetValue(key, out RepositoryStatsDto? cached) && cached is not null)
         {
             _logger.LogInformation("Repository snapshot cache hit for {CacheKey}.", key);
@@ -68,18 +72,44 @@ internal sealed class CachedLaserficheAnalyticsService : ILaserficheAnalyticsSer
         }
     }
 
-    public async Task InvalidateAsync(CancellationToken cancellationToken = default) =>
-        _cache.Remove(await GetCacheKeyAsync(cancellationToken).ConfigureAwait(false));
+    public async Task InvalidateAsync(CancellationToken cancellationToken = default)
+    {
+        var key = await GetCacheKeyAsync(cancellationToken).ConfigureAwait(false);
+        if (key is not null) _cache.Remove(key);
+    }
 
-    private async Task<string> GetCacheKeyAsync(CancellationToken cancellationToken)
+    private async Task<string?> GetCacheKeyAsync(CancellationToken cancellationToken)
     {
         var repository = await _repositoryContext.GetActiveRepositoryAsync(cancellationToken).ConfigureAwait(false);
-        var principal = _httpContextAccessor.HttpContext?.User;
-        var user = principal?.FindFirst(ClaimTypes.NameIdentifier)?.Value
-            ?? principal?.Identity?.Name
-            ?? "fallback";
-        var auth = principal?.FindFirst(ClaimTypes.AuthenticationMethod)?.Value ?? "fallback";
-        return $"reports:v1:{repository.ServerUrl}:{repository.RepositoryId}:{auth}:{user}";
+        return SessionCacheKey(repository, _httpContextAccessor.HttpContext);
+    }
+
+    // Password-grant users do not necessarily set HttpContext.User claims. They
+    // MUST NOT share cached statistics under the old "fallback:fallback" key.
+    // Scope to the server-issued session generation and identity, not a client
+    // supplied username; after logout/relogin the key changes even for one user.
+    internal static string? SessionCacheKey(RepositoryDescriptor repository, HttpContext? context)
+    {
+        if (context is null) return null;
+        try
+        {
+            var session = context.Session;
+            var method = session.GetString("AuthenticationScopeMethod");
+            var subject = session.GetString("AuthenticationScopeSubject");
+            var generation = session.GetString("ReportsGeneration");
+            var id = session.GetString("ActiveRepositoryId");
+            if (method is not ("Reports" or "LFDS") || string.IsNullOrWhiteSpace(subject) ||
+                string.IsNullOrWhiteSpace(generation) ||
+                !string.Equals(repository.RepositoryId, id, StringComparison.OrdinalIgnoreCase))
+                return null;
+            var input = string.Join("\\n", repository.ServerUrl.TrimEnd('/').ToLowerInvariant(),
+                repository.RepositoryId.ToUpperInvariant(), method, session.Id, subject, generation);
+            return "reports:v2:" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(input)));
+        }
+        catch (InvalidOperationException)
+        {
+            return null; // Unavailable session middleware is never a cache identity.
+        }
     }
 
     internal static RepositoryStatsDto Compact(RepositoryStatsDto source)

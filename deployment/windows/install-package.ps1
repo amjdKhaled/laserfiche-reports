@@ -33,6 +33,7 @@ if (!(Test-Path "$InstallPath\web\appsettings.Local.json")) {
 }
 # Copy shipped defaults; preserve the target machine's local connection settings.
 Copy-Item "$PSScriptRoot\web\*" "$InstallPath\web" -Recurse -Force
+& "$PSScriptRoot\test-permission-bridge.ps1" -WebPath "$InstallPath\web"
 Copy-Item "$PSScriptRoot\graph\*" "$InstallPath\graph" -Recurse -Force
 Copy-Item "$PSScriptRoot\supervise.py" $InstallPath -Force
 & py "-$PythonVersion" -m venv "$InstallPath\python"

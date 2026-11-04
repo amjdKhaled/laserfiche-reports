@@ -33,6 +33,7 @@ from scope_grounding import ground_folder_scope
 from catalog_grounding import ground_catalog_scope
 from value_grounding import GLOSSARY, ground_field_values
 from spelling import correct_spelling
+from semantic_expansion import SEMANTIC_RULES, language_evidence, contextual_folder_question, deletion_reading, unsupported_bin_constraint
 from name_grounding import ground_entry_name
 from report_reasoning import (PROMPT_VERSION, Extraction, Draft, Review, COMPOSE_SYSTEM,
                               REVIEW_SYSTEM, invoke_structured, compact_schema, validate_draft, apply_review, StrictModel, Quotation, Finding, REQUEST_ID)
@@ -536,7 +537,7 @@ def ground_folder_scopes(request, question, catalog=None):
                    "includeSubfolders": report.includeSubfolders, "template": report.template, "name": report.name,
                    "entryType": report.entryType,
                    "filters": report.filters.model_dump(exclude_none=True) if report.filters is not None else None}
-        grounded = ground_folder_scope(planned, question, (catalog or {}).get("templates") or ())
+        grounded = ground_folder_scope(planned, contextual_folder_question(question, (catalog or {}).get("templates") or ()), (catalog or {}).get("templates") or ())
         if grounded is planned:
             continue
         report.folderName, report.folderId = grounded["folderName"], None
@@ -618,6 +619,32 @@ def ground_recycle_bin(request, question, catalog):
     print("Stage=RECYCLE_BIN_GROUNDED RequestId=" + REQUEST_ID.get() + " Planned=" + json.dumps([p.operation for p in request.reports]) +
           " Grounded=" + grounded.reports[0].operation, flush=True)
     return grounded
+
+
+def ground_expanded_recycle_bin(request, question, catalog):
+    """Additional deletion phrasing, with no date fallback to creation/modification."""
+    if len(request.reports) != 1 or request.reports[0].operation in ("clarify", "audit"):
+        return request
+    explicit_bin = bool(_RECYCLE_BIN.search(normalize_arabic(question)))
+    if not explicit_bin and deletion_reading(question) is None:
+        return request
+    source = catalog.get("recycleBin", {})
+    if explicit_bin and re.search(r"(?<!\w)(?:مين|متي|استعاد|استرجع|نهائي|طارت|who|when|restored|purged)|من حذف", normalize_arabic(question)):
+        return planner_request(json.dumps({"reports": [{"operation": "clarify", "title": "سجل أحداث الحذف",
+            "selection": {"requiresFilter": False}}],
+            "clarification": "هذا الطلب يتعلق بسجل أحداث الحذف أو الاستعادة؛ سلة المحذوفات تعرض الموجود حاليًا فقط. حدد الحدث المطلوب ومصدر التدقيق المتاح."}, ensure_ascii=False), question)
+    if source.get("status") != "available":
+        return ground_recycle_bin(request, "سلة المحذوفات", catalog)
+    report = request.reports[0]
+    extra = any(getattr(report, key, None) for key in ("filters", "field", "template", "folderName", "folderId", "name", "entryIds", "from_", "to", "sort", "sortField"))
+    if unsupported_bin_constraint(question) or extra:
+        return planner_request(json.dumps({"reports": [{"operation": "clarify", "title": "نطاق المحذوفات",
+            "selection": {"requiresFilter": False}}],
+            "clarification": "المصدر الحالي يعرض سلة المحذوفات دون تصفية أو ترتيب بتاريخ الحذف. هل تريد عرض محتويات السلة الحالية؟"}, ensure_ascii=False), question)
+    if request.reports[0].operation == "recycle_bin":
+        return request
+    # Reuse availability handling and current-account bin execution.
+    return ground_recycle_bin(request, "سلة المحذوفات", catalog)
 
 
 def canonicalize_property_names(request, catalog):
@@ -1301,6 +1328,10 @@ Use operation=recycle_bin ONLY when catalog.recycleBin.status is available, for 
 ROUTE_SYSTEM += RECYCLE_BIN_RULES
 DIRECT_PLAN_SYSTEM += RECYCLE_BIN_RULES
 PLAN_REVIEW_SYSTEM += RECYCLE_BIN_RULES
+ROUTE_SYSTEM += SEMANTIC_RULES
+DIRECT_PLAN_SYSTEM += SEMANTIC_RULES
+PLAN_REVIEW_SYSTEM += SEMANTIC_RULES
+INTENT_SYSTEM += SEMANTIC_RULES
 
 
 def plan_reports(model, payload, *, budget_seconds=None, max_tokens=1536, review_intent=False, interpret_intent=False, trace_path=None):
@@ -1327,6 +1358,8 @@ def plan_reports(model, payload, *, budget_seconds=None, max_tokens=1536, review
         "sampleStatus": catalog.get("sampleStatus", "unavailable"),
         "tools": catalog.get("tools", []), "capabilities": catalog.get("capabilities", {}), "auditTrail": catalog.get("auditTrail", {"status": "unavailable"}), "recycleBin": catalog.get("recycleBin", {"status": "unavailable"})}
     # The model and every grounding step read the question with misspelled planning words and names corrected.
+    payload["originalQuestion"] = payload["question"]
+    evidence = language_evidence(payload["question"], payload["catalog"])
     corrected, corrections = correct_spelling(payload["question"], payload["catalog"], GLOSSARY)
     if corrections:
         print("Stage=SPELLING_CORRECTED RequestId=" + REQUEST_ID.get() +
@@ -1343,6 +1376,18 @@ def plan_reports(model, payload, *, budget_seconds=None, max_tokens=1536, review
         "templates": payload["catalog"]["templates"], "entryProperties": payload["catalog"]["entryProperties"],
         "fieldSamples": payload["catalog"]["fieldSamples"], "sampleStatus": payload["catalog"]["sampleStatus"],
         "capabilities": payload["catalog"]["capabilities"], "auditTrail": payload["catalog"]["auditTrail"], "recycleBin": payload["catalog"]["recycleBin"]}}
+    model_payload["originalQuestion"] = payload["originalQuestion"]
+    if set(evidence.get("concepts", {})) - {"document"} or len(evidence) > 1:
+        model_payload["languageEvidence"] = evidence
+    choices = {f["name"]: f["listValues"] for f in payload["catalog"]["fields"] if f.get("listValues")}
+    if choices:
+        model_payload["catalog"]["listChoices"] = choices
+    field_names = {f["name"] for f in payload["catalog"]["fields"]}
+    business = [{"words": term.get("words", []), "condition": term["condition"]} for term in GLOSSARY
+                if term.get("condition", {}).get("field") in field_names or
+                (term.get("condition", {}).get("field") == "template" and term["condition"].get("value") in payload["catalog"]["templates"])]
+    if business:
+        model_payload["businessGlossary"] = business
     clarification_context = pending_clarification(payload.get("history", []))
     choice = selected_option(payload["question"], clarification_context)
     selection = catalog_selection(choice, payload['catalog'])
@@ -1353,6 +1398,8 @@ def plan_reports(model, payload, *, budget_seconds=None, max_tokens=1536, review
         # Small models must plan the complete request, not the digit "1".
         # Keep the verbatim reply separately, and retain the full live catalog.
         model_payload['question'] = clarification_context['question']
+        model_payload['originalQuestion'] = clarification_context['question']
+        model_payload['languageEvidence'] = language_evidence(clarification_context['question'], payload['catalog'])
         model_payload['currentReply'] = payload['question']
         model_payload['contextMode'] = 'clarification_reply'
     if clarification_context:
@@ -1405,7 +1452,7 @@ If clarificationContext.selectedOption exists, it is the exact displayed option 
     context_mode = "clarification_reply" if choice is not None else "current"
     def interpret_question(feedback=None):
         intent_messages = [SystemMessage(content=INTENT_SYSTEM + clarification_guidance), HumanMessage(content=json.dumps(
-            {**{key: payload[key] for key in ("question", "history", "today") if key in payload}, **({"clarificationContext": clarification_context} if clarification_context else {})},
+            {**{key: payload[key] for key in ("question", "originalQuestion", "history", "today") if key in payload}, **({"clarificationContext": clarification_context} if clarification_context else {})},
             ensure_ascii=False, separators=(",", ":")))]
         if feedback:
             intent_messages.append(SystemMessage(content="Re-read the CURRENT question. The previous interpretation/plan had these errors; they are not user requirements: " + feedback))
@@ -1453,6 +1500,7 @@ If clarificationContext.selectedOption exists, it is the exact displayed option 
             request = ground_catalog_scopes(request, model_payload["question"], payload["catalog"])
             request = ground_value_scopes(request, model_payload["question"], payload["catalog"])
             request = ground_name_scopes(request, model_payload["question"], payload["catalog"])
+            request = ground_expanded_recycle_bin(request, model_payload["question"], payload["catalog"])
             request = ground_recycle_bin(request, model_payload["question"], payload["catalog"])
             print("Stage=PLANNER_DRAFT RequestId=" + REQUEST_ID.get() + " Attempt=" + str(attempt + 1) +
                   " Plans=" + json.dumps([{"operation": p.operation, "resultType": p.resultType,

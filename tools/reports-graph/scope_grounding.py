@@ -46,6 +46,11 @@ def folder_scope(question, templates=()):
     """(folder name, include subfolders) for exactly one «مجلد X» in the question, otherwise None."""
     text = _without_template_names(normalize_arabic(question), templates)
     matches = list(_FOLDER.finditer(text)) or list(_FOLDER_AFTER.finditer(text))
+    if not matches:
+        # Explicit current archive location is independent of the old archived-field concept.
+        archive = re.search(r"(?<!\w)(?:داخل|بداخل|جوا|جوه|في)\s+(مركز الوثائق والمحفوظات)(?!\w)", text)
+        if archive and not re.search(r"نقل|ارشف|تاريخ|متي|متى|(?<!\w)(?:مو|مب|موب|مش|ليس|ليست|ما|لا|غير|بدون)(?!\w)", text[:archive.start()]):
+            return _original_spelling(question, archive.group(1)), bool(re.search(_SUBFOLDERS, text[archive.end():]))
     if len(matches) != 1:
         return None
     name = matches[0].group("name").strip()
@@ -91,7 +96,7 @@ def without_unasked_fields(node, question, grounded_names):
 
     Seen 2026-10-29: «عليها وسم تم الرفض» came back with Status = Rejected or Status is_not_empty, and
     «مجلد الطلبات المرفوضة» with Status = Rejected. A condition stays when the question, without the grounded
-    names, still mentions its field or its value."""
+    names, still mentions its field, its value or its structured period's year."""
     if not isinstance(node, dict):
         return node
     if node.get("conditions") is not None:
@@ -103,6 +108,15 @@ def without_unasked_fields(node, question, grounded_names):
     for name in grounded_names:
         rest = rest.replace(normalize_arabic(name), " ")
     if _mentioned(node.get("field"), rest) or _mentioned(node.get("value"), rest):
+        return node
+    # Calendar filters store their date in `period`, not `value`. A paraphrase
+    # such as «ينتهي حتى 2042» can state that year without the full catalog field
+    # name. Do not discard that explicit condition while grounding a catalog name.
+    # Date/schema validation remains in the planner; the year must occur outside
+    # grounded names and must not be a substring of a different number.
+    period = node.get("period")
+    year = period.get("year") if isinstance(period, dict) else None
+    if type(year) is int and re.search(r"(?<!\d)" + re.escape(str(year)) + r"(?!\d)", rest):
         return node
     return None
 

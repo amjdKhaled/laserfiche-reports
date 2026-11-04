@@ -1,0 +1,43 @@
+{
+  "fields": [
+    {
+      "name": "حالة الطلب",
+      "fieldType": "List",
+      "listValues": [
+        "Accepted",
+        "Pending",
+        "Rejected"
+      ]
+    },
+    {
+      "name": "هل تريد ارشفة الوثيقة؟",
+      "fieldType": "List",
+      "listValues": [
+        "نعم",
+        "لا"
+      ]
+    }
+  ],
+  "templates": [
+    "القرار",
+    "طلب التدريب"
+  ],
+  "tags": [],
+  "tagStatus": "complete",
+  "entryProperties": [
+    "entryId",
+    "name",
+    "created",
+    "modified",
+    "template",
+    "creator",
+    "pageCount"
+  ],
+  "recycleBin": {
+    "status": "available"
+  },
+  "auditTrail": {
+    "status": "unavailable",
+    "reason": "No audit source in synthetic acceptance catalog."
+  }
+}
