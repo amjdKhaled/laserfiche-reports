@@ -175,6 +175,23 @@ public sealed class LaserficheSearchPagingTests
         Assert.Equal(1, http.MostAtOnce);
     }
 
+    private sealed class HierarchyPolicy : IFullHierarchyPolicy { }
+    [Fact]
+    public async Task HierarchyPagingReadsFromZeroAndCrossesEmptyAuthorizedPagesBeforeCounting()
+    {
+        // These are already-filtered gateway pages. A page with no allowed rows still has a continuation.
+        var http = new Responses("{\"taskId\":\"task\",\"status\":\"Completed\"}",
+            "{\"value\":[],\"@odata.nextLink\":\"?page=2\"}",
+            "{\"value\":[{\"id\":475},{\"id\":489},{\"id\":490}]}");
+        var service = new LaserficheSearchService(http, new Repository(), new LaserficheApiAdapter(new Monitor()),
+            new InMemorySearchAuditLog(), NullLogger<LaserficheSearchService>.Instance, hierarchy: new HierarchyPolicy());
+        var page = await service.QueryAsync("trusted", 2, 1);
+        Assert.Equal(new[] { 489 }, page.Items.Select(i => i.EntryId));
+        Assert.Equal(3, page.TotalCount); Assert.True(page.IsTotalCountExact); Assert.True(page.HasNextPage);
+        Assert.Contains("$skip=0", http.Urls[1]); Assert.DoesNotContain("$top=", http.Urls[1]);
+        Assert.Equal(3, http.Urls.Count);
+    }
+
     private static LaserficheSearchService Create(Responses http) => new(http, new Repository(),
         new LaserficheApiAdapter(new Monitor()), new InMemorySearchAuditLog(), NullLogger<LaserficheSearchService>.Instance);
     private sealed class OneSearchAtATime : HttpMessageHandler, IHttpClientFactory

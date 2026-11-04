@@ -1,3 +1,9 @@
+> **2026-11-04 policy update:** See [FULL-HIERARCHY-AUTHORIZATION.md](FULL-HIERARCHY-AUTHORIZATION.md).
+> The original targeted diagnostic described below still uses its opt-in switch and disclosure allowlists.
+> Normal protected reads now require the independent full-hierarchy gateway even when diagnostics are disabled.
+> `PermissionVerification:Enabled=false` does **not** disable enforcement or permit unverified reports.
+> The old descriptions of unchanged general search/count behavior are historical, superseded by the new policy.
+
 # Targeted permission verification (Windows / On-Prem)
 
 Status: review implementation, disabled by default. A successful build is not proof of LFDS/AD

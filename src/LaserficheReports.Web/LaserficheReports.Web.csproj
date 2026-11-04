@@ -10,6 +10,7 @@
   </ItemGroup>
   <ItemGroup>
     <Content Update="appsettings.Local.json" CopyToPublishDirectory="Never" />
+    <Content Include="../../docs/FULL-HIERARCHY-AUTHORIZATION.md" Link="permission-bridge/FULL-HIERARCHY-AUTHORIZATION.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="../../docs/PERMISSION-VERIFICATION.md" Link="permission-bridge/README.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="../../deployment/windows/protect-permission-service-credential.ps1" Link="permission-bridge/protect-service-credential.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="../../deployment/windows/test-permission-bridge.ps1" Link="permission-bridge/test-deployment.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />

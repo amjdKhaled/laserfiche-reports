@@ -26,6 +26,7 @@ internal sealed class LaserficheSearchService : ILaserficheSearchService
     private readonly ISearchAuditLog _auditLog;
     private readonly ILogger<LaserficheSearchService> _logger;
     private readonly ILaserficheAuthService? _auth;
+    private readonly IFullHierarchyPolicy? _hierarchy;
 
     // One gate per Laserfiche session; the service is scoped per request, the session is not.
     private static readonly ConcurrentDictionary<string, SemaphoreSlim> SessionSearches = new();
@@ -36,7 +37,7 @@ internal sealed class LaserficheSearchService : ILaserficheSearchService
         ILaserficheApiAdapter adapter,
         ISearchAuditLog auditLog,
         ILogger<LaserficheSearchService> logger,
-        ILaserficheAuthService? auth = null)
+        ILaserficheAuthService? auth = null, IFullHierarchyPolicy? hierarchy = null)
     {
         _httpClientFactory = httpClientFactory;
         _repositoryContext = repositoryContext;
@@ -44,6 +45,7 @@ internal sealed class LaserficheSearchService : ILaserficheSearchService
         _auditLog = auditLog;
         _logger = logger;
         _auth = auth;
+        _hierarchy = hierarchy;
     }
 
     public Task<PagedResult<LFSearchResult>> QueryAsync(string expression, int page, int pageSize,
@@ -137,8 +139,20 @@ internal sealed class LaserficheSearchService : ILaserficheSearchService
             _logger.LogInformation("Stage=LF_SEARCH_QUEUE DurationMs={DurationMs}", queueWatch.ElapsedMilliseconds);
         try
         {
-            return await SearchInSessionAsync(repo, displayQuery, searchType, expression, page, pageSize,
-                cancellationToken, sort, field, readAll, projectedFields).ConfigureAwait(false);
+            if (_hierarchy == null)
+                return await SearchInSessionAsync(repo, displayQuery, searchType, expression, page, pageSize,
+                    cancellationToken, sort, field, readAll, projectedFields).ConfigureAwait(false);
+            // The HTTP gateway removes denied candidates before they enter this service.
+            // Read from zero through the last continuation; server offsets/counts are not authorized counts.
+            var all = await SearchInSessionAsync(repo, displayQuery, searchType, expression, 1, pageSize,
+                cancellationToken, sort, field, true, projectedFields).ConfigureAwait(false);
+            if (!all.IsTotalCountExact || all.HasNextPage)
+                throw new LaserficheException("تعذر إكمال التحقق من نتائج التقرير.", 503);
+            return new PagedResult<LFSearchResult> {
+                Items = readAll ? all.Items : all.Items.Skip(checked((page - 1) * pageSize)).Take(pageSize).ToArray(),
+                TotalCount = all.Items.Count, IsTotalCountExact = true,
+                HasMore = !readAll && (long)page * pageSize < all.Items.Count,
+                PageNumber = page, PageSize = pageSize };
         }
         finally { gate.Release(); }
     }

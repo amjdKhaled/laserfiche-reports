@@ -37,7 +37,8 @@ internal sealed record AuditSnapshot(IReadOnlyList<AuditEvent> Events, DateTimeO
 /// <summary>Uses the exact export/status protocol in the installed Export-AuditReport.ps1.
 /// Request-scoped snapshot and HTTP handler: no shared Windows identity, cookies, files or cached audit rows.</summary>
 internal sealed class AuditTrailSource(IConfiguration configuration, IRepositoryContext repositories,
-    ISessionCredentialStore sessions, ILogger<AuditTrailSource> logger, AuditSessionCredentials? auditCredentials = null)
+    ISessionCredentialStore sessions, ILogger<AuditTrailSource> logger, AuditSessionCredentials? auditCredentials = null,
+    LaserficheReports.Web.Permissions.IFullHierarchyAuthorizationService? hierarchy = null)
 {
     private Task<AuditSnapshot>? snapshot;
     private string? snapshotRepository;
@@ -73,7 +74,18 @@ internal sealed class AuditTrailSource(IConfiguration configuration, IRepository
         if (snapshotRepository != null && !string.Equals(snapshotRepository, repository.RepositoryId, StringComparison.OrdinalIgnoreCase))
             throw new AuditTrailException("تغيّر المستودع أثناء قراءة سجل التدقيق؛ أعد الطلب.");
         snapshotRepository = repository.RepositoryId;
-        return await (snapshot ??= ExportAsync(repository.RepositoryId, ct));
+        var data = await (snapshot ??= ExportAsync(repository.RepositoryId, ct));
+        if (hierarchy == null) return data; // Existing isolated source tests; production always registers the gateway.
+        var visible = new List<AuditEvent>();
+        foreach (var item in data.Events)
+        {
+            // Historical paths, deleted IDs and non-entry events cannot prove a current ancestor chain.
+            // No privileged fallback or inferred historical parent traversal is permitted.
+            if (item.EntryId is not > 0)
+                throw new AuditTrailException("يتضمن التقرير أحداثًا لا يمكن التحقق من سلسلة مجلداتها الحالية. استخدم تقريرًا محفوظًا خاصًا بالعناصر الحية.");
+            if (await hierarchy.CanReadAsync(item.EntryId.Value, ct)) visible.Add(item);
+        }
+        return data with { Events = visible };
     }
 
     private async Task<AuditSnapshot> ExportAsync(string repositoryId, CancellationToken ct)
