@@ -150,7 +150,7 @@ internal sealed class LaserficheSearchService : ILaserficheSearchService
                 throw new LaserficheException("تعذر إكمال التحقق من نتائج التقرير.", 503);
             return new PagedResult<LFSearchResult> {
                 Items = readAll ? all.Items : all.Items.Skip(checked((page - 1) * pageSize)).Take(pageSize).ToArray(),
-                TotalCount = all.Items.Count, IsTotalCountExact = true,
+                TotalCount = all.Items.Count, IsTotalCountExact = !_hierarchy.HasIncompleteVerification,
                 HasMore = !readAll && (long)page * pageSize < all.Items.Count,
                 PageNumber = page, PageSize = pageSize };
         }

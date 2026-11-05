@@ -19,6 +19,9 @@ internal sealed class FullHierarchyAuthorizationService(IConfiguration configura
     ILaserficheAuthService auth, ILogger<FullHierarchyAuthorizationService> logger) : IFullHierarchyAuthorizationService
 {
     private int checks;
+    private int incomplete;
+    public bool HasIncompleteVerification => Volatile.Read(ref incomplete) != 0;
+    public void MarkIncompleteVerification() => Interlocked.Exchange(ref incomplete, 1);
     private readonly System.Collections.Concurrent.ConcurrentDictionary<int, byte> authorized = new();
     public int[] AuthorizedEntryIds => authorized.Keys.Order().ToArray();
     public async Task<bool> CanReadAsync(int entryId, CancellationToken ct)
@@ -37,7 +40,7 @@ internal sealed class FullHierarchyAuthorizationService(IConfiguration configura
             throw new PermissionVerificationException(unavailable);
         }
         var binding = bindings[0].Value;
-        if (!string.Equals(binding.ApiServerUrl.TrimEnd('/'), repository.ServerUrl.TrimEnd('/'), StringComparison.OrdinalIgnoreCase) ||
+        if (binding == null || !string.Equals(binding.ApiServerUrl?.TrimEnd('/'), repository.ServerUrl.TrimEnd('/'), StringComparison.OrdinalIgnoreCase) ||
             string.IsNullOrWhiteSpace(binding.ServerName) || string.IsNullOrWhiteSpace(binding.RepositoryName))
         {
             logger.LogWarning("FullHierarchy unavailable Reason=repository_binding_invalid TraceId={TraceId}", context.TraceIdentifier);
