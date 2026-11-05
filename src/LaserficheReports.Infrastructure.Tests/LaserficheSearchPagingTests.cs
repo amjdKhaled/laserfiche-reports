@@ -175,7 +175,23 @@ public sealed class LaserficheSearchPagingTests
         Assert.Equal(1, http.MostAtOnce);
     }
 
-    private sealed class HierarchyPolicy : IFullHierarchyPolicy { }
+    private sealed class HierarchyPolicy(bool incomplete = false) : IFullHierarchyPolicy
+    {
+        public bool HasIncompleteVerification => incomplete;
+    }
+    [Fact]
+    public async Task IncompleteAuthorizationDoesNotBecomeAnExactTotal()
+    {
+        var http = new Responses("{\"taskId\":\"task\",\"status\":\"Completed\"}",
+            "{\"value\":[{\"id\":475}]}");
+        var service = new LaserficheSearchService(http, new Repository(), new LaserficheApiAdapter(new Monitor()),
+            new InMemorySearchAuditLog(), NullLogger<LaserficheSearchService>.Instance, hierarchy: new HierarchyPolicy(true));
+        var page = await service.QueryAsync("trusted", 1, 10);
+        Assert.Single(page.Items);
+        Assert.Equal(1, page.TotalCount);
+        Assert.False(page.IsTotalCountExact);
+        Assert.False(page.HasNextPage);
+    }
     [Fact]
     public async Task HierarchyPagingReadsFromZeroAndCrossesEmptyAuthorizedPagesBeforeCounting()
     {

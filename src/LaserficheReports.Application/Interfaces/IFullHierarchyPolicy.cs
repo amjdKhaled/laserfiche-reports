@@ -1,3 +1,7 @@
 namespace LaserficheReports.Application.Interfaces;
 
-public interface IFullHierarchyPolicy { }
+public interface IFullHierarchyPolicy
+{
+    bool HasIncompleteVerification => false;
+    void MarkIncompleteVerification() { }
+}

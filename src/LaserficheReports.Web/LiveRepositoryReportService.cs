@@ -12,7 +12,7 @@ namespace LaserficheReports.Web;
 internal sealed class LiveRepositoryReportService(ILaserficheEntryService entries,
     ILaserficheSearchService searches, ILaserficheFieldDefinitionService fields,
     ILaserficheTemplateService templates, ILogger<LiveRepositoryReportService> logger, ILaserficheTagDefinitionService? tagDefinitions = null, AuditTrailSource? auditTrail = null, RecycleBinSource? recycleBin = null,
-    ILaserfichePermissionVerifier? permissions = null)
+    ILaserfichePermissionVerifier? permissions = null, IFullHierarchyPolicy? hierarchy = null)
 {
     private async Task<T> TargetedReadAsync<T>(int id, string kind, Func<Task<T>> read, CancellationToken ct)
     {
@@ -614,7 +614,8 @@ internal sealed class LiveRepositoryReportService(ILaserficheEntryService entrie
                 { RelatedEntryIds = ids.ToArray() };
         }
         var result = await SelectAsync(plan, ids, plan.CompleteListing || plan.CompleteCount || plan.Operation == "group" || plan.SortField != null, ct);
-        if (plan.CompleteListing && (result.HasNextPage || !result.IsTotalCountExact || result.Items.Count != result.TotalCount))
+        if (plan.CompleteListing && (result.HasNextPage ||
+            !result.IsTotalCountExact && hierarchy?.HasIncompleteVerification != true || result.Items.Count != result.TotalCount))
             throw new ArgumentException("تعذر تحميل جميع الوثائق المطابقة؛ لم أعرض قائمة ناقصة على أنها كاملة.");
         if (plan.RequireUnique && (!result.IsTotalCountExact || result.TotalCount != 1))
             return new ChatResult("حدد رقم الوثيقة؛ الاسم يطابق أكثر من إدخال أو لم يمكن تحديد وثيقة واحدة.\n\n" + string.Join("\n", result.Items.Select(i => $"- {i.EntryId}: {ReportSupport.Cell(i.Name)}")), []);

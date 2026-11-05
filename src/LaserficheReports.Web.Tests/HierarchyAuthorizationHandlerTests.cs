@@ -15,10 +15,11 @@ public class HierarchyAuthorizationHandlerTests
         public readonly List<int> Checked = [];
         public int[] AuthorizedEntryIds => [];
         public bool Unknown;
+        public int? UnknownId;
         public Task<bool> CanReadAsync(int id, CancellationToken ct)
         {
             lock (Checked) Checked.Add(id);
-            if (Unknown) throw new PermissionVerificationException(new(PermissionStatus.VerificationUnavailable));
+            if (Unknown || id == UnknownId) throw new PermissionVerificationException(new(PermissionStatus.VerificationUnavailable));
             return Task.FromResult(id != 553);
         }
     }
@@ -38,7 +39,7 @@ public class HierarchyAuthorizationHandlerTests
     private static HttpClient Client(Gateway gateway, Transport transport)
     {
         var services = new ServiceCollection().AddSingleton<IFullHierarchyAuthorizationService>(gateway)
-            .AddSingleton<IRepositoryContext, Repository>().AddSingleton<ProtectedReadTracker>().BuildServiceProvider();
+            .AddSingleton<IRepositoryContext, Repository>().AddSingleton<PostSearchAuthorizationFilter>().AddSingleton<ProtectedReadTracker>().BuildServiceProvider();
         var contexts = new HttpContextAccessor { HttpContext = new DefaultHttpContext { RequestServices = services } };
         return new HttpClient(new HierarchyAuthorizationHandler(contexts) { InnerHandler = transport });
     }
@@ -65,10 +66,25 @@ public class HierarchyAuthorizationHandlerTests
         Assert.Equal(0, transport.Calls);
     }
     [Fact]
-    public async Task UnknownCandidateInvalidatesEntirePage()
+    public async Task MixedPagePreservesAllowedOrderWithoutDisclosingDeniedOrUnknownRows()
+    {
+        using var client = Client(new() { UnknownId = 489 }, new("""
+            {"value":[{"id":490,"name":"first"},{"id":553,"name":"DENIED"},
+              {"id":489,"name":"UNKNOWN"},{"id":475,"name":"last"}],"count":4}
+            """));
+        var body = await client.GetStringAsync("https://lf/Repositories/repo/Searches/task/Results");
+        Assert.DoesNotContain("DENIED", body);
+        Assert.DoesNotContain("UNKNOWN", body);
+        Assert.DoesNotContain("count", body);
+        Assert.True(body.IndexOf("first", StringComparison.Ordinal) < body.IndexOf("last", StringComparison.Ordinal));
+    }
+    [Fact]
+    public async Task UnknownCandidateNeverReachesConsumers()
     {
         using var client = Client(new() { Unknown = true }, new("{\"value\":[{\"id\":475,\"name\":\"SECRET\"}]}"));
-        await Assert.ThrowsAsync<PermissionVerificationException>(() => client.GetAsync("https://lf/Repositories/repo/Searches/task/Results"));
+        var body = await client.GetStringAsync("https://lf/Repositories/repo/Searches/task/Results");
+        Assert.DoesNotContain("SECRET", body);
+        Assert.Contains("[]", body);
     }
     [Theory]
     [InlineData("https://other/Repositories/repo/Entries/475")]
