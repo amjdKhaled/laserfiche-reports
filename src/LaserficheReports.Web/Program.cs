@@ -78,6 +78,7 @@ builder.Services.AddScoped<ReportsChatService>();
 builder.Services.AddScoped<LaserficheReports.Web.Permissions.IFullHierarchyAuthorizationService,
     LaserficheReports.Web.Permissions.FullHierarchyAuthorizationService>();
 builder.Services.AddScoped<LaserficheReports.Web.Permissions.ProtectedReadTracker>();
+builder.Services.AddScoped<LaserficheReports.Web.Permissions.PostSearchAuthorizationFilter>();
 builder.Services.AddScoped<IContentAuthorizationScope, LaserficheReports.Web.Permissions.ContentAuthorizationScope>();
 builder.Services.AddScoped<IFullHierarchyPolicy>(sp =>
     sp.GetRequiredService<LaserficheReports.Web.Permissions.IFullHierarchyAuthorizationService>());
@@ -341,6 +342,27 @@ app.MapGet("/api/embeddings/status", async (ITextEmbeddingService embeddings,
     }
 });
 
+// Read-only, authenticated preflight: a "ready" result only establishes that
+// installation/binding data is present, NOT that SDK licensing or permissions work.
+app.MapGet("/api/reports/authorization/status", async (
+    IRepositoryContext repositories, IConfiguration configuration, CancellationToken ct) =>
+{
+    var repository = await repositories.GetActiveRepositoryAsync(ct);
+    var options = configuration.GetSection("PermissionVerification")
+        .Get<LaserficheReports.Web.Permissions.PermissionVerificationOptions>() ?? new();
+    var executable = LaserficheReports.Web.Permissions.ProcessLaserficheSdkBridge.ExecutablePath;
+    var payloadPresent = OperatingSystem.IsWindows() && Environment.Is64BitProcess && File.Exists(executable);
+    var status = LaserficheReports.Web.Permissions.FullHierarchyPreflight.Check(repository, options, payloadPresent);
+    return Results.Ok(new
+    {
+        stage = "authorization_preflight",
+        status,
+        note = status == "ready_for_live_validation"
+            ? "تم العثور على الإعدادات وملفات SDK. لا تزال تجربة Laserfiche الفعلية مطلوبة."
+            : "إعداد التحقق من الصلاحيات غير مكتمل؛ لن تُعرض نتائج غير مؤكدة."
+    });
+});
+
 // Read-only diagnostics use the same selected repository and active session as chat.
 app.MapGet("/api/reports/planning-catalog", async (LiveRepositoryReportService reports,
     IRepositoryContext repositories, ISessionCredentialStore sessions, CancellationToken cancellationToken) =>
@@ -412,13 +434,15 @@ app.MapPost("/api/reports/revalidate", async (LaserficheReports.Web.Permissions.
         : Results.Json(new { error = "report_authorization_expired", message = "تعذر التحقق من صلاحية التقرير المحفوظ. أعد تنفيذ السؤال." }, statusCode: 403));
 
 app.MapPost("/api/reports/chat", async (ChatQuestion request, ReportsChatService chat,
-    ISessionCredentialStore sessions, LaserficheReports.Web.Permissions.ReportAuthorizationReceipts receipts, CancellationToken cancellationToken) =>
+    ISessionCredentialStore sessions, LaserficheReports.Web.Permissions.ReportAuthorizationReceipts receipts,
+    LaserficheReports.Web.Permissions.PostSearchAuthorizationFilter authorizationFilter, CancellationToken cancellationToken) =>
 {
     if (await sessions.TryGetSignedInUserAsync(cancellationToken) is null) return Results.Unauthorized();
     try
     {
         var result = await chat.AskAsync(request.Question, cancellationToken,
             request.History?.Where(turn => turn is null || turn.Role == "user" || turn.Kind == "clarification").ToArray());
+        result = authorizationFilter.PrepareReport(result);
         return Results.Ok(result with { AuthorizationReceipt = await receipts.IssueAsync(result, cancellationToken) });
     }
     catch (UnauthorizedAccessException)
@@ -427,7 +451,17 @@ app.MapPost("/api/reports/chat", async (ChatQuestion request, ReportsChatService
     }
     catch (LaserficheReports.Web.Permissions.PermissionVerificationException verification)
     {
-        return Results.Ok(verification.Decision.ToChatResult());
+        // Never present an unavailable authorization service as a successful
+        // answer. The UI must retain the actual error instead of caching a
+        // receipt-less report and later saying the saved report expired.
+        app.Logger.LogWarning("Report authorization blocked Status={Status} TraceId={TraceId}",
+            verification.Decision.Status, System.Diagnostics.Activity.Current?.TraceId.ToString() ?? "local");
+        return Results.Json(new
+        {
+            error = "report_authorization_" + verification.Decision.Status.ToString().ToLowerInvariant(),
+            stage = "authorization",
+            message = verification.Decision.Message
+        }, statusCode: verification.Decision.HttpStatusCode);
     }
     catch (AuditTrailException exception)
     {

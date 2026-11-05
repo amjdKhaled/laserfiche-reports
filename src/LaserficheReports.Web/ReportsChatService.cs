@@ -130,6 +130,14 @@ internal sealed class ReportsChatService(
             {
                 result = new ChatResult(clarification.Message, []) { IsClarification = true, ClarificationQuestion = question };
             }
+            catch (PermissionVerificationException verification) when (verification.Decision.Status is
+                PermissionStatus.Unknown or PermissionStatus.VerificationUnavailable or PermissionStatus.AuthenticationRequired)
+            {
+                // A failed verifier is not a valid report. Propagate the error to
+                // the HTTP boundary instead of storing a successful chat answer
+                // with no authorization receipt.
+                throw;
+            }
             catch (PermissionVerificationException verification)
             {
                 result = verification.Decision.ToChatResult();

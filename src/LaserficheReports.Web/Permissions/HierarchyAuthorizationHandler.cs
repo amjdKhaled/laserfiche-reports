@@ -73,14 +73,16 @@ internal sealed class HierarchyAuthorizationHandler(IHttpContextAccessor context
                     if (candidateEnvelope[key] is JsonValue count && count.TryGetValue<int>(out var expected) && expected > rows.Count)
                         throw Unavailable(); // Missing candidate rows cannot become an exact authorized zero/count.
             var ids = rows.Select(row => ReadId(row ?? throw Unavailable())).Distinct().ToArray();
-            var allowed = new System.Collections.Concurrent.ConcurrentDictionary<int, bool>();
-            await Parallel.ForEachAsync(ids, new ParallelOptions { MaxDegreeOfParallelism = 4, CancellationToken = ct },
-                async (id, token) => allowed[id] = await gateway.CanReadAsync(id, token));
-            for (var i = rows.Count - 1; i >= 0; i--) if (!allowed[ReadId(rows[i]!)]) rows.RemoveAt(i);
-            // Projected field values also require a fresh field-operation dependency for saved/exported reports.
-            foreach (var row in rows)
-                if (row?["fields"] is JsonArray { Count: > 0 })
-                    await context.RequestServices.GetRequiredService<ILaserficheEntryService>().GetEntryFieldsAsync(ReadId(row), ct);
+            var projected = rows.Where(row => row?["fields"] is JsonArray { Count: > 0 })
+                .Select(row => ReadId(row!)).ToHashSet();
+            var filter = context.RequestServices.GetRequiredService<PostSearchAuthorizationFilter>();
+            var allowed = await filter.FilterAsync(ids, async (id, token) =>
+            {
+                // Projected values need the actual current-user field operation before disclosure.
+                if (projected.Contains(id))
+                    await context.RequestServices.GetRequiredService<ILaserficheEntryService>().GetEntryFieldsAsync(id, token);
+            }, ct);
+            for (var i = rows.Count - 1; i >= 0; i--) if (!allowed.Contains(ReadId(rows[i]!))) rows.RemoveAt(i);
             if (json is JsonObject envelope)
                 foreach (var key in new[] { "@odata.count", "totalCount", "count" }) envelope.Remove(key);
             var old = response.Content;

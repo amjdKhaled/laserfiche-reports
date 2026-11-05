@@ -238,3 +238,60 @@ registration and ingestion; Web publish/test project definitions; original permi
 existing search paging/UI test suites. SDK/program changes reuse the existing bridge and packaging.
 Native installer build/install scripts themselves are unchanged; the modified published payload is
 picked up by their existing recursive inclusion. No installer binary was built/published locally.
+
+
+## Troubleshooting: all searches return an unavailable authorization message (November 2026)
+
+The following are independent of the language model:
+
+1. On the installed Reports origin, request `GET /api/graph/status`. A `200` with
+   `{"status":"ready","engine":"LangGraph"}` means the Graph HTTP health check
+   passed; it does **not** prove the model returned a valid search plan. For a
+   particular question, inspect application logs for `Stage=SCHEMA` followed
+   by `Stage=AI_PLAN`. Absence of `Stage=AI_PLAN` means planning did not complete.
+2. While signed into Reports, request `GET /api/reports/authorization/status`.
+   This is a safe, authenticated preflight check (no user SIDs, entry names,
+   paths, passwords or ACLs). Possible `status` values:
+   - `repository_binding_missing_or_duplicate`: no unique
+     `PermissionVerification:Repositories:<active-repository-id>` mapping.
+   - `repository_binding_invalid`: native ServerName/RepositoryName empty,
+     or ApiServerUrl differs from the **selected repository ServerUrl**.
+   - `sdk_bridge_payload_missing_or_platform_unsupported`: the installed
+     executable is absent, or the Web process is not Windows x64.
+   - `ready_for_live_validation`: preliminary files/bindings exist, but a
+     real native SDK login, SID resolution, root traversal and ancestor
+     effective-rights check have **not** yet been validated.
+3. When `ready_for_live_validation` still produces
+   `VerificationUnavailable`, check protected server logs for
+   `FullHierarchy Status=` and the request's TraceId. Validate Windows
+   SDK dependencies, service identity/DPAPI credential, native ServerName and
+   RepositoryName, exact SSO Subjects mapping (if LFDS), root entry
+   visibility, and the time budget. **Never** log access tokens, passwords,
+   hidden names or raw ACLs.
+4. The initial `appsettings.json` has
+   `"PermissionVerification": {"Enabled": false, "Repositories": {}}`.
+   The `Enabled` switch only controls the old targeted diagnostic. **It does
+   not disable the new mandatory hierarchy enforcement.** An empty
+   Repositories dictionary blocks protected reads until a legitimate
+   installation binding is provided. Do not turn enforcement off to bypass
+   configuration failures.
+5. Previously stored answers are revalidated when a chat is reopened. The
+   `report_authorization_expired` response on `/api/reports/revalidate`
+   concerns a **saved** receipt and is not evidence that an AI question failed.
+   Receipts are time-limited/in-memory and naturally disappear after a Web
+   restart. Run a fresh question and inspect its `/api/reports/chat` response
+   separately. Authorization infrastructure failures now return a real HTTP
+   error with `stage: "authorization"`, rather than being cached as
+   successful chat answers that later appear to expire.
+6. The full search sequence is: catalog gathering → LangGraph planning →
+   current-user SearchAsync candidate retrieval → full hierarchy filtering
+   and current-user evidence validation → authorized result/report → receipt.
+   A direct entry read validates its ID **before** the backend sends the
+   protected read. Failures in catalog retrieval may happen before any AI
+   planner call.
+
+Installation or deployment repair must keep failing closed. Re-run the
+live acceptance matrix for an ordinary user able to read document 553
+but not browse its parent, a user with full ancestor access, LFDS users,
+and actual field/volume/tag restrictions. A successful preflight is
+not a substitute for these checks.
